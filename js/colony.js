@@ -1,0 +1,218 @@
+// MAUR -- colony simulation: food, brood cycle, tasks, ambient spawning.
+'use strict';
+
+const DAY_LEN = 60 * 240; // 4 minutes of frames per day
+const POP_CAP = 30;
+
+class Colony {
+  constructor(info) {
+    // info: { x, entrance, junction, queenCh, storage, nursery }
+    Object.assign(this, info);
+    this.food = 60;
+    this.score = 0;
+    this.eggT = 1800;
+    this.starveMsgT = 0;
+    this.taskT = 0;
+    this.tasks = [];
+    this.lastDigTaskDay = 0;
+    this.stats = {
+      foodGathered: 0, tasksDone: 0, antsBorn: 0,
+      antsDied: 0, predatorsSlain: 0,
+    };
+  }
+
+  deposit(item, who) {
+    const v = Number(item.value) || 0;
+    this.food += v;
+    this.stats.foodGathered += v;
+    item.dead = true;
+    if (who) who.carry = null;
+    G.particles.sparkle(this.storage.x, this.storage.y - 6, 5);
+    if (G.nearPlayer(this.storage.x, this.storage.y) < 280) Sfx.play('deposit');
+    if (who && who.playerIdx >= 0) {
+      this.progress('gather', 1);
+      G.msg('+' + item.value + ' FOOD STORED');
+    }
+  }
+
+  spawnAdult(x, y) {
+    const ants = G.ants.filter(a => a.hp > 0);
+    const soldiers = ants.filter(a => a.caste === 'soldier').length;
+    const nurses = ants.filter(a => a.caste === 'nurse').length;
+    let caste = 'worker';
+    if (soldiers < ants.length * 0.2 && Math.random() < 0.4) caste = 'soldier';
+    else if (nurses < ants.length * 0.15 && Math.random() < 0.35) caste = 'nurse';
+    const a = new Ant(x, y, caste);
+    G.ants.push(a);
+    this.stats.antsBorn++;
+    G.msg('A NEW ' + caste.toUpperCase() + ' HAS EMERGED!');
+    if (G.nearPlayer(x, y) < 300) Sfx.play('hatch');
+  }
+
+  update() {
+    if (!isFinite(this.food)) { console.error('colony.food was NaN'); this.food = 0; }
+    const pop = G.ants.filter(a => a.hp > 0).length;
+
+    // everyone eats
+    this.food = Math.max(0, this.food - pop * 0.00006);
+
+    // starvation
+    if (this.food <= 0 && pop > 0) {
+      for (const a of G.ants) if (a.hp > 0) a.hp -= 0.006;
+      if (this.starveMsgT <= 0) {
+        G.msg('THE COLONY IS STARVING!', '#ff6040');
+        Sfx.play('starve');
+        this.starveMsgT = 1800;
+      }
+    }
+    if (this.starveMsgT > 0) this.starveMsgT--;
+
+    // the queen lays
+    const queen = G.ants.find(a => a.caste === 'queen' && a.hp > 0);
+    if (queen) {
+      this.eggT--;
+      const broodCount = G.brood.filter(b => !b.dead).length;
+      if (this.eggT <= 0 && this.food >= 40 && broodCount < 6 && pop + broodCount < POP_CAP) {
+        this.food -= 10;
+        const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg');
+        G.brood.push(e);
+        this.eggT = 2700;
+        G.msg('THE QUEEN HAS LAID AN EGG');
+        if (G.nearPlayer(queen.x, queen.y) < 300) Sfx.play('lay');
+      }
+      if (this.eggT <= 0) this.eggT = 600; // re-check soon
+    }
+
+    // tasks
+    this.taskT--;
+    if (this.taskT <= 0) {
+      this.taskT = 180;
+      this.generateTasks();
+    }
+    this.checkTasks();
+    for (const t of this.tasks) if (t.done && t.doneT > 0) t.doneT--;
+    this.tasks = this.tasks.filter(t => !t.done || t.doneT > 0);
+
+    this.ambientSpawns();
+  }
+
+  // ---- tasks ---------------------------------------------------------------
+  active(type) { return this.tasks.find(t => t.type === type && !t.done); }
+
+  generateTasks() {
+    const tasks = this.tasks;
+    if (tasks.filter(t => !t.done).length >= 3) return;
+
+    if (this.food < 25 && !this.active('gather')) {
+      tasks.push({ type: 'gather', text: 'GATHER FOOD', n: 0, need: 5, reward: 50 });
+      G.msg('NEW TASK: GATHER FOOD', '#80ff80');
+    }
+    const hungry = G.brood.filter(b => b.kind === 'larva' && b.hungry && !b.dead).length;
+    if (hungry > 0 && !this.active('feed')) {
+      tasks.push({ type: 'feed', text: 'FEED THE LARVAE', n: 0, need: Math.min(2, hungry), reward: 40 });
+      G.msg('NEW TASK: FEED THE LARVAE', '#80ff80');
+    }
+    const pred = G.bugs.find(b => b.predator && !b.dead &&
+      Math.abs(b.x - this.x) < 400);
+    if (pred && !this.active('hunt')) {
+      tasks.push({
+        type: 'hunt', text: 'DRIVE OFF THE ' + pred.kind.toUpperCase(),
+        targetId: pred.id, n: 0, need: 1, reward: 100
+      });
+      G.msg('NEW TASK: DEFEND THE COLONY!', '#ff8040');
+      Sfx.play('danger');
+    }
+    if (G.day > this.lastDigTaskDay && G.day >= 1 && !this.active('dig')) {
+      this.lastDigTaskDay = G.day;
+      tasks.push({ type: 'dig', text: 'EXPAND THE NEST', n: 0, need: 600, reward: 60 });
+      G.msg('NEW TASK: EXPAND THE NEST', '#80ff80');
+    }
+  }
+
+  progress(type, n) {
+    const t = this.active(type);
+    if (!t) return;
+    t.n += n;
+    if (t.n >= t.need) this.complete(t);
+  }
+
+  complete(t) {
+    t.done = true;
+    t.doneT = 240;
+    this.score += t.reward;
+    this.stats.tasksDone++;
+    G.msg('TASK COMPLETE! +' + t.reward, '#ffe040');
+    Sfx.play('task');
+  }
+
+  checkTasks() {
+    const hunt = this.active('hunt');
+    if (hunt) {
+      const target = G.bugs.find(b => b.id === hunt.targetId);
+      if (!target || target.dead) {
+        if (target && target.dead && target.killedByPlayer) this.complete(hunt);
+        else if (!target || target.dead) this.complete(hunt); // soldiers count too
+        else this.tasks = this.tasks.filter(x => x !== hunt);
+      } else if (target.fleeing && Math.abs(target.x - this.x) > 600) {
+        this.complete(hunt); // driven off
+      }
+    }
+  }
+
+  // ---- ambient world spawning ------------------------------------------------
+  ambientSpawns() {
+    const items = G.items.filter(i => !i.dead && !i.carried);
+    const bugs = G.bugs.filter(b => !b.dead);
+    const rnd = Math.random();
+
+    // seeds drift down from the canopy, or ripen in the grass.
+    // scarce times bring a better harvest (and keep the sim survivable)
+    const foodItems = items.filter(i => ITEM_DEF[i.kind] && ITEM_DEF[i.kind].food).length;
+    const seedChance = foodItems < 6 ? 0.012 : 0.004;
+    if (items.filter(i => i.kind === 'seed').length < 12 && rnd < seedChance) {
+      const trees = G.trees;
+      if (trees.length && Math.random() < 0.5) {
+        const t = trees[Math.floor(Math.random() * trees.length)];
+        const side = Math.random() < 0.5 ? -1 : 1;
+        G.items.push(G.makeItem('seed', t.crownX + side * (38 + Math.random() * 40), t.topY + 10));
+      } else {
+        const x = 40 + Math.random() * (WORLD_W - 80);
+        G.items.push(G.makeItem('seed', x, T.surf[Math.floor(x)] - 8));
+      }
+    }
+    // leaf scraps on the floor
+    if (items.filter(i => i.kind === 'leaf').length < 6 && rnd > 0.9985) {
+      const x = 40 + Math.random() * (WORLD_W - 80);
+      G.items.push(G.makeItem('leaf', x, T.surf[Math.floor(x)] - 6));
+    }
+
+    const count = k => bugs.filter(b => b.kind === k).length;
+
+    if (count('pillbug') < 3 && Math.random() < 0.0009) {
+      const x = Math.random() < 0.5 ? 30 + Math.random() * 200 : WORLD_W - 30 - Math.random() * 200;
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
+    }
+    if (count('aphid') < 6 && Math.random() < 0.0006 && G.trees.length) {
+      const t = G.trees[Math.floor(Math.random() * G.trees.length)];
+      G.bugs.push(new Bug(t.x + (Math.random() < 0.5 ? -4 : 4), t.topY + 20 + Math.random() * 40, 'aphid'));
+    }
+    if (count('worm') < 4 && Math.random() < 0.0007) {
+      const x = 60 + Math.random() * (WORLD_W - 120);
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 150 + Math.random() * 500, 'worm'));
+    }
+    // predators: not on day 0, likelier at night
+    const night = G.isNight();
+    if (count('spider') < 1 && G.day >= 1 && Math.random() < (night ? 0.0014 : 0.00025)) {
+      const x = Math.random() < 0.5 ? 25 : WORLD_W - 25;
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'spider'));
+      G.msg('A SPIDER PROWLS THE FOREST FLOOR!', '#ff8040');
+      Sfx.play('danger');
+    }
+    if (count('centipede') < 1 && G.day >= 2 && Math.random() < 0.0004) {
+      const x = 100 + Math.random() * (WORLD_W - 200);
+      G.bugs.push(new Bug(x, WORLD_H - 200 - Math.random() * 300, 'centipede'));
+      G.msg('SOMETHING SLITHERS IN THE DEEP...', '#ff8040');
+      Sfx.play('danger');
+    }
+  }
+}
