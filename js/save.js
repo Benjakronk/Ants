@@ -66,7 +66,8 @@ function saveWorld(slot) {
   if (!G || !G.running) return false;
   const c = G.colony;
   const data = {
-    v: 1,
+    v: 2,
+    w: WORLD_W, h: WORLD_H,
     seed: G.seed,
     tick: G.tick,
     day: G.day,
@@ -75,6 +76,7 @@ function saveWorld(slot) {
     colony: {
       food: Math.round(c.food * 10) / 10, score: c.score,
       eggT: c.eggT, lastDigTaskDay: c.lastDigTaskDay,
+      lastRaidDay: c.lastRaidDay || 0,
       tasks: c.tasks.filter(t => !t.done),
       stats: c.stats,
     },

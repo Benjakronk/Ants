@@ -39,6 +39,20 @@ const T = {
     return false;
   },
 
+  // any undiggable solid (rock/wood) inside the box? Forced moves (squeeze,
+  // burrow) may land overlapping soil -- the ant chews out -- but never this.
+  boxHard(x, y, hw, hh) {
+    const x0 = Math.floor(x - hw), x1 = Math.ceil(x + hw);
+    const y0 = Math.floor(y - hh), y1 = Math.ceil(y + hh);
+    for (let py = y0; py <= y1; py++) {
+      for (let px = x0; px <= x1; px++) {
+        const m = this.get(px, py);
+        if (m === M_ROCK || m === M_WOOD) return true;
+      }
+    }
+    return false;
+  },
+
   // dig a circle; removes diggable materials only.
   // returns {count, leaves} -- pixels removed, leaf pixels among them
   dig(cx, cy, r) {
@@ -178,6 +192,11 @@ function matColor(mat, x, y, h, depth) {
       let c = shades[h % 3];
       if (h % 23 === 0) c = [82, 152, 62];
       return c;
+    }
+    case M_ROOT: {
+      // like wood, but duller and dirt-stained (and chewable)
+      const shades = [[78, 54, 32], [68, 46, 27], [86, 60, 36]];
+      return shades[h % 3];
     }
   }
   return [255, 0, 255];

@@ -200,30 +200,30 @@ function newWorld(slot, playerCount) {
   }
 
   // scatter food & fauna
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 18; i++) {
     const x = 40 + Math.random() * (WORLD_W - 80);
     G.items.push(G.makeItem('seed', x, T.surf[Math.floor(x)] - 8));
   }
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const x = 40 + Math.random() * (WORLD_W - 80);
     G.items.push(G.makeItem('leaf', x, T.surf[Math.floor(x)] - 6));
   }
-  for (const t of G.trees.slice(0, 5)) {
+  for (const t of G.trees.slice(0, 7)) {
     G.bugs.push(new Bug(t.x + (Math.random() < 0.5 ? -5 : 5),
       T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
   }
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const x = 60 + Math.random() * (WORLD_W - 120);
     G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
   }
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const x = 100 + Math.random() * (WORLD_W - 200);
     G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 200 + Math.random() * 400, 'worm'));
   }
 
   // stars
   G.stars = [];
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 140; i++) {
     G.stars.push({ x: Math.random() * WORLD_W, y: Math.random() * 280 });
   }
 
@@ -234,6 +234,8 @@ function newWorld(slot, playerCount) {
 function loadWorld(slot, playerCount) {
   const d = loadWorldData(slot);
   if (!d) return false;
+  // saves from a different world size can't be reconciled with the new map
+  if (d.w !== WORLD_W || d.h !== WORLD_H) return false;
   const world = genWorld(d.seed);
   world.m = rleDecode(d.terrain, WORLD_W * WORLD_H);
   T.init(world);
@@ -299,7 +301,7 @@ function loadWorld(slot, playerCount) {
 
   G.stars = [];
   const srng = mulberry32(d.seed ^ 0x5747);
-  for (let i = 0; i < 90; i++) G.stars.push({ x: srng() * WORLD_W, y: srng() * 280 });
+  for (let i = 0; i < 140; i++) G.stars.push({ x: srng() * WORLD_W, y: srng() * 280 });
 
   G.running = true;
   G.autosaveT = 7200;
@@ -991,9 +993,10 @@ function updateSlots() {
   if (pc) {
     Sfx.play('select');
     const slot = G.slotSel + 1;
-    if (slotInfo(slot)) {
-      if (loadWorld(slot, pc)) { G.state = 'play'; G.msg('WELCOME BACK TO THE COLONY'); }
+    if (slotInfo(slot) && loadWorld(slot, pc)) {
+      G.state = 'play'; G.msg('WELCOME BACK TO THE COLONY');
     } else {
+      // empty slot, or a save from an incompatible world size: start fresh
       newWorld(slot, pc);
       G.state = 'intro';
       G.introLine = 0;

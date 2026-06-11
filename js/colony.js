@@ -15,6 +15,7 @@ class Colony {
     this.taskT = 0;
     this.tasks = [];
     this.lastDigTaskDay = 0;
+    this.lastRaidDay = 0;
     this.stats = {
       foodGathered: 0, tasksDone: 0, antsBorn: 0,
       antsDied: 0, predatorsSlain: 0,
@@ -179,8 +180,8 @@ class Colony {
     // seeds drift down from the canopy, or ripen in the grass.
     // scarce times bring a better harvest (and keep the sim survivable)
     const foodItems = items.filter(i => ITEM_DEF[i.kind] && ITEM_DEF[i.kind].food).length;
-    const seedChance = foodItems < 6 ? 0.012 : 0.004;
-    if (items.filter(i => i.kind === 'seed').length < 12 && rnd < seedChance) {
+    const seedChance = foodItems < 8 ? 0.014 : 0.005;
+    if (items.filter(i => i.kind === 'seed').length < 16 && rnd < seedChance) {
       const trees = G.trees;
       if (trees.length && Math.random() < 0.5) {
         // seeds fall from the canopy and land on the forest floor below
@@ -195,40 +196,74 @@ class Colony {
       }
     }
     // leaf scraps on the floor
-    if (items.filter(i => i.kind === 'leaf').length < 6 && rnd > 0.9985) {
+    if (items.filter(i => i.kind === 'leaf').length < 8 && rnd > 0.998) {
       const x = 40 + Math.random() * (WORLD_W - 80);
       G.items.push(G.makeItem('leaf', x, T.surf[Math.floor(x)] - 6));
     }
 
     const count = k => bugs.filter(b => b.kind === k).length;
 
-    if (count('pillbug') < 3 && Math.random() < 0.0009) {
+    if (count('pillbug') < 4 && Math.random() < 0.0011) {
       const x = Math.random() < 0.5 ? 30 + Math.random() * 200 : WORLD_W - 30 - Math.random() * 200;
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
     }
-    if (count('aphid') < 6 && Math.random() < 0.0006 && G.trees.length) {
+    if (count('aphid') < 8 && Math.random() < 0.0008 && G.trees.length) {
       // aphid herds graze the lower trunk, within an ant's easy climb
       const t = G.trees[Math.floor(Math.random() * G.trees.length)];
       const side = Math.random() < 0.5 ? -1 : 1;
       G.bugs.push(new Bug(t.x + side * (4 + Math.random() * 3),
         T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
     }
-    if (count('worm') < 4 && Math.random() < 0.0007) {
+    if (count('worm') < 6 && Math.random() < 0.0009) {
       const x = 60 + Math.random() * (WORLD_W - 120);
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 150 + Math.random() * 500, 'worm'));
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 150 + Math.random() * 700, 'worm'));
     }
-    // predators: not on day 0, likelier at night
+
+    // predators: not on day 0, escalating with the days, likelier at night
     const night = G.isNight();
-    if (count('spider') < 1 && G.day >= 1 && Math.random() < (night ? 0.0014 : 0.00025)) {
+    const day = G.day;
+    const spiderCap = Math.min(3, 1 + Math.floor(day / 3));
+    if (count('spider') < spiderCap && day >= 1 && Math.random() < (night ? 0.0014 : 0.00025)) {
       const x = Math.random() < 0.5 ? 25 : WORLD_W - 25;
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'spider'));
       G.msg('A SPIDER PROWLS THE FOREST FLOOR!', '#ff8040');
       Sfx.play('danger');
     }
-    if (count('centipede') < 1 && G.day >= 2 && Math.random() < 0.0004) {
+    const centiCap = Math.min(2, 1 + Math.floor(day / 4));
+    if (count('centipede') < centiCap && day >= 2 && Math.random() < 0.0004) {
       const x = 100 + Math.random() * (WORLD_W - 200);
-      G.bugs.push(new Bug(x, WORLD_H - 200 - Math.random() * 300, 'centipede'));
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 300 + Math.random() * 400, 'centipede'));
       G.msg('SOMETHING SLITHERS IN THE DEEP...', '#ff8040');
+      Sfx.play('danger');
+    }
+    // wasps hunt by day
+    const waspCap = Math.min(3, 1 + Math.floor(day / 3));
+    if (count('wasp') < waspCap && day >= 1 && !night && Math.random() < 0.0005) {
+      const x = Math.random() < 0.5 ? 60 : WORLD_W - 60;
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 80, 'wasp'));
+      G.msg('AN ANGRY BUZZ ON THE WIND...', '#ff8040');
+      Sfx.play('danger');
+    }
+    // a rare armored heavyweight, once the colony is established
+    if (count('beetle') < 1 && day >= 3 && Math.random() < 0.00018) {
+      const x = Math.random() < 0.5 ? 30 : WORLD_W - 30;
+      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'beetle'));
+      G.msg('SOMETHING HEAVY TRUNDLES CLOSER...', '#ff8040');
+      Sfx.play('danger');
+    }
+    // rival-colony raids: at most one per day, growing bolder over time.
+    // They emerge from the undergrowth a few screens out.
+    if (day >= 2 && day > this.lastRaidDay && Math.random() < 0.0001) {
+      this.lastRaidDay = day;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const baseX = Math.max(30, Math.min(WORLD_W - 30,
+        this.x + side * (350 + Math.random() * 200)));
+      const n = 3 + Math.min(3, Math.floor(day / 2));
+      for (let i = 0; i < n; i++) {
+        const x = Math.max(20, Math.min(WORLD_W - 20, baseX + (Math.random() - 0.5) * 40));
+        G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'redant'));
+      }
+      G.msg('RIVAL ANTS ARE RAIDING THE COLONY!', '#ff5040');
       Sfx.play('danger');
     }
   }

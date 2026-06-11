@@ -168,6 +168,18 @@ class Ant {
       this.digCd = this.def.digCd;
       this.biteAnim = 6;
       G.particles.dirt(this.x, this.y, 2);
+      // wood or rock against the body: chewing won't free us, and a
+      // sub-pixel overlap pins every walking move -- wriggle out instead
+      if (T.boxHard(this.x, this.y, this.hw, this.hh)) {
+        outer: for (let r = 1; r <= 4; r++) {
+          for (const o of [[r, 0], [-r, 0], [0, -r], [0, r], [r, -r], [-r, -r]]) {
+            if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh)) {
+              this.x += o[0]; this.y += o[1];
+              break outer;
+            }
+          }
+        }
+      }
     }
 
     if (this.playerIdx >= 0) {
@@ -179,9 +191,10 @@ class Ant {
     // ceiling grip only persists while goto keeps asserting it
     if (this.gotoTick !== G.tick) this.ceiling = false;
     // freeze detector: an NPC pinned in place for ~12s (wood pockets, branch
-    // forks) shakes itself loose no matter what its state machine wants
+    // forks, hop loops) shakes itself loose no matter what its state machine
+    // wants. The tall y-band counts jumping on the spot as pinned too.
     if (this.caste !== 'queen') {
-      if (!this.freezeP || Math.abs(this.x - this.freezeP.x) > 5 || Math.abs(this.y - this.freezeP.y) > 5) {
+      if (!this.freezeP || Math.abs(this.x - this.freezeP.x) > 5 || Math.abs(this.y - this.freezeP.y) > 12) {
         this.freezeP = { x: this.x, y: this.y };
         this.freezeT = 0;
       } else if (this.state !== 'idle' && ++this.freezeT > 720) {
@@ -253,6 +266,21 @@ class Ant {
       }
     }
 
+    // committed climb-over: once we start scaling an obstacle, see it
+    // through instead of dithering at its foot every other frame
+    if (this.climbT > 0) {
+      this.climbT--;
+      if (this.vBlocked) {
+        this.climbT = 0; // roof overhead: the ceiling logic takes over
+      } else if (wallNear(this, this.dir, 4)) {
+        this.climbing = true; this.climbV = -c.speed * 1.1;
+        this.vx = this.dir * c.speed * 0.5;
+        return Math.hypot(dx, dy);
+      } else {
+        this.climbT = 0; // topped out: ledge boost / walking resumes
+      }
+    }
+
     if (Math.abs(dx) > 3) {
       this.vx = Math.sign(dx) * c.speed;
       this.dir = Math.sign(dx);
@@ -285,6 +313,12 @@ class Ant {
       } else if (this.onGround) {
         this.vy = -1.6; // hop
         this.blockedT++;  // hopping in place counts as stuck
+        // a dozen hops without getting anywhere: it's out of jumping range
+        this.hopN = (this.hopN || 0) + 1;
+        if (this.hopN > 12) {
+          this.hopN = 0;
+          this.gotoFail = true;
+        }
       }
     }
 
@@ -330,11 +364,24 @@ class Ant {
         // chewing and climbing have both failed for ages: hard reset
         this.blockedT = 0;
         this.gotoFail = true;
-      } else if (!acted && dy < 4 && (wallNear(this, this.dir, 4) || wallNear(this, -this.dir, 4))) {
-        // nothing to chew (rock, wood, or digging forbidden): climb over it
+      } else if (!acted && (dy < 4 || this.blocked) &&
+                 (wallNear(this, this.dir, 4) || wallNear(this, -this.dir, 4))) {
+        // nothing to chew (rock, wood, or digging forbidden): climb over it.
+        // Even with the target below us, a wall in the face means up-and-
+        // around is the only way through.
         if (!wallNear(this, this.dir, 4)) this.dir = -this.dir;
         this.climbing = true; this.ceiling = false; this.climbV = -c.speed * 1.1;
         this.vx = this.dir * c.speed * 0.5;
+        this.climbT = 60; // commit to the ascent
+      } else if (!acted && dy > 4 && this.onGround) {
+        // perched on something undiggable right above the target (a rock
+        // lip, say): shuffle sideways until gravity can take over
+        if ((this.sideT = (this.sideT || 0) - 1) <= 0) {
+          this.sideDir = Math.random() < 0.5 ? -1 : 1;
+          this.sideT = 40 + Math.random() * 50;
+        }
+        this.vx = this.sideDir * c.speed;
+        this.dir = this.sideDir;
       } else if (!acted && !this.climbing && this.blockedT > 120) {
         // truly stuck against rock or open air: tell the caller to re-plan
         this.blockedT = 0;
@@ -347,9 +394,9 @@ class Ant {
     const dNow = Math.hypot(dx, dy);
     if (!this.lastGoto || Math.abs(this.lastGoto.x - tx) > 6 || Math.abs(this.lastGoto.y - ty) > 6) {
       this.lastGoto = { x: tx, y: ty };
-      this.gotoBest = 1e9; this.noProgT = 0; this.squeezeN = 0; this.crotchN = 0;
+      this.gotoBest = 1e9; this.noProgT = 0; this.squeezeN = 0; this.crotchN = 0; this.hopN = 0;
     }
-    if (dNow < this.gotoBest - 0.5) { this.gotoBest = dNow; this.noProgT = 0; this.squeezeN = 0; this.crotchN = 0; }
+    if (dNow < this.gotoBest - 0.5) { this.gotoBest = dNow; this.noProgT = 0; this.squeezeN = 0; this.crotchN = 0; this.hopN = 0; }
     else this.noProgT++;
     // only squeeze while gripping terrain -- a free-floating ant must fall,
     // not levitate across open chambers
@@ -364,7 +411,7 @@ class Ant {
       const ux = dx / (dNow || 1), uy = dy / (dNow || 1);
       T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1);
       const nx = this.x + ux * 2, ny = this.y + uy * 2;
-      if (!T.boxSolid(nx, ny, 1.5, 1.5)) {
+      if (!T.boxSolid(nx, ny, 1.5, 1.5) && !T.boxHard(nx, ny, this.hw, this.hh)) {
         this.x = nx; this.y = ny;
         this.vy = 0; // grip the soil: no falling back between squeezes
         this.noProgT = 235;
@@ -427,7 +474,11 @@ class Ant {
     if (this.navBestKey !== key) { this.navBestKey = key; this.navBest = dd; this.navStuck = 0; }
     if (dd < this.navBest - 1) { this.navBest = dd; this.navStuck = 0; }
     else this.navStuck = (this.navStuck || 0) + 1;
-    if (this.navStuck > 480) { this.burrowT = 150; this.navStuck = 0; }
+    if (this.navStuck > 480) {
+      this.burrowT = 150;
+      this.burrowSX = this.x; this.burrowSY = this.y;
+      this.navStuck = 0;
+    }
 
     const nav = this.nav;
     // skip waypoints we're already on top of
@@ -449,16 +500,18 @@ class Ant {
         this.biteAnim = 6;
         if ((G.tick & 7) === 0) G.particles.dirt(this.x, this.y, 2);
       }
-      if (!T.boxSolid(nx, ny, 1.5, 1.5)) {
+      if (!T.boxSolid(nx, ny, 1.5, 1.5) && !T.boxHard(nx, ny, this.hw, this.hh)) {
         this.x = nx; this.y = ny;
       } else {
-        nav.i++; // walled off (rock?): aim for the next waypoint
+        nav.i++; // walled off (rock or wood): aim for the next waypoint
       }
       this.vx = 0; this.vy = 0;
       nav.t = 0;
       // let go once we've gone a real distance AND have something to stand
-      // on or cling to -- never strand ourselves in mid-air
+      // on or cling to -- never strand ourselves in mid-air or back where
+      // we started
       if (this.burrowT < 130 &&
+          dist2(this.x, this.y, this.burrowSX, this.burrowSY) > 400 &&
           !T.boxSolid(this.x, this.y, this.hw, this.hh) &&
           (T.boxSolid(this.x, this.y + 2, this.hw, this.hh) ||
            sideWall(this, 1) || sideWall(this, -1))) {
@@ -548,6 +601,8 @@ class Ant {
       }
 
       case 'forage': {
+        // already loaded (interrupted return): bring it home first
+        if (this.carry) { this.state = 'return'; break; }
         // head for the surface first, then wander and look for food
         if (this.y > T.surf[Math.floor(this.x)] + 12) {
           this.navTo('entrance');
@@ -587,6 +642,7 @@ class Ant {
       }
 
       case 'collect': {
+        if (this.carry) { this.state = 'return'; this.target = null; break; }
         const it = this.target;
         if (!it || it.carried || it.dead) { this.state = 'forage'; this.target = null; break; }
         it.claimUntil = G.tick + 600; it.claimBy = this.id;
@@ -877,11 +933,14 @@ class Brood {
 // Bugs: aphid, pillbug, worm, spider, centipede
 // ---------------------------------------------------------------------------
 const BUG_DEF = {
-  aphid:     { hp: 5,   speed: 0.1,  dmg: 0, corpse: 4 },
-  pillbug:   { hp: 14,  speed: 0.25, dmg: 0, corpse: 8 },
-  worm:      { hp: 15,  speed: 0.18, dmg: 0, corpse: 12 },
-  spider:    { hp: 60,  speed: 0.55, dmg: 7, corpse: 22 },
-  centipede: { hp: 80,  speed: 0.32, dmg: 9, corpse: 28 },
+  aphid:     { hp: 5,   speed: 0.1,  dmg: 0,  corpse: 4 },
+  pillbug:   { hp: 14,  speed: 0.25, dmg: 0,  corpse: 8 },
+  worm:      { hp: 15,  speed: 0.18, dmg: 0,  corpse: 12 },
+  spider:    { hp: 60,  speed: 0.55, dmg: 7,  corpse: 22 },
+  centipede: { hp: 80,  speed: 0.32, dmg: 9,  corpse: 28 },
+  wasp:      { hp: 35,  speed: 0.85, dmg: 5,  corpse: 14 },
+  beetle:    { hp: 140, speed: 0.22, dmg: 12, corpse: 32 },
+  redant:    { hp: 28,  speed: 0.5,  dmg: 6,  corpse: 6 },
 };
 
 class Bug {
@@ -892,8 +951,8 @@ class Bug {
     this.x = x; this.y = y;
     this.vx = 0; this.vy = 0;
     this.hp = d.hp; this.maxHp = d.hp;
-    this.hw = kind === 'spider' ? 5 : kind === 'centipede' ? 3 : 3;
-    this.hh = kind === 'spider' ? 3 : 2;
+    this.hw = (kind === 'spider' || kind === 'beetle') ? 5 : kind === 'wasp' ? 4 : 3;
+    this.hh = (kind === 'spider' || kind === 'beetle') ? 3 : 2;
     this.dir = Math.random() < 0.5 ? -1 : 1;
     this.phase = Math.random() * 10;
     this.state = 'wander';
@@ -907,9 +966,16 @@ class Bug {
     this.climbing = false; this.climbV = 0; this.blocked = false;
     this.angle = Math.random() * Math.PI * 2; // diggers
     this.fleeing = false;
+    this.swoopT = 0;     // wasp hit-and-run timer
+    this.digT = 0;       // beetle bulldozing cooldown
+    this.turnT = 0;      // beetle: committed to walking away from a tree
+    this.raidT = 2700;   // redant: how long the raid lasts (~45s)
   }
 
-  get predator() { return this.kind === 'spider' || this.kind === 'centipede'; }
+  get predator() {
+    return this.kind === 'spider' || this.kind === 'centipede' ||
+           this.kind === 'wasp' || this.kind === 'beetle' || this.kind === 'redant';
+  }
 
   hurt(dmg, kx, ky) {
     if (this.kind === 'pillbug' && this.curl > 0) dmg *= 0.35;
@@ -930,18 +996,63 @@ class Bug {
     if (this.curl > 0) this.curl--;
     this.phase += Math.abs(this.vx) * 0.7 + 0.05;
 
+    if (this.swoopT > 0) this.swoopT--;
+    if (this.digT > 0) this.digT--;
+    if (this.turnT > 0) this.turnT--;
+
+    // predator freeze-shake: anything pinned in one spot for ~10s either
+    // slips away (if already leaving) or shakes itself free
+    if (this.predator && this.kind !== 'centipede') {
+      if (!this.fzP || Math.abs(this.x - this.fzP.x) > 5 || Math.abs(this.y - this.fzP.y) > 12) {
+        this.fzP = { x: this.x, y: this.y };
+        this.fzT = 0;
+      } else if (++this.fzT > 600) {
+        this.fzT = 0;
+        if (this.fleeing) {
+          this.dead = true; // slips away into the undergrowth
+        } else {
+          this.dir = -this.dir;
+          this.climbing = false;
+          T.dig(this.x, this.y + 3, Math.max(this.hw, this.hh) + 2);
+        }
+      }
+    }
+
     switch (this.kind) {
       case 'aphid':     this.aphidThink(); break;
       case 'pillbug':   this.pillbugThink(); break;
       case 'worm':      this.diggerThink(2.5, 0.012); break;
       case 'centipede': this.centipedeThink(); break;
       case 'spider':    this.spiderThink(); break;
+      case 'wasp':      this.waspThink(); break;
+      case 'beetle':    this.beetleThink(); break;
+      case 'redant':    this.redantThink(); break;
     }
 
-    // walkers wedged in terrain thrash themselves loose
+    // walkers wedged in terrain thrash themselves loose; if the prison is
+    // wood or rock (chewing won't help), squirm to open air or perish
     if (this.kind !== 'worm' && this.kind !== 'centipede' &&
         this.flash === 0 && T.boxSolid(this.x, this.y, this.hw, this.hh)) {
       T.dig(this.x, this.y, Math.max(this.hw, this.hh) + 2.5);
+      if (T.boxSolid(this.x, this.y, this.hw, this.hh)) {
+        this.embT = (this.embT || 0) + 1;
+        if (this.embT > 180) {
+          this.embT = 0;
+          let freed = false;
+          outer: for (let r = 4; r <= 24; r += 4) {
+            for (const o of [[0, -r], [r, 0], [-r, 0], [0, r], [r, -r], [-r, -r]]) {
+              if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh)) {
+                this.x += o[0]; this.y += o[1];
+                freed = true;
+                break outer;
+              }
+            }
+          }
+          if (!freed) this.dead = true;
+        }
+      } else {
+        this.embT = 0;
+      }
     }
 
     if (this.kind === 'worm' || this.kind === 'centipede') {
@@ -951,7 +1062,7 @@ class Bug {
         this.trail.unshift({ x: this.x, y: this.y });
         if (this.trail.length > (this.kind === 'centipede' ? 9 : 5)) this.trail.pop();
       }
-    } else {
+    } else if (this.kind !== 'wasp') { // wasps fly: they integrate themselves
       physStep(this);
       if (this.climbing && !sideWall(this, this.dir)) {
         this.climbing = false; this.vy = -1.0; this.vx = this.dir * 0.5;
@@ -1068,6 +1179,153 @@ class Bug {
     }
   }
 
+  // wasp: a day-flying striker. Hovers over the canopy line, dives on
+  // surface ants, bites, then backs off for a breath. Leaves at dusk.
+  waspThink() {
+    const d = BUG_DEF.wasp;
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+    if (G.isNight() || this.fleeing) {
+      // climb into the sky and vanish
+      this.x += this.dir * d.speed;
+      this.y -= 0.8;
+      if (this.y < T.surf[sx] - 240) this.dead = true;
+      return;
+    }
+    let prey = this.swoopT > 0 ? null : G.nearestAnt(this.x, this.y, 150, false);
+    if (prey) {
+      const px = Math.floor(Math.max(0, Math.min(WORLD_W - 1, prey.x)));
+      if (prey.y > T.surf[px] + 14) prey = null;  // can't reach tunnels
+    }
+    let tx, ty;
+    if (prey) {
+      tx = prey.x; ty = prey.y - 1;
+    } else {
+      // patrol above the forest floor, drifting toward the colony
+      if (Math.random() < 0.01) this.dir = -this.dir;
+      if (Math.random() < 0.004) this.dir = Math.sign(G.colony.x - this.x) || 1;
+      tx = this.x + this.dir * 40;
+      ty = T.surf[sx] - 45 - Math.sin(G.tick * 0.05 + this.phase) * 8;
+    }
+    const ang = Math.atan2(ty - this.y, tx - this.x);
+    const sp = prey ? d.speed * 1.6 : d.speed;
+    const nx = this.x + Math.cos(ang) * sp;
+    const ny = this.y + Math.sin(ang) * sp;
+    if (!T.boxSolid(nx, ny, this.hw, this.hh)) {
+      this.x = nx; this.y = ny;
+      if (Math.abs(Math.cos(ang)) > 0.1) this.dir = Math.cos(ang) >= 0 ? 1 : -1;
+    } else if (!T.boxSolid(this.x, this.y - 1, this.hw, this.hh)) {
+      this.y -= 1; // veer up and over
+    } else {
+      this.dir = -this.dir; // canopy in the face: peel away
+      return;
+    }
+    if (prey && dist2(this.x, this.y, prey.x, prey.y) < 90 && this.biteCd <= 0) {
+      prey.hurt(d.dmg, this.dir, -0.4);
+      this.biteCd = 45;
+      this.swoopT = 110; // hit and run
+      if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('bite');
+    }
+    this.x = Math.max(8, Math.min(WORLD_W - 8, this.x));
+    this.y = Math.max(8, this.y);
+  }
+
+  // beetle: slow armored bruiser. Trundles toward the mound, bulldozes
+  // through soil, hits like a rock.
+  beetleThink() {
+    const d = BUG_DEF.beetle;
+    if (this.fleeing) {
+      const edge = this.x < WORLD_W / 2 ? 10 : WORLD_W - 10;
+      this.dir = Math.sign(edge - this.x) || 1;
+      this.vx = this.dir * d.speed * 1.4;
+      if (Math.abs(this.x - edge) < 40) this.dead = true;
+      return;
+    }
+    const prey = G.nearestAnt(this.x, this.y, 130, false);
+    if (prey) {
+      this.dir = Math.sign(prey.x - this.x) || 1;
+      this.vx = this.dir * d.speed * 1.2;
+      if (dist2(this.x, this.y, prey.x, prey.y) < 130 && this.biteCd <= 0) {
+        prey.hurt(d.dmg, this.dir * 1.4, -0.5);
+        this.biteCd = 70;
+        if (G.nearPlayer(this.x, this.y) < 260) Sfx.play('bite');
+      }
+    } else {
+      // menace the mound (unless we just bounced off a tree)
+      if (this.turnT <= 0) {
+        this.dir = Math.sign(G.colony.x - this.x) || 1;
+        if (Math.abs(this.x - G.colony.x) < 70 && Math.random() < 0.01) this.dir = -this.dir;
+      }
+      this.vx = this.dir * d.speed;
+    }
+    // bulldoze whatever blocks the path; trees turn it back
+    if (this.blocked && this.digT <= 0) {
+      const bx = this.x + this.dir * (this.hw + 3);
+      if (T.digHasTarget(bx, this.y, 5)) {
+        T.dig(bx, this.y, 5);
+        G.particles.dirt(bx, this.y, 3);
+        if (G.nearPlayer(bx, this.y) < 220) Sfx.play('dig');
+        this.digT = 40;
+      } else {
+        this.dir = -this.dir;
+        this.turnT = 600; // wood or rock: trundle off elsewhere for a while
+        this.digT = 30;
+      }
+    }
+  }
+
+  // redant: rival-colony raider. Marches on the entrance, fights whatever
+  // it meets, and withdraws when the raid clock runs out or it's beaten.
+  redantThink() {
+    const d = BUG_DEF.redant;
+    this.raidT--;
+    if (this.raidT <= 0) this.fleeing = true;
+    if (this.fleeing) {
+      const edge = this.x < WORLD_W / 2 ? 10 : WORLD_W - 10;
+      this.dir = Math.sign(edge - this.x) || 1;
+      this.vx = this.dir * d.speed * 1.2;
+      if (this.blocked && sideWall(this, this.dir)) { this.climbing = true; this.climbV = -0.8; }
+      else this.climbing = false;
+      if (Math.abs(this.x - edge) < 30) this.dead = true;
+      return;
+    }
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+    let prey = G.nearestAnt(this.x, this.y, 110, false);
+    if (prey && prey.y > T.surf[sx] + 60) prey = null; // raiders stay shallow
+    if (prey) {
+      this.dir = Math.sign(prey.x - this.x) || 1;
+      this.vx = this.dir * d.speed * 1.2;
+      this.climbing = false;
+      if (prey.y < this.y - 6 && sideWall(this, this.dir)) { this.climbing = true; this.climbV = -0.8; }
+      if (dist2(this.x, this.y, prey.x, prey.y) < 90 && this.biteCd <= 0) {
+        prey.hurt(d.dmg, this.dir, -0.4);
+        this.biteCd = 50;
+        if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('bite');
+      }
+    } else {
+      // march on the colony entrance; climb slopes but not trees
+      const tx = G.colony.entrance.x;
+      if (this.turnT <= 0) this.dir = Math.sign(tx - this.x) || 1;
+      this.vx = this.dir * d.speed * (Math.abs(this.x - tx) < 20 ? 0.3 : 1);
+      const aboveGround = this.y < T.surf[sx] - 6;
+      if (this.climbing && aboveGround) {
+        // climbed into a tree: drop off and detour
+        this.climbing = false;
+        this.dir = -this.dir;
+        this.turnT = 240 + (this.id % 4) * 80;
+      } else if (this.blocked) {
+        if (!aboveGround && sideWall(this, this.dir) && Math.random() < 0.6) {
+          this.climbing = true; this.climbV = -0.8;
+        } else {
+          this.climbing = false;
+          this.dir = -this.dir;
+          this.turnT = 240 + (this.id % 4) * 80;
+        }
+      } else if (this.onGround) {
+        this.climbing = false;
+      }
+    }
+  }
+
   draw(ctx, camx, camy) {
     const ex = Math.round(this.x - camx), ey = Math.round(this.y - camy);
     if (ex < -24 || ex > 344 || ey < -24 || ey > 224) return;
@@ -1134,6 +1392,87 @@ class Bug {
         ctx.fillRect(ex + this.dir * 2, ey + 1, 1, 1);
         ctx.fillStyle = '#3a2408';
         ctx.fillRect(ex + this.dir, ey - 1, 1, 1);
+        break;
+      }
+      case 'wasp': {
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.scale(this.dir, 1);
+        // wings, 2-frame flutter
+        const wup = (G.tick >> 1) % 2;
+        ctx.fillStyle = 'rgba(225,235,250,0.75)';
+        ctx.fillRect(-3, -4 - wup, 4, 2);
+        ctx.fillRect(-2, -5 - wup, 3, 1);
+        // striped abdomen
+        ctx.fillStyle = fl ? '#fff' : '#e8c020';
+        ctx.fillRect(-5, -1, 7, 3);
+        ctx.fillStyle = fl ? '#fff' : '#2a2418';
+        ctx.fillRect(-4, -1, 1, 3);
+        ctx.fillRect(-2, -1, 1, 3);
+        ctx.fillRect(0, -1, 1, 3);
+        // sting
+        ctx.fillRect(-6, 0, 1, 1);
+        // head
+        ctx.fillStyle = fl ? '#fff' : '#3a3020';
+        ctx.fillRect(2, -2, 3, 3);
+        ctx.fillStyle = '#d02020';
+        ctx.fillRect(4, -1, 1, 1);
+        ctx.restore();
+        break;
+      }
+      case 'beetle': {
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.scale(this.dir, 1);
+        const bd = fl ? '#fff' : '#2e2a3a';
+        const bk = fl ? '#fff' : '#1c1a26';
+        // legs, 2-frame stomp
+        const blo = Math.sin(this.phase) > 0 ? 1 : 0;
+        ctx.fillStyle = bk;
+        ctx.fillRect(-4 + blo, 3, 1, 2);
+        ctx.fillRect(-1 - blo, 3, 1, 2);
+        ctx.fillRect(2 + blo, 3, 1, 2);
+        // domed shell
+        ctx.fillStyle = bd;
+        ctx.fillRect(-6, -2, 10, 5);
+        ctx.fillRect(-5, -3, 8, 1);
+        ctx.fillRect(-4, -4, 6, 1);
+        ctx.fillStyle = fl ? '#fff' : '#46405c'; // shine
+        ctx.fillRect(-3, -3, 2, 1);
+        // head + horn
+        ctx.fillStyle = bk;
+        ctx.fillRect(4, -1, 2, 4);
+        ctx.fillRect(5, -3, 1, 2);
+        ctx.fillStyle = '#c03020';
+        ctx.fillRect(5, 0, 1, 1);
+        ctx.restore();
+        break;
+      }
+      case 'redant': {
+        ctx.save();
+        ctx.translate(ex, ey);
+        if (this.climbing) ctx.rotate(-this.dir * Math.PI / 2 * 0.85);
+        ctx.scale(this.dir, 1);
+        const rc = fl ? '#fff' : '#c03028';
+        const rd = fl ? '#fff' : '#701418';
+        const rlo = Math.sin(this.phase) > 0 ? 1 : 0;
+        ctx.fillStyle = rd;
+        ctx.fillRect(-3 + rlo, 1, 1, 2);
+        ctx.fillRect(-rlo, 1, 1, 2);
+        ctx.fillRect(2 + rlo, 1, 1, 2);
+        ctx.fillRect(3, -3, 1, 1);
+        ctx.fillRect(4, -4, 1, 1);
+        ctx.fillStyle = rc;
+        ctx.fillRect(-6, -2, 4, 3);   // gaster
+        ctx.fillRect(-2, -1, 3, 2);   // thorax
+        ctx.fillRect(1, -2, 3, 3);    // head
+        ctx.fillStyle = rd;           // mandibles
+        const rmo = this.biteCd > 40 ? 1 : 0;
+        ctx.fillRect(4, -2 - rmo, 1, 1);
+        ctx.fillRect(4, 0 + rmo, 1, 1);
+        ctx.fillStyle = '#200808';
+        ctx.fillRect(2, -1, 1, 1);
+        ctx.restore();
         break;
       }
       case 'spider': {

@@ -2,18 +2,19 @@
 // One byte per world pixel, Liero-style.
 'use strict';
 
-const WORLD_W = 2048;
-const WORLD_H = 1280;
+const WORLD_W = 3072;
+const WORLD_H = 1920;
 
 // materials
 const M_AIR = 0;
 const M_DIRT = 1;   // diggable
 const M_ROCK = 2;   // not diggable
 const M_GRASS = 3;  // diggable
-const M_WOOD = 4;   // not diggable (trunks, roots)
+const M_WOOD = 4;   // not diggable (trunks, branches)
 const M_LEAF = 5;   // diggable (bite through, sometimes drops food)
+const M_ROOT = 6;   // diggable (tree roots -- chewy, so nobody gets trapped)
 
-function DIGGABLE(m) { return m === M_DIRT || m === M_GRASS || m === M_LEAF; }
+function DIGGABLE(m) { return m === M_DIRT || m === M_GRASS || m === M_LEAF || m === M_ROOT; }
 
 // --- seeded rng -------------------------------------------------------------
 function mulberry32(seed) {
@@ -126,7 +127,7 @@ function genWorld(seed) {
   }
 
   // -- rock blobs underground
-  const blobCount = 70;
+  const blobCount = 150;
   for (let i = 0; i < blobCount; i++) {
     const bx = Math.floor(rng() * WORLD_W);
     const by = Math.floor(surf[Math.min(WORLD_W - 1, Math.max(0, bx))] + 60 + rng() * (WORLD_H - surf[bx] - 120));
@@ -135,9 +136,9 @@ function genWorld(seed) {
   }
 
   // -- natural caves: drunken walkers
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < 55; i++) {
     let cx = rng() * WORLD_W;
-    let cy = surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, cx)))] + 100 + rng() * 600;
+    let cy = surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, cx)))] + 100 + rng() * 1000;
     let ang = rng() * Math.PI * 2;
     const steps = 60 + rng() * 160;
     for (let s = 0; s < steps; s++) {
@@ -180,7 +181,7 @@ function genWorld(seed) {
     colonyX - 180 - Math.floor(rng() * 120),
     colonyX + 180 + Math.floor(rng() * 120),
   ];
-  const treeCount = 6 + Math.floor(rng() * 4);
+  const treeCount = 10 + Math.floor(rng() * 5);
   for (let i = 0; i < treeCount; i++) {
     treeXs.push(Math.floor(40 + rng() * (WORLD_W - 80)));
   }
@@ -293,9 +294,9 @@ function growTree(m, rng, tx, groundY) {
     let rang = Math.PI / 2 + (rng() - 0.5) * 1.4;
     const rlen = 30 + rng() * 55;
     for (let s = 0; s < rlen; s++) {
-      setPxIf(m, Math.round(rx2), Math.round(ry2), M_WOOD, M_DIRT);
-      setPxIf(m, Math.round(rx2) + 1, Math.round(ry2), M_WOOD, M_DIRT);
-      if (s < rlen * 0.4) setPxIf(m, Math.round(rx2), Math.round(ry2) + 1, M_WOOD, M_DIRT);
+      setPxIf(m, Math.round(rx2), Math.round(ry2), M_ROOT, M_DIRT);
+      setPxIf(m, Math.round(rx2) + 1, Math.round(ry2), M_ROOT, M_DIRT);
+      if (s < rlen * 0.4) setPxIf(m, Math.round(rx2), Math.round(ry2) + 1, M_ROOT, M_DIRT);
       rang += (rng() - 0.5) * 0.3;
       rx2 += Math.cos(rang);
       ry2 += Math.sin(rang);

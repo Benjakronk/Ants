@@ -64,6 +64,9 @@ select screen starts split-screen two-player; both ants serve the same colony.
 | Worm | Tunnels below; slow, nutritious |
 | Spider | Surface predator, prowls at night |
 | Centipede | Deep predator; follows you down tunnels |
+| Wasp | Day-flying striker; dives on ants in the open |
+| Beetle | Rare armored bruiser; bulldozes toward the mound |
+| Red ants | Rival colony; raids in groups from the map edge |
 
 ## Development
 
