@@ -36,18 +36,26 @@ function physStep(e) {
       for (let s = 1; s <= 3; s++) {           // step up small ledges
         if (!T.boxSolid(nx, e.y - s, e.hw, e.hh)) { e.x = nx; e.y -= s; ok = true; break; }
       }
+      if (!ok && e.ceiling) {
+        for (let s = 1; s <= 3; s++) {         // duck under ceiling bumps
+          if (!T.boxSolid(nx, e.y + s, e.hw, e.hh)) { e.x = nx; e.y += s; ok = true; break; }
+        }
+      }
       e.blocked = !ok;
     }
   }
   // vertical
+  if (e.ceiling && !ceilAbove(e, 4)) e.ceiling = false; // lost grip on the roof
   if (e.climbing) {
     e.vy = e.climbV;
+  } else if (e.ceiling) {
+    e.vy = -0.9; // press against the roof
   } else {
     e.vy = Math.min(e.vy + GRAV, MAXFALL);
   }
   if (e.vy !== 0) {
     // climbers hug the wall and squeeze past small lips: narrower vertical box
-    const vhw = e.climbing ? Math.max(1, e.hw - 1.5) : e.hw;
+    const vhw = (e.climbing || e.ceiling) ? Math.max(1, e.hw - 1.5) : e.hw;
     const ny = e.y + e.vy;
     if (!T.boxSolid(e.x, ny, vhw, e.hh)) {
       e.y = ny;
@@ -86,6 +94,17 @@ function wallNear(e, dir, reach) {
   return false;
 }
 
+// is there a roof within reach above the body? (ceiling grip)
+function ceilAbove(e, reach) {
+  for (let d = 1; d <= reach; d++) {
+    const y = Math.round(e.y - e.hh - d);
+    for (let x = Math.floor(e.x - e.hw + 1); x <= Math.ceil(e.x + e.hw - 1); x++) {
+      if (T.solid(x, y)) return true;
+    }
+  }
+  return false;
+}
+
 function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +131,11 @@ class Ant {
     this.digCd = 0;
     this.blockedT = 0;
     this.climbing = false;
+    this.ceiling = false;
     this.climbV = 0;
+    this.gotoFail = false;
+    this.disperseT = 0;
+    this.disperseDir = 1;
     this.biteAnim = 0;
     this.flash = 0;
     this.starving = false;
@@ -153,6 +176,30 @@ class Ant {
       return;
     }
     this.npcThink();
+    // ceiling grip only persists while goto keeps asserting it
+    if (this.gotoTick !== G.tick) this.ceiling = false;
+    // freeze detector: an NPC pinned in place for ~12s (wood pockets, branch
+    // forks) shakes itself loose no matter what its state machine wants
+    if (this.caste !== 'queen') {
+      if (!this.freezeP || Math.abs(this.x - this.freezeP.x) > 5 || Math.abs(this.y - this.freezeP.y) > 5) {
+        this.freezeP = { x: this.x, y: this.y };
+        this.freezeT = 0;
+      } else if (this.state !== 'idle' && ++this.freezeT > 720) {
+        this.freezeT = 0;
+        this.climbing = false; this.ceiling = false; this.crotchT = 0;
+        this.state = 'idle'; this.stateT = 60; this.target = null; this.nav = null;
+        T.dig(this.x, this.y + 4, Math.max(this.hw, this.hh) + 2);
+        outer: for (let r = 4; r <= 16; r += 4) {
+          for (const o of [[0, r], [r, 0], [-r, 0], [r, r], [-r, r], [0, -r]]) {
+            if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh)) {
+              this.x += o[0]; this.y += o[1];
+              break outer;
+            }
+          }
+        }
+        this.vy = 1;
+      }
+    }
     physStep(this);
     // climbing ant that lost its wall: boost over the ledge
     if (this.climbing && this.climbV < 0 &&
@@ -167,7 +214,44 @@ class Ant {
   goto(tx, ty, canDig) {
     const c = this.def;
     const dx = tx - this.x, dy = ty - this.y;
+    const wasCeil = this.ceiling;
+    const hitCeil = this.vBlocked;   // climbed into a roof last step
     this.climbing = false;
+    this.ceiling = false;
+    this.gotoTick = G.tick;
+
+    // committed crotch escape: hanging under a branch and pressed into the
+    // trunk -- crawl out to the branch tip, then swing up around it
+    if (this.crotchT > 0) {
+      this.crotchT--;
+      this.vBlocked = false;
+      if (ceilAbove(this, 4)) {
+        this.ceiling = true;
+        this.vx = this.crotchDir * c.speed;
+        this.dir = this.crotchDir;
+      } else {
+        // ceiling ran out (the tip): hop up and back onto the branch
+        this.crotchT = 0;
+        this.vy = -1.9;
+        this.vx = -this.crotchDir * c.speed * 0.6;
+      }
+      return Math.hypot(dx, dy);
+    }
+    if (wasCeil && this.blocked) {
+      this.crotchN = (this.crotchN || 0) + 1;
+      if (this.crotchN > 3) {
+        // circling the same limb: this way is barred
+        this.crotchN = 0;
+        this.gotoFail = true;
+      } else {
+        this.crotchDir = -this.dir || (Math.random() < 0.5 ? -1 : 1);
+        this.crotchT = 120;
+        this.ceiling = true;
+        this.vx = this.crotchDir * c.speed;
+        this.dir = this.crotchDir;
+        return Math.hypot(dx, dy);
+      }
+    }
 
     if (Math.abs(dx) > 3) {
       this.vx = Math.sign(dx) * c.speed;
@@ -196,11 +280,22 @@ class Ant {
         this.climbing = true; this.climbV = -c.speed * 1.1;
         this.dir = wallDir;
         if (Math.abs(dx) <= 3) this.vx = wallDir * c.speed * 0.5; // hug the wall
+      } else if ((wasCeil || hitCeil) && ceilAbove(this, 4)) {
+        this.ceiling = true; // no wall, but a roof to hang from
       } else if (this.onGround) {
         this.vy = -1.6; // hop
         this.blockedT++;  // hopping in place counts as stuck
       }
     }
+
+    // ceiling traverse: gripping a roof with somewhere sideways to go --
+    // crawl on inverted (under branches and overhangs) instead of dropping off
+    if (!this.climbing && !this.ceiling && Math.abs(dx) > 3 &&
+        (wasCeil || hitCeil) && ceilAbove(this, 4)) {
+      this.ceiling = true;
+      if (!this.blocked) this.blockedT = Math.max(0, this.blockedT - 2); // gripping is progress
+    }
+
     // need to go down and roughly above target: let gravity work, or dig
     if (this.blocked || (dy > 4 && Math.abs(dx) < 8 && this.onGround)) {
       this.blockedT++;
@@ -208,32 +303,42 @@ class Ant {
       this.blockedT = Math.max(0, this.blockedT - 1);
     }
 
-    // stuck: chew through. Raycast toward the target for the first diggable spot.
-    if (canDig && this.blockedT > 30 && this.digCd <= 0) {
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;
-      let hit = null;
-      for (let t = this.hw + 2; t <= this.hw + 15 && !hit; t += 3) {
-        const bx = this.x + ux * t, by = this.y + uy * t;
-        if (T.digHasTarget(bx, by, c.digR)) hit = { bx, by };
+    // stuck: chew through, climb over, or give up
+    if (this.blockedT > 30) {
+      let acted = false;
+      // raycast toward the target for the first diggable spot
+      if (canDig && this.digCd <= 0) {
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len;
+        let hit = null;
+        for (let t = this.hw + 2; t <= this.hw + 15 && !hit; t += 3) {
+          const bx = this.x + ux * t, by = this.y + uy * t;
+          if (T.digHasTarget(bx, by, c.digR)) hit = { bx, by };
+        }
+        if (hit) {
+          T.dig(hit.bx, hit.by, c.digR);
+          T.dig(this.x + ux * 2, this.y + uy * 2, c.digR * 0.8); // clear around the body too
+          G.particles.dirt(hit.bx, hit.by, 3);
+          if (G.nearPlayer(hit.bx, hit.by) < 200) Sfx.play('dig');
+          this.digCd = c.digCd + 6;
+          this.biteAnim = 6;
+          this.blockedT = 12;
+          acted = true;
+        }
       }
-      if (hit) {
-        T.dig(hit.bx, hit.by, c.digR);
-        T.dig(this.x + ux * 2, this.y + uy * 2, c.digR * 0.8); // clear around the body too
-        G.particles.dirt(hit.bx, hit.by, 3);
-        if (G.nearPlayer(hit.bx, hit.by) < 200) Sfx.play('dig');
-        this.digCd = c.digCd + 6;
-        this.biteAnim = 6;
-        this.blockedT = 12;
-      } else if (dy < 4 && (wallNear(this, this.dir, 4) || wallNear(this, -this.dir, 4))) {
-        // nothing to chew: climb over the obstacle instead
-        if (!wallNear(this, this.dir, 4)) this.dir = -this.dir;
-        this.climbing = true; this.climbV = -c.speed * 1.1;
-        this.vx = this.dir * c.speed * 0.5;
-      } else if (this.blockedT > 120) {
-        // truly stuck against rock or open air: wander off
+      if (!acted && this.blockedT > 240) {
+        // chewing and climbing have both failed for ages: hard reset
         this.blockedT = 0;
-        this.target = { x: this.x + (Math.random() - 0.5) * 200, y: this.y };
+        this.gotoFail = true;
+      } else if (!acted && dy < 4 && (wallNear(this, this.dir, 4) || wallNear(this, -this.dir, 4))) {
+        // nothing to chew (rock, wood, or digging forbidden): climb over it
+        if (!wallNear(this, this.dir, 4)) this.dir = -this.dir;
+        this.climbing = true; this.ceiling = false; this.climbV = -c.speed * 1.1;
+        this.vx = this.dir * c.speed * 0.5;
+      } else if (!acted && !this.climbing && this.blockedT > 120) {
+        // truly stuck against rock or open air: tell the caller to re-plan
+        this.blockedT = 0;
+        this.gotoFail = true;
       }
     }
 
@@ -242,19 +347,40 @@ class Ant {
     const dNow = Math.hypot(dx, dy);
     if (!this.lastGoto || Math.abs(this.lastGoto.x - tx) > 6 || Math.abs(this.lastGoto.y - ty) > 6) {
       this.lastGoto = { x: tx, y: ty };
-      this.gotoBest = 1e9; this.noProgT = 0;
+      this.gotoBest = 1e9; this.noProgT = 0; this.squeezeN = 0; this.crotchN = 0;
     }
-    if (dNow < this.gotoBest - 0.5) { this.gotoBest = dNow; this.noProgT = 0; }
+    if (dNow < this.gotoBest - 0.5) { this.gotoBest = dNow; this.noProgT = 0; this.squeezeN = 0; this.crotchN = 0; }
     else this.noProgT++;
-    if (canDig && this.noProgT > 240) {
+    // only squeeze while gripping terrain -- a free-floating ant must fall,
+    // not levitate across open chambers
+    if (canDig && this.noProgT > 240 && T.boxSolid(this.x, this.y, this.hw + 2, this.hh + 2)) {
+      this.squeezeN = (this.squeezeN || 0) + 1;
+      if (this.squeezeN > 40) {
+        // 40 squeezes with no net progress: this spot is unreachable
+        this.squeezeN = 0; this.noProgT = 0;
+        this.gotoFail = true;
+        return dNow;
+      }
       const ux = dx / (dNow || 1), uy = dy / (dNow || 1);
       T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1);
-      this.x += ux * 2; this.y += uy * 2;
-      this.vy = 0; // grip the soil: no falling back between squeezes
-      this.noProgT = 235;
-      this.biteAnim = 6;
-      G.particles.dirt(this.x, this.y, 2);
-      if (G.nearPlayer(this.x, this.y) < 200) Sfx.play('dig');
+      const nx = this.x + ux * 2, ny = this.y + uy * 2;
+      if (!T.boxSolid(nx, ny, 1.5, 1.5)) {
+        this.x = nx; this.y = ny;
+        this.vy = 0; // grip the soil: no falling back between squeezes
+        this.noProgT = 235;
+        this.biteAnim = 6;
+        G.particles.dirt(this.x, this.y, 2);
+        if (G.nearPlayer(this.x, this.y) < 200) Sfx.play('dig');
+      } else {
+        // bedrock or wood in the way: this route is hopeless
+        this.noProgT = 0;
+        this.gotoFail = true;
+      }
+    } else if (this.noProgT > 900) {
+      // fifteen seconds of zero progress (hopping at an unreachable spot,
+      // pacing a ledge): admit defeat so the state machine moves on
+      this.noProgT = 0;
+      this.gotoFail = true;
     }
     return dNow;
   }
@@ -297,21 +423,12 @@ class Ant {
     if (!this.nav || this.nav.key !== key) this.planNav(key);
 
     // journey watchdog: if the whole trip stalls (waypoint ping-pong, bad
-    // geometry), squeeze through the soil along the waypoint chain
+    // geometry), burrow bodily along the waypoint chain for a burst
     if (this.navBestKey !== key) { this.navBestKey = key; this.navBest = dd; this.navStuck = 0; }
     if (dd < this.navBest - 1) { this.navBest = dd; this.navStuck = 0; }
     else this.navStuck = (this.navStuck || 0) + 1;
-    if (this.navStuck > 480) {
-      const wp = (this.nav && this.nav.pts[this.nav.i]) || dest;
-      const len = Math.hypot(wp.x - this.x, wp.y - this.y) || 1;
-      const ux = (wp.x - this.x) / len, uy = (wp.y - this.y) / len;
-      T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1);
-      this.x += ux * 2; this.y += uy * 2;
-      this.vy = 0; // grip the soil
-      this.navStuck = 475;
-      this.biteAnim = 6;
-      G.particles.dirt(this.x, this.y, 2);
-    }
+    if (this.navStuck > 480) { this.burrowT = 150; this.navStuck = 0; }
+
     const nav = this.nav;
     // skip waypoints we're already on top of
     while (nav.i < nav.pts.length &&
@@ -319,7 +436,36 @@ class Ant {
       nav.i++; nav.best = Infinity; nav.t = 0;
     }
     const wp = nav.pts[nav.i];
-    if (!wp) { this.goto(dest.x, dest.y - 3, true); return dd; }
+    if (!wp) { this.burrowT = 0; this.goto(dest.x, dest.y - 3, true); return dd; }
+    if (this.burrowT > 0) {
+      // squeeze along the waypoint chain, Liero physics be damned
+      this.burrowT--;
+      const len = Math.hypot(wp.x - this.x, wp.y - this.y) || 1;
+      const ux = (wp.x - this.x) / len, uy = (wp.y - this.y) / len;
+      const nx = this.x + ux * 2, ny = this.y + uy * 2;
+      if (T.boxSolid(nx, ny, 1.5, 1.5)) {
+        // chew only what's actually in the way (don't erode the nest)
+        T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1);
+        this.biteAnim = 6;
+        if ((G.tick & 7) === 0) G.particles.dirt(this.x, this.y, 2);
+      }
+      if (!T.boxSolid(nx, ny, 1.5, 1.5)) {
+        this.x = nx; this.y = ny;
+      } else {
+        nav.i++; // walled off (rock?): aim for the next waypoint
+      }
+      this.vx = 0; this.vy = 0;
+      nav.t = 0;
+      // let go once we've gone a real distance AND have something to stand
+      // on or cling to -- never strand ourselves in mid-air
+      if (this.burrowT < 130 &&
+          !T.boxSolid(this.x, this.y, this.hw, this.hh) &&
+          (T.boxSolid(this.x, this.y + 2, this.hw, this.hh) ||
+           sideWall(this, 1) || sideWall(this, -1))) {
+        this.burrowT = 0;
+      }
+      return dd;
+    }
     const d = this.goto(wp.x, wp.y - 2, true);
     nav.t++;
     if (d < nav.best - 1) { nav.best = d; nav.t = 0; }
@@ -327,9 +473,26 @@ class Ant {
     return dd;
   }
 
+  // nearest loose food item, skipping ones other ants claimed or gave up on
+  findFood(r) {
+    let best = null, bd = r * r;
+    for (const it of G.items) {
+      if (it.dead || it.carried) continue;
+      if (it.shunT > G.tick) continue;
+      if (it.claimUntil > G.tick && it.claimBy !== this.id) continue;
+      const d = dist2(this.x, this.y, it.x, it.y);
+      // food stuck up in trees only tempts ants already close to it
+      if (d > 150 * 150 &&
+          it.y < T.surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, it.x)))] - 20) continue;
+      if (d < bd) { bd = d; best = it; }
+    }
+    return best;
+  }
+
   npcThink() {
     const col = G.colony;
     this.vx = 0;
+    this.gotoFail = false;
 
     // threat reaction
     const pred = G.nearestPredator(this.x, this.y, this.caste === 'soldier' ? 130 : 70);
@@ -344,9 +507,29 @@ class Ant {
     switch (this.state) {
       case 'idle': {
         this.stateT--;
-        // amble around current spot
-        if (Math.random() < 0.01) this.vx = (Math.random() < 0.5 ? -1 : 1) * this.def.speed * 0.6;
-        if (G.colony.food < 15 && this.caste === 'worker') this.stateT = 0; // hungry colony: no loitering
+        // don't pile up: drift away when too many ants crowd one spot
+        if (this.caste !== 'queen' && (G.tick + this.id) % 25 === 0) {
+          let crowd = 0, cxSum = 0;
+          for (const o of G.ants) {
+            if (o !== this && o.hp > 0 &&
+                Math.abs(o.x - this.x) < 14 && Math.abs(o.y - this.y) < 10) {
+              crowd++; cxSum += o.x;
+            }
+          }
+          if (crowd >= 3) {
+            this.disperseT = 30 + (this.id * 13) % 50;
+            this.disperseDir = (this.x - cxSum / crowd) >= 0 ? 1 : -1;
+          }
+        }
+        if (this.disperseT > 0) {
+          this.disperseT--;
+          this.vx = this.disperseDir * this.def.speed * 0.5;
+          this.dir = this.disperseDir;
+        } else if (Math.random() < 0.01) {
+          // amble around current spot
+          this.vx = (Math.random() < 0.5 ? -1 : 1) * this.def.speed * 0.6;
+        }
+        if (G.colony.food < 25 && this.caste === 'worker') this.stateT = 0; // hungry colony: no loitering
         if (this.stateT <= 0) {
           if (this.caste === 'worker') {
             this.state = 'forage';
@@ -376,9 +559,27 @@ class Ant {
             };
           }
           this.goto(this.target.x, T.surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.target.x)))] - 4, false);
+          if (this.gotoFail) { this.gotoFail = false; this.target = null; break; }
           // smell food?
-          const it = G.nearestItem(this.x, this.y, 400);
-          if (it) { this.state = 'collect'; this.target = it; }
+          const it = this.findFood(600);
+          if (it) {
+            it.claimUntil = G.tick + 600; it.claimBy = this.id;
+            this.state = 'collect'; this.target = it;
+            break;
+          }
+          // a milkable aphid up a tree is food too
+          if ((G.tick + this.id) % 30 === 0) {
+            for (const b of G.bugs) {
+              if (b.kind === 'aphid' && !b.dead && b.milkCd <= 0 &&
+                  !(b.claimUntil > G.tick) && !(b.shunT > G.tick) &&
+                  dist2(this.x, this.y, b.x, b.y) < 150 * 150) {
+                b.claimUntil = G.tick + 900; b.claimBy = this.id;
+                this.state = 'milk'; this.target = b;
+                break;
+              }
+            }
+            if (this.state !== 'forage') break;
+          }
           // homesick after a while
           if (Math.random() < 0.0008) { this.state = 'return'; }
         }
@@ -388,12 +589,45 @@ class Ant {
       case 'collect': {
         const it = this.target;
         if (!it || it.carried || it.dead) { this.state = 'forage'; this.target = null; break; }
+        it.claimUntil = G.tick + 600; it.claimBy = this.id;
         const d = this.goto(it.x, it.y, true);
+        if (this.gotoFail) {
+          this.gotoFail = false;
+          it.shunT = G.tick + 1800; // out of reach: leave it be a while
+          it.shunN = (it.shunN || 0) + 1;
+          if (it.shunN >= 3) it.dead = true; // lost in the brambles for good
+          this.state = 'forage'; this.target = null;
+          break;
+        }
         if (d < 8) {
           it.carried = this;
           this.carry = it;
           this.state = 'return';
           if (G.nearPlayer(this.x, this.y) < 200) Sfx.play('pickup');
+        }
+        break;
+      }
+
+      case 'milk': {
+        const b = this.target;
+        if (!b || b.dead || b.kind !== 'aphid' || b.milkCd > 0 || this.carry) {
+          this.state = 'forage'; this.target = null; break;
+        }
+        b.claimUntil = G.tick + 600; b.claimBy = this.id;
+        const d = this.goto(b.x, b.y, true);
+        if (this.gotoFail) {
+          this.gotoFail = false;
+          b.shunT = G.tick + 1800; // can't get up there: try elsewhere
+          this.state = 'forage'; this.target = null;
+          break;
+        }
+        if (d < 9) {
+          b.milkCd = 1800;
+          const hd = G.makeItem('honeydew', this.x, this.y);
+          hd.carried = this; this.carry = hd;
+          G.items.push(hd);
+          this.state = 'return';
+          if (G.nearPlayer(this.x, this.y) < 220) Sfx.play('milk');
         }
         break;
       }
@@ -432,6 +666,12 @@ class Ant {
                 : G.nearestPredator(this.x, this.y, 200);
         if (!p) { this.state = this.caste === 'queen' ? 'idle' : 'patrol'; this.stateT = 200; break; }
         this.target = p;
+        // deep in the nest with a faraway target: take the tunnels out first
+        const fsx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+        if (this.y > T.surf[fsx] + 40 && dist2(this.x, this.y, p.x, p.y) > 10000) {
+          this.navTo('entrance');
+          break;
+        }
         const d = this.goto(p.x, p.y, true);
         if (d < 11 && this.biteCd <= 0) {
           p.hurt(this.def.dmg, Math.sign(p.x - this.x) * 0.8, -0.3);
@@ -444,6 +684,10 @@ class Ant {
 
       case 'patrol': {
         this.stateT--;
+        // anything hunting near the colony is the soldiers' problem
+        const threat = G.bugs.find(b => b.predator && !b.dead && !b.fleeing &&
+          Math.abs(b.x - col.x) < 450 && Math.abs(b.y - col.entrance.y) < 350);
+        if (threat) { this.state = 'fight'; this.target = threat; break; }
         const keys = ['entrance', 'junction', 'storage', 'nursery', 'queen'];
         const d = this.navTo(keys[this.patrolI % keys.length]);
         if (d < 18) this.patrolI++;
@@ -499,7 +743,7 @@ class Ant {
     ctx.save();
     ctx.translate(ex, ey);
     if (this.climbing) ctx.rotate(-this.dir * Math.PI / 2 * 0.85);
-    ctx.scale(this.dir * s, s);
+    ctx.scale(this.dir * s, this.ceiling ? -s : s); // upside-down on ceilings
 
     const col = this.flash > 0 ? '#ffffff'
       : `rgb(${c.color[0]},${c.color[1]},${c.color[2]})`;

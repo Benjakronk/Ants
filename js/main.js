@@ -209,7 +209,8 @@ function newWorld(slot, playerCount) {
     G.items.push(G.makeItem('leaf', x, T.surf[Math.floor(x)] - 6));
   }
   for (const t of G.trees.slice(0, 5)) {
-    G.bugs.push(new Bug(t.x + 4, t.topY + 25 + Math.random() * 30, 'aphid'));
+    G.bugs.push(new Bug(t.x + (Math.random() < 0.5 ? -5 : 5),
+      T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
   }
   for (let i = 0; i < 3; i++) {
     const x = 60 + Math.random() * (WORLD_W - 120);
@@ -322,18 +323,22 @@ function controlPlayer(pIdx) {
   a.vx = dx * SPEED;
   if (dx !== 0) a.dir = dx;
 
-  // climbing: ants go up walls
+  // climbing: ants go up walls and hang from ceilings
   a.climbing = false;
+  a.ceiling = false;
   if (dy < 0) {
     let wallDir = 0;
     if (sideWall(a, a.dir)) wallDir = a.dir;
     else if (sideWall(a, -a.dir)) wallDir = -a.dir;
     else if (wallNear(a, a.dir, 5)) wallDir = a.dir;
     else if (wallNear(a, -a.dir, 5)) wallDir = -a.dir;
-    if (wallDir) {
+    const ceil = ceilAbove(a, 4);
+    if (wallDir && (dx === 0 || dx === wallDir || !ceil)) {
       a.climbing = true; a.climbV = -SPEED * 1.1;
       a.dir = wallDir;
       if (dx === 0) a.vx = wallDir * SPEED * 0.6; // drift onto the wall
+    } else if (ceil) {
+      a.ceiling = true; // hang from the roof; crawl with left/right
     } else if (a.onGround) {
       a.vy = -1.9; // hop
     }
@@ -537,8 +542,20 @@ function updatePlay() {
   for (const p of G.players) {
     if (!p.ant) continue;
     const vh = G.playerCount > 1 ? (VIEW_H - HUD_H) / 2 : VIEW_H - HUD_H;
-    const tx = p.ant.x - VIEW_W / 2 + p.ant.dir * 24;
-    const ty = p.ant.y - vh / 2 - 8;
+    // focus point with a deadzone: pixel jiggle (digging, climbing) doesn't
+    // shake the view; big jumps (takeover, load) snap it
+    if (p.fx === undefined || Math.abs(p.ant.x - p.fx) > 100 || Math.abs(p.ant.y - p.fy) > 100) {
+      p.fx = p.ant.x; p.fy = p.ant.y; p.look = p.ant.dir * 24;
+    }
+    const DZX = 5, DZY = 8;
+    if (p.ant.x > p.fx + DZX) p.fx = p.ant.x - DZX;
+    else if (p.ant.x < p.fx - DZX) p.fx = p.ant.x + DZX;
+    if (p.ant.y > p.fy + DZY) p.fy = p.ant.y - DZY;
+    else if (p.ant.y < p.fy - DZY) p.fy = p.ant.y + DZY;
+    // eased look-ahead so turning around doesn't yank the view
+    p.look += (p.ant.dir * 24 - p.look) * 0.03;
+    const tx = p.fx - VIEW_W / 2 + p.look;
+    const ty = p.fy - vh / 2 - 8;
     p.cam.x += (tx - p.cam.x) * 0.08;
     p.cam.y += (ty - p.cam.y) * 0.08;
     p.cam.x = Math.max(0, Math.min(WORLD_W - VIEW_W, p.cam.x));

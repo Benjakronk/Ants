@@ -53,6 +53,17 @@ class Colony {
     if (!isFinite(this.food)) { console.error('colony.food was NaN'); this.food = 0; }
     const pop = G.ants.filter(a => a.hp > 0).length;
 
+    // digging erodes the nest: keep the colony's mental map (chamber anchors,
+    // tunnel waypoints) settled on the floors that actually exist now
+    if (G.tick % 600 === 0) {
+      for (const key of ['entrance', 'junction', 'queenCh', 'storage', 'nursery']) {
+        const p = this[key];
+        let n = 0;
+        while (n++ < 30 && p.y + 4 < WORLD_H && !T.boxSolid(p.x, p.y + 3, 2, 1)) p.y++;
+      }
+      for (const k in this.paths) settlePath(T.m, this.paths[k]);
+    }
+
     // everyone eats
     this.food = Math.max(0, this.food - pop * 0.00006);
 
@@ -72,7 +83,7 @@ class Colony {
     if (queen) {
       this.eggT--;
       const broodCount = G.brood.filter(b => !b.dead).length;
-      if (this.eggT <= 0 && this.food >= 40 && broodCount < 6 && pop + broodCount < POP_CAP) {
+      if (this.eggT <= 0 && this.food >= 30 && broodCount < 6 && pop + broodCount < POP_CAP) {
         this.food -= 10;
         const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg');
         G.brood.push(e);
@@ -172,9 +183,12 @@ class Colony {
     if (items.filter(i => i.kind === 'seed').length < 12 && rnd < seedChance) {
       const trees = G.trees;
       if (trees.length && Math.random() < 0.5) {
+        // seeds fall from the canopy and land on the forest floor below
         const t = trees[Math.floor(Math.random() * trees.length)];
         const side = Math.random() < 0.5 ? -1 : 1;
-        G.items.push(G.makeItem('seed', t.crownX + side * (38 + Math.random() * 40), t.topY + 10));
+        const sx = Math.max(20, Math.min(WORLD_W - 20,
+          Math.round(t.x + side * (30 + Math.random() * 60))));
+        G.items.push(G.makeItem('seed', sx, T.surf[sx] - 8));
       } else {
         const x = 40 + Math.random() * (WORLD_W - 80);
         G.items.push(G.makeItem('seed', x, T.surf[Math.floor(x)] - 8));
@@ -193,8 +207,11 @@ class Colony {
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
     }
     if (count('aphid') < 6 && Math.random() < 0.0006 && G.trees.length) {
+      // aphid herds graze the lower trunk, within an ant's easy climb
       const t = G.trees[Math.floor(Math.random() * G.trees.length)];
-      G.bugs.push(new Bug(t.x + (Math.random() < 0.5 ? -4 : 4), t.topY + 20 + Math.random() * 40, 'aphid'));
+      const side = Math.random() < 0.5 ? -1 : 1;
+      G.bugs.push(new Bug(t.x + side * (4 + Math.random() * 3),
+        T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
     }
     if (count('worm') < 4 && Math.random() < 0.0007) {
       const x = 60 + Math.random() * (WORLD_W - 120);

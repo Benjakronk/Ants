@@ -60,6 +60,15 @@ const T = {
         count++;
       }
     }
+    // digging away the ground lowers the surface line for that column
+    if (count > 0) {
+      for (let x = x0; x <= x1; x++) {
+        let s = this.surf[x];
+        if (s < y0 - 1 || s > y1 + 1) continue;
+        while (s < WORLD_H - 1 && this.m[s * WORLD_W + x] === M_AIR) s++;
+        this.surf[x] = s;
+      }
+    }
     return { count, leaves };
   },
 

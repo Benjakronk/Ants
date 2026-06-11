@@ -28,6 +28,8 @@ python3 -m http.server   # then http://localhost:8000
 | Pick up / use | `E`      | `,` |
 
 - **Hold up against a wall (or tree) to climb.** Ants climb everything.
+  Hold up under a roof to hang and crawl upside-down — tunnel ceilings and
+  tree branches alike.
 - **Bite** digs dirt, grass and leaves; rock and wood don't yield. The same
   bite wounds spiders, centipedes, pillbugs, worms... and prey becomes food.
 - **`E` / `,`** picks up items, deposits food at the storage chamber, feeds

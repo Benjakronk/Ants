@@ -188,59 +188,7 @@ function genWorld(seed) {
     const tx = Math.max(40, Math.min(WORLD_W - 40, txc));
     if (Math.abs(tx - colonyX) < 140) continue;
     if (trees.some(t => Math.abs(t.x - tx) < 110)) continue;
-    const th = 90 + Math.floor(rng() * 70);
-    const tw = 5 + Math.floor(rng() * 5);
-    const groundY = surf[tx];
-    const topY = groundY - th;
-    // trunk (slight taper + lean)
-    const lean = (rng() - 0.5) * 0.15;
-    for (let y = topY; y < groundY + 6; y++) {
-      const t = (y - topY) / th;
-      const w = Math.max(2, Math.round(tw * (0.45 + 0.55 * t)));
-      const cx2 = tx + Math.round((groundY - y) * lean);
-      for (let x = cx2 - (w >> 1); x <= cx2 + (w >> 1); x++) {
-        setPx(m, x, y, M_WOOD);
-      }
-    }
-    const crownX = tx + Math.round(th * lean);
-    // branches
-    const nb = 2 + Math.floor(rng() * 3);
-    const branchTips = [];
-    for (let b = 0; b < nb; b++) {
-      let bx = crownX, by = topY + 10 + rng() * th * 0.4;
-      let bang = (rng() < 0.5 ? -1 : 1) * (0.3 + rng() * 0.6);
-      const blen = 18 + rng() * 26;
-      for (let s = 0; s < blen; s++) {
-        setPx(m, Math.round(bx), Math.round(by), M_WOOD);
-        setPx(m, Math.round(bx), Math.round(by) + 1, M_WOOD);
-        bx += Math.cos(bang) * (bang > 0 ? 1 : -1) * (bang > 0 ? 1 : 1);
-        bx += (bang > 0 ? 1 : -1);
-        by -= 0.35 + rng() * 0.2;
-      }
-      branchTips.push({ x: bx, y: by });
-    }
-    // canopy: leaf blobs at top + branch tips
-    fillEllipse(m, crownX, topY + 4, 16 + rng() * 14, 10 + rng() * 8, M_LEAF, true);
-    fillEllipse(m, crownX - 10, topY + 12, 12 + rng() * 8, 8 + rng() * 5, M_LEAF, true);
-    fillEllipse(m, crownX + 10, topY + 12, 12 + rng() * 8, 8 + rng() * 5, M_LEAF, true);
-    for (const bt of branchTips) {
-      fillEllipse(m, Math.round(bt.x), Math.round(bt.y), 8 + rng() * 8, 6 + rng() * 4, M_LEAF, true);
-    }
-    // roots
-    const nr = 2 + Math.floor(rng() * 2);
-    for (let r = 0; r < nr; r++) {
-      let rx2 = tx + (rng() - 0.5) * tw, ry2 = groundY + 2;
-      let rang = Math.PI / 2 + (rng() - 0.5) * 1.2;
-      const rlen = 30 + rng() * 50;
-      for (let s = 0; s < rlen; s++) {
-        setPxIf(m, Math.round(rx2), Math.round(ry2), M_WOOD, M_DIRT);
-        setPxIf(m, Math.round(rx2) + 1, Math.round(ry2), M_WOOD, M_DIRT);
-        rang += (rng() - 0.5) * 0.3;
-        rx2 += Math.cos(rang);
-        ry2 += Math.sin(rang);
-      }
-    }
-    trees.push({ x: tx, topY, h: th, crownX });
+    trees.push(growTree(m, rng, tx, surf[tx]));
   }
 
   return {
@@ -250,6 +198,111 @@ function genWorld(seed) {
       paths: { entrance: pEntr, storage: pStor, nursery: pNurs, queen: pQueen, junction: [] }
     }
   };
+}
+
+// --- trees ---------------------------------------------------------------------
+// solid wood disk; claims everything but rock (so branches read as one limb)
+function woodDisk(m, cx, cy, r) {
+  for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+    for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+      const dx = x - cx, dy = y - cy;
+      if (dx * dx + dy * dy > r * r) continue;
+      if (x < 0 || x >= WORLD_W || y < 0 || y >= WORLD_H) continue;
+      const i = y * WORLD_W + x;
+      if (m[i] !== M_ROCK) m[i] = M_WOOD;
+    }
+  }
+}
+
+// one limb: a curving, tapering wood path that forks into children.
+// Terminal twigs record their endpoints in tips[] for foliage.
+function growBranch(m, rng, x, y, ang, len, w, depth, tips) {
+  let cx = x, cy = y, a = ang;
+  const n = Math.max(3, Math.round(len / 2));
+  for (let i = 0; i < n; i++) {
+    const r = Math.max(1, w * (1 - (i / n) * 0.5));
+    woodDisk(m, Math.round(cx), Math.round(cy), r);
+    a += (rng() - 0.5) * 0.3;
+    a += (-Math.PI / 2 - a) * 0.04;   // branches reach for the light
+    cx += Math.cos(a) * 2;
+    cy += Math.sin(a) * 2;
+  }
+  if (depth <= 0 || w <= 1) { tips.push({ x: cx, y: cy }); return; }
+  const nb = 2 + (rng() < 0.35 ? 1 : 0);
+  for (let b = 0; b < nb; b++) {
+    growBranch(m, rng, cx, cy, a + (rng() - 0.5) * 1.5,
+      len * (0.5 + rng() * 0.3), w * 0.65, depth - 1, tips);
+  }
+}
+
+// a whole tree: curved trunk with side branches on the way up, a crown of
+// 2-3 leaders that fork recursively, leaf puffs on every twig, root flare.
+function growTree(m, rng, tx, groundY) {
+  const th = 90 + Math.floor(rng() * 80);
+  const trunkW = 2.2 + rng() * 1.6;
+  const lean = (rng() - 0.5) * 0.22;
+  const splitY = groundY - th * (0.45 + rng() * 0.2);  // where the crown starts
+  const tips = [];
+
+  // trunk: walk upward, tapering and wobbling, shedding side branches
+  let cx = tx, cy = groundY + 4, ang = -Math.PI / 2 + lean * 0.3;
+  let nextSide = 18 + rng() * 14;
+  while (cy > splitY) {
+    const t = (groundY - cy) / th;
+    const r = Math.max(1.2, trunkW * (1 - t * 0.55));
+    woodDisk(m, Math.round(cx), Math.round(cy), r);
+    ang += (rng() - 0.5) * 0.16;
+    ang += (-Math.PI / 2 + lean - ang) * 0.1;   // tropism toward the lean line
+    cx += Math.cos(ang) * 2;
+    cy += Math.sin(ang) * 2;
+    nextSide -= 2;
+    if (nextSide <= 0 && cy < groundY - th * 0.35) {
+      nextSide = 16 + rng() * 18;
+      const side = rng() < 0.5 ? -1 : 1;
+      growBranch(m, rng, cx, cy, -Math.PI / 2 + side * (0.9 + rng() * 0.5),
+        14 + rng() * 14, Math.max(1, r * 0.45), 1, tips);
+    }
+  }
+
+  // crown: split into leaders
+  const nl = 2 + Math.floor(rng() * 2);
+  for (let i = 0; i < nl; i++) {
+    const a2 = -Math.PI / 2 + lean + (i - (nl - 1) / 2) * (0.55 + rng() * 0.3)
+      + (rng() - 0.5) * 0.2;
+    growBranch(m, rng, cx, cy, a2, th * (0.22 + rng() * 0.14),
+      Math.max(1.2, trunkW * 0.6), 2, tips);
+  }
+
+  // foliage: a puff on every twig tip plus a body around the crown fork
+  let topY = cy - 12, crownSum = 0;
+  for (const p of tips) {
+    fillEllipse(m, Math.round(p.x), Math.round(p.y),
+      7 + rng() * 7, 5 + rng() * 4, M_LEAF, true);
+    if (p.y - 6 < topY) topY = p.y - 6;
+    crownSum += p.x;
+  }
+  fillEllipse(m, Math.round(cx), Math.round(cy - 6),
+    14 + rng() * 10, 9 + rng() * 6, M_LEAF, true);
+  const crownX = tips.length ? Math.round(crownSum / tips.length) : Math.round(cx);
+
+  // roots: flare at the base plus wandering strands
+  fillEllipse(m, tx, groundY + 2, trunkW + 2, 3, M_WOOD);
+  const nr = 2 + Math.floor(rng() * 3);
+  for (let r2 = 0; r2 < nr; r2++) {
+    let rx2 = tx + (rng() - 0.5) * trunkW * 2, ry2 = groundY + 2;
+    let rang = Math.PI / 2 + (rng() - 0.5) * 1.4;
+    const rlen = 30 + rng() * 55;
+    for (let s = 0; s < rlen; s++) {
+      setPxIf(m, Math.round(rx2), Math.round(ry2), M_WOOD, M_DIRT);
+      setPxIf(m, Math.round(rx2) + 1, Math.round(ry2), M_WOOD, M_DIRT);
+      if (s < rlen * 0.4) setPxIf(m, Math.round(rx2), Math.round(ry2) + 1, M_WOOD, M_DIRT);
+      rang += (rng() - 0.5) * 0.3;
+      rx2 += Math.cos(rang);
+      ry2 += Math.sin(rang);
+    }
+  }
+
+  return { x: tx, topY: Math.round(topY), h: Math.round(groundY - topY), crownX };
 }
 
 // --- gen helpers --------------------------------------------------------------
