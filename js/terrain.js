@@ -54,11 +54,11 @@ const T = {
   },
 
   // dig a circle; removes diggable materials only.
-  // returns {count, leaves} -- pixels removed, leaf pixels among them
+  // returns {count, leaves, fungi, crystals} -- pixels removed by kind
   dig(cx, cy, r) {
     cx = Math.round(cx); cy = Math.round(cy);
     const r2 = r * r;
-    let count = 0, leaves = 0;
+    let count = 0, leaves = 0, fungi = 0, crystals = 0;
     const x0 = Math.max(0, cx - Math.ceil(r)), x1 = Math.min(WORLD_W - 1, cx + Math.ceil(r));
     const y0 = Math.max(0, cy - Math.ceil(r)), y1 = Math.min(WORLD_H - 1, cy + Math.ceil(r));
     for (let y = y0; y <= y1; y++) {
@@ -69,6 +69,8 @@ const T = {
         const mat = this.m[i];
         if (!DIGGABLE(mat)) continue;
         if (mat === M_LEAF) leaves++;
+        else if (mat === M_FUNGUS) fungi++;
+        else if (mat === M_CRYSTAL) crystals++;
         this.m[i] = M_AIR;
         this.terCtx.clearRect(x, y, 1, 1);
         count++;
@@ -83,7 +85,7 @@ const T = {
         this.surf[x] = s;
       }
     }
-    return { count, leaves };
+    return { count, leaves, fungi, crystals };
   },
 
   // would this circle hit anything diggable?
@@ -197,6 +199,20 @@ function matColor(mat, x, y, h, depth) {
       // like wood, but duller and dirt-stained (and chewable)
       const shades = [[78, 54, 32], [68, 46, 27], [86, 60, 36]];
       return shades[h % 3];
+    }
+    case M_FUNGUS: {
+      // pale glowing cave mushrooms
+      const shades = [[150, 196, 164], [126, 178, 146], [168, 212, 178]];
+      let c = shades[h % 3];
+      if (h % 17 === 0) c = [200, 236, 204]; // bright fleck
+      return c;
+    }
+    case M_CRYSTAL: {
+      // cold glittering veins in the deep
+      const shades = [[120, 180, 224], [96, 152, 208], [148, 204, 240]];
+      let c = shades[h % 3];
+      if (h % 11 === 0) c = [220, 240, 255]; // glint
+      return c;
     }
   }
   return [255, 0, 255];
