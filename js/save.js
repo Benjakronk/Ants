@@ -53,6 +53,8 @@ function serializeBug(b) {
   return {
     id: b.id, kind: b.kind, x: Math.round(b.x), y: Math.round(b.y),
     hp: Math.round(b.hp), fleeing: b.fleeing,
+    resident: b.resident || false,
+    homeX: b.homeX == null ? null : Math.round(b.homeX),
   };
 }
 function serializeItem(it) {

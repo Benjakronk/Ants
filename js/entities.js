@@ -970,6 +970,8 @@ class Bug {
     this.digT = 0;       // beetle bulldozing cooldown
     this.turnT = 0;      // beetle: committed to walking away from a tree
     this.raidT = 2700;   // redant: how long the raid lasts (~45s)
+    this.resident = false; // redant: a defender of the rival nest (never raids/expires)
+    this.homeX = null;     // redant: x to garrison/march toward (rival entrance)
   }
 
   get predator() {
@@ -1273,12 +1275,18 @@ class Bug {
     }
   }
 
-  // redant: rival-colony raider. Marches on the entrance, fights whatever
-  // it meets, and withdraws when the raid clock runs out or it's beaten.
+  // redant: rival-colony ant. Raiders march on the player's entrance and
+  // withdraw when the raid clock runs out; residents garrison the rival nest,
+  // fighting only intruders that come near and never expiring.
   redantThink() {
     const d = BUG_DEF.redant;
-    this.raidT--;
-    if (this.raidT <= 0) this.fleeing = true;
+    // where this ant heads when there's no prey in reach
+    const marchX = this.resident ? (this.homeX != null ? this.homeX : this.x)
+                                 : G.colony.entrance.x;
+    if (!this.resident) {
+      this.raidT--;
+      if (this.raidT <= 0) this.fleeing = true;
+    }
     if (this.fleeing) {
       const edge = this.x < WORLD_W / 2 ? 10 : WORLD_W - 10;
       this.dir = Math.sign(edge - this.x) || 1;
@@ -1302,8 +1310,8 @@ class Bug {
         if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('bite');
       }
     } else {
-      // march on the colony entrance; climb slopes but not trees
-      const tx = G.colony.entrance.x;
+      // march toward the garrison / target entrance; climb slopes but not trees
+      const tx = marchX;
       if (this.turnT <= 0) this.dir = Math.sign(tx - this.x) || 1;
       this.vx = this.dir * d.speed * (Math.abs(this.x - tx) < 20 ? 0.3 : 1);
       const aboveGround = this.y < T.surf[sx] - 6;

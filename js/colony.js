@@ -203,6 +203,18 @@ class Colony {
 
     const count = k => bugs.filter(b => b.kind === k).length;
 
+    // the rival nest slowly regarrisons after the player thins its defenders
+    if (G.rival) {
+      const defenders = bugs.filter(b => b.kind === 'redant' && b.resident).length;
+      if (defenders < 4 && Math.random() < 0.0015) {
+        const rx = Math.max(20, Math.min(WORLD_W - 20,
+          G.rival.entrance.x + (Math.random() - 0.5) * 90));
+        const def = new Bug(rx, T.surf[Math.floor(rx)] - 8, 'redant');
+        def.resident = true; def.homeX = G.rival.entrance.x;
+        G.bugs.push(def);
+      }
+    }
+
     if (count('pillbug') < 4 && Math.random() < 0.0011) {
       const x = Math.random() < 0.5 ? 30 + Math.random() * 200 : WORLD_W - 30 - Math.random() * 200;
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
@@ -252,10 +264,12 @@ class Colony {
       Sfx.play('danger');
     }
     // rival-colony raids: at most one per day, growing bolder over time.
-    // They emerge from the undergrowth a few screens out.
+    // The raiders advance from the direction of the rival nest, emerging from
+    // the undergrowth a few screens out (a full crossing would be too slow).
     if (day >= 2 && day > this.lastRaidDay && Math.random() < 0.0001) {
       this.lastRaidDay = day;
-      const side = Math.random() < 0.5 ? -1 : 1;
+      const side = G.rival ? (Math.sign(G.rival.x - this.x) || 1)
+                           : (Math.random() < 0.5 ? -1 : 1);
       const baseX = Math.max(30, Math.min(WORLD_W - 30,
         this.x + side * (350 + Math.random() * 200)));
       const n = 3 + Math.min(3, Math.floor(day / 2));

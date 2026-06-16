@@ -25,6 +25,7 @@ const G = {
   stars: [],
   trees: [],
   colony: null,
+  rival: null,        // rival red-ant nest { x, entrance, ... } (terrain + defenders)
   msgs: [],
   deadQueue: [],      // player indices waiting for takeover
   takeover: null,     // { pIdx, list, sel }
@@ -168,6 +169,7 @@ function newWorld(slot, playerCount) {
   G.playerCount = playerCount;
   G.trees = world.trees;
   G.colony = new Colony(world.colony);
+  G.rival = world.rival;
   G.ants = []; G.brood = []; G.bugs = []; G.items = [];
   G.pheromones = []; G.msgs = []; G.deadQueue = []; G.takeover = null;
   G.particles.list = [];
@@ -221,6 +223,15 @@ function newWorld(slot, playerCount) {
     G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 200 + Math.random() * 400, 'worm'));
   }
 
+  // the rival colony's red-ant defenders, garrisoned on their far-side mound
+  const r = G.rival;
+  for (let i = 0; i < 5; i++) {
+    const rx = Math.max(20, Math.min(WORLD_W - 20, r.entrance.x + (Math.random() - 0.5) * 90));
+    const def = new Bug(rx, T.surf[Math.floor(rx)] - 8, 'redant');
+    def.resident = true; def.homeX = r.entrance.x;
+    G.bugs.push(def);
+  }
+
   // stars
   G.stars = [];
   for (let i = 0; i < 140; i++) {
@@ -245,6 +256,7 @@ function loadWorld(slot, playerCount) {
   G.playerCount = playerCount || d.playerCount;
   G.trees = world.trees;
   G.colony = new Colony(world.colony);
+  G.rival = world.rival;
   Object.assign(G.colony, d.colony);
   G.colony.tasks = d.colony.tasks || [];
   G.colony.stats = d.colony.stats;
@@ -267,6 +279,8 @@ function loadWorld(slot, playerCount) {
   for (const s of d.bugs) {
     const b = new Bug(s.x, s.y, s.kind);
     b.id = s.id; b.hp = s.hp; b.fleeing = s.fleeing;
+    b.resident = s.resident || false;
+    if (s.homeX != null) b.homeX = s.homeX;
     G.bugs.push(b);
   }
   for (const s of d.items) {
@@ -825,7 +839,7 @@ function drawTaskAndMsgs() {
 }
 
 function drawMinimap() {
-  const mw = 256, mh = 160;
+  const mw = 296, mh = Math.round(mw * WORLD_H / WORLD_W);
   const mx = (VIEW_W - mw) / 2, my = (VIEW_H - mh) / 2 - 6;
   bevelPanel(mx - 3, my - 3, mw + 6, mh + 6);
   ctx.fillStyle = '#101418';

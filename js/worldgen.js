@@ -2,8 +2,11 @@
 // One byte per world pixel, Liero-style.
 'use strict';
 
-const WORLD_W = 3072;
+const WORLD_W = 6144;
 const WORLD_H = 1920;
+
+// colony mounds: the player's nest and the rival's, one dome each
+const MOUND_R = 70, MOUND_H = 30;
 
 // materials
 const M_AIR = 0;
@@ -58,7 +61,7 @@ function makeNoise1D(rng, cells) {
 }
 
 // --- world generation --------------------------------------------------------
-// returns { m, surf, bgSurf, colony, trees }
+// returns { m, surf, bgSurf, colony, rival, trees }
 function genWorld(seed) {
   const rng = mulberry32(seed);
   const m = new Uint8Array(WORLD_W * WORLD_H);
@@ -76,19 +79,13 @@ function genWorld(seed) {
     surf[x] = Math.round(h);
   }
 
-  // -- the colony mound, near the middle
-  const colonyX = Math.floor(WORLD_W / 2 + (rng() - 0.5) * 300);
-  const moundR = 70, moundH = 30;
-  // flatten ground under the mound a bit, then raise the dome
-  const baseY = surf[colonyX];
-  for (let x = colonyX - moundR; x <= colonyX + moundR; x++) {
-    if (x < 0 || x >= WORLD_W) continue;
-    const dx = (x - colonyX) / moundR;
-    const t = Math.abs(dx);
-    const flat = baseY * (1 - t) + surf[x] * t;          // blend toward flat
-    const dome = moundH * 0.5 * (Math.cos(Math.PI * dx) + 1); // raised dome
-    surf[x] = Math.round(flat - dome);
-  }
+  // -- two colony mounds: the player's at the left quarter, the rival's at the
+  // right quarter, each with a long explorable stretch of forest beyond it
+  const colonyX = Math.floor(WORLD_W * 0.25 + (rng() - 0.5) * 200);
+  const rivalX  = Math.floor(WORLD_W * 0.75 + (rng() - 0.5) * 200);
+  const nestXs = [colonyX, rivalX];
+  shapeMound(surf, colonyX);
+  shapeMound(surf, rivalX);
 
   // background boundary = surface BEFORE we count the mound as "sky-backed";
   // anything dug above this shows sky, below shows dark earth
@@ -100,14 +97,14 @@ function genWorld(seed) {
     for (let y = Math.max(0, s); y < WORLD_H; y++) {
       m[y * WORLD_W + x] = (y < s + 3) ? M_GRASS : M_DIRT;
     }
-    // bare dirt on the mound itself
-    if (Math.abs(x - colonyX) < moundR * 0.8) {
+    // bare dirt on the mounds themselves
+    if (nearMound(x, nestXs, MOUND_R * 0.8)) {
       for (let y = Math.max(0, surf[x]); y < surf[x] + 3 && y < WORLD_H; y++) {
         m[y * WORLD_W + x] = M_DIRT;
       }
     }
     // grass blades poking up
-    if (pxHash(x, 7) % 5 === 0 && Math.abs(x - colonyX) > moundR) {
+    if (pxHash(x, 7) % 5 === 0 && !nearMound(x, nestXs, MOUND_R)) {
       const bh = 1 + (pxHash(x, 13) % 4);
       for (let y = surf[x] - bh; y < surf[x]; y++) {
         if (y >= 0) m[y * WORLD_W + x] = M_GRASS;
@@ -151,7 +148,52 @@ function genWorld(seed) {
     }
   }
 
-  // -- the nest: entrance shaft, junction, chambers
+  // -- both nests: entrance shaft, junction, chambers, and a mental map of each
+  const colony = carveNest(m, surf, rng, colonyX);
+  const rival  = carveNest(m, surf, rng, rivalX);
+
+  // -- trees, away from either mound; always a couple flanking each nest
+  const trees = [];
+  const treeXs = [
+    colonyX - 180 - Math.floor(rng() * 120),
+    colonyX + 180 + Math.floor(rng() * 120),
+    rivalX  - 180 - Math.floor(rng() * 120),
+    rivalX  + 180 + Math.floor(rng() * 120),
+  ];
+  const treeCount = 18 + Math.floor(rng() * 8);
+  for (let i = 0; i < treeCount; i++) {
+    treeXs.push(Math.floor(40 + rng() * (WORLD_W - 80)));
+  }
+  for (const txc of treeXs) {
+    const tx = Math.max(40, Math.min(WORLD_W - 40, txc));
+    if (nearMound(tx, nestXs, 140)) continue;
+    if (trees.some(t => Math.abs(t.x - tx) < 110)) continue;
+    trees.push(growTree(m, rng, tx, surf[tx]));
+  }
+
+  return { m, surf, bgSurf, trees, colony, rival };
+}
+
+// raise a domed mound over the surface around cx (flatten, then dome up)
+function shapeMound(surf, cx) {
+  const baseY = surf[cx];
+  for (let x = cx - MOUND_R; x <= cx + MOUND_R; x++) {
+    if (x < 0 || x >= WORLD_W) continue;
+    const dx = (x - cx) / MOUND_R;
+    const t = Math.abs(dx);
+    const flat = baseY * (1 - t) + surf[x] * t;          // blend toward flat
+    const dome = MOUND_H * 0.5 * (Math.cos(Math.PI * dx) + 1); // raised dome
+    surf[x] = Math.round(flat - dome);
+  }
+}
+
+function nearMound(x, centers, r) {
+  for (const c of centers) if (Math.abs(x - c) < r) return true;
+  return false;
+}
+
+// carve a full nest under colonyX and return its chamber anchors + path map
+function carveNest(m, surf, rng, colonyX) {
   const entrance = { x: colonyX, y: surf[colonyX] + 1 };
   const junction = { x: colonyX + Math.round((rng() - 0.5) * 30), y: surf[colonyX] + 95 };
   const queenCh  = { x: colonyX + Math.round((rng() - 0.5) * 60), y: junction.y + 90 + Math.round(rng() * 30) };
@@ -175,29 +217,9 @@ function genWorld(seed) {
   // points in vertical shafts (no floor nearby) stay centered for climbing
   for (const pts of [pEntr, pStor, pNurs, pQueen]) settlePath(m, pts);
 
-  // -- trees, away from the mound; always one near each side of the colony
-  const trees = [];
-  const treeXs = [
-    colonyX - 180 - Math.floor(rng() * 120),
-    colonyX + 180 + Math.floor(rng() * 120),
-  ];
-  const treeCount = 10 + Math.floor(rng() * 5);
-  for (let i = 0; i < treeCount; i++) {
-    treeXs.push(Math.floor(40 + rng() * (WORLD_W - 80)));
-  }
-  for (const txc of treeXs) {
-    const tx = Math.max(40, Math.min(WORLD_W - 40, txc));
-    if (Math.abs(tx - colonyX) < 140) continue;
-    if (trees.some(t => Math.abs(t.x - tx) < 110)) continue;
-    trees.push(growTree(m, rng, tx, surf[tx]));
-  }
-
   return {
-    m, surf, bgSurf, trees,
-    colony: {
-      x: colonyX, entrance, junction, queenCh, storage, nursery,
-      paths: { entrance: pEntr, storage: pStor, nursery: pNurs, queen: pQueen, junction: [] }
-    }
+    x: colonyX, entrance, junction, queenCh, storage, nursery,
+    paths: { entrance: pEntr, storage: pStor, nursery: pNurs, queen: pQueen, junction: [] }
   };
 }
 

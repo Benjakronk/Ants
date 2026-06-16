@@ -51,7 +51,10 @@ soldier, nurse, even the queen. When the last ant falls, the colony is gone.
 
 Three save slots, each a procedurally generated world: rolling forest floor,
 trees with aphid herds in the canopy, rock seams and natural caves below,
-and the colony mound with its chambers dug beneath. Worlds save automatically
+and the colony mound with its chambers dug beneath. Your nest sits in the
+left quarter of the map; a **rival red-ant colony** holds the right quarter,
+its mound garrisoned by defenders, with a long stretch of open forest beyond
+each nest to explore. Worlds save automatically
 (and on quit) — sink hours into one and come back later. `T` on the world
 select screen starts split-screen two-player; both ants serve the same colony.
 
@@ -66,7 +69,7 @@ select screen starts split-screen two-player; both ants serve the same colony.
 | Centipede | Deep predator; follows you down tunnels |
 | Wasp | Day-flying striker; dives on ants in the open |
 | Beetle | Rare armored bruiser; bulldozes toward the mound |
-| Red ants | Rival colony; raids in groups from the map edge |
+| Red ants | Rival colony on the far side; defenders garrison their mound, raiders march on yours |
 
 ## Development
 
