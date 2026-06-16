@@ -16,8 +16,13 @@ const M_GRASS = 3;  // diggable
 const M_WOOD = 4;   // not diggable (trunks, branches)
 const M_LEAF = 5;   // diggable (bite through, sometimes drops food)
 const M_ROOT = 6;   // diggable (tree roots -- chewy, so nobody gets trapped)
+const M_FUNGUS = 7; // diggable (cave mushrooms -- hearty food, bite to harvest)
+const M_CRYSTAL = 8;// diggable (buried crystals -- treasure for the colony)
 
-function DIGGABLE(m) { return m === M_DIRT || m === M_GRASS || m === M_LEAF || m === M_ROOT; }
+function DIGGABLE(m) {
+  return m === M_DIRT || m === M_GRASS || m === M_LEAF || m === M_ROOT ||
+         m === M_FUNGUS || m === M_CRYSTAL;
+}
 
 // --- seeded rng -------------------------------------------------------------
 function mulberry32(seed) {
@@ -123,10 +128,11 @@ function genWorld(seed) {
     }
   }
 
-  // -- rock blobs underground
+  // -- rock blobs underground. Kept clear of the side walls: a blob fused
+  // with the bedrock edge can seal an undiggable pocket you can't escape.
   const blobCount = 150;
   for (let i = 0; i < blobCount; i++) {
-    const bx = Math.floor(rng() * WORLD_W);
+    const bx = 60 + Math.floor(rng() * (WORLD_W - 120));
     const by = Math.floor(surf[Math.min(WORLD_W - 1, Math.max(0, bx))] + 60 + rng() * (WORLD_H - surf[bx] - 120));
     const rx = 6 + rng() * 26, ry = 4 + rng() * 14;
     fillEllipse(m, bx, by, rx, ry, M_ROCK);
@@ -169,6 +175,51 @@ function genWorld(seed) {
     if (nearMound(tx, nestXs, 140)) continue;
     if (trees.some(t => Math.abs(t.x - tx) < 110)) continue;
     trees.push(growTree(m, rng, tx, surf[tx]));
+  }
+
+  // -- underground riches (NOTE: must stay LAST -- saved games regenerate
+  // the world from the seed and replay this exact rng sequence; new draws
+  // added before this point would scramble colony and tree layout)
+
+  // cave fungus: glowing mushroom clumps on cave floors, hearty food
+  let shrooms = 0;
+  for (let i = 0; i < 900 && shrooms < 80; i++) {
+    const fx = 20 + Math.floor(rng() * (WORLD_W - 40));
+    const fy = Math.floor(surf[fx] + 110 + rng() * (WORLD_H - surf[fx] - 220));
+    if (m[fy * WORLD_W + fx] !== M_AIR) continue;
+    let gy = fy; // drop to the cave floor
+    while (gy < WORLD_H - 14 && m[(gy + 1) * WORLD_W + fx] === M_AIR) gy++;
+    if (gy - fy > 30 || gy >= WORLD_H - 14) continue;
+    if (m[(gy + 1) * WORLD_W + fx] !== M_DIRT) continue;
+    const n = 2 + Math.floor(rng() * 3);
+    for (let k = 0; k < n; k++) {
+      const mx = Math.max(2, Math.min(WORLD_W - 3, fx + Math.floor((rng() - 0.5) * 12)));
+      let my = gy - 6;
+      while (my < WORLD_H - 14 && m[(my + 1) * WORLD_W + mx] === M_AIR) my++;
+      if (m[(my + 1) * WORLD_W + mx] !== M_DIRT) continue;
+      const h = 2 + Math.floor(rng() * 2);             // stem
+      for (let y = my - h + 1; y <= my; y++) setPxIf(m, mx, y, M_FUNGUS, M_AIR);
+      const cw = 1 + Math.floor(rng() * 2);            // cap
+      for (let x = mx - cw; x <= mx + cw; x++) setPxIf(m, x, my - h, M_FUNGUS, M_AIR);
+      for (let x = mx - (cw - 1); x <= mx + (cw - 1); x++) setPxIf(m, x, my - h - 1, M_FUNGUS, M_AIR);
+    }
+    shrooms++;
+  }
+
+  // crystal pockets: small veins in the deep dirt, worth real score
+  let veins = 0;
+  for (let i = 0; i < 400 && veins < 22; i++) {
+    const cx = 40 + Math.floor(rng() * (WORLD_W - 80));
+    const cy = Math.floor(surf[cx] + 420 + rng() * Math.max(40, WORLD_H - surf[cx] - 500));
+    if (cy >= WORLD_H - 20 || m[cy * WORLD_W + cx] !== M_DIRT) continue;
+    const r = 2 + rng() * 2.5;
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+        const ddx = x - cx, ddy = y - cy;
+        if (ddx * ddx + ddy * ddy <= r * r) setPxIf(m, x, y, M_CRYSTAL, M_DIRT);
+      }
+    }
+    veins++;
   }
 
   return { m, surf, bgSurf, trees, colony, rival };

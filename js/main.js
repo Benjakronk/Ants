@@ -5,8 +5,9 @@ const VIEW_W = 320, VIEW_H = 200, HUD_H = 24;
 
 // key bindings per player (KeyboardEvent.code)
 const BIND = [
-  { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', bite: 'Space', act: 'KeyE' },
-  { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bite: 'Period', act: 'Comma' },
+  { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', bite: 'Space', act: 'KeyE', abil: 'KeyQ', swap: 'Tab' },
+  // P2 fits a Norwegian keyboard: arrows + , . K L
+  { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bite: 'Period', act: 'Comma', abil: 'KeyK', swap: 'KeyL' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,7 @@ const G = {
   showMap: false,
   prevState: 'title',
   gameOverStats: null,
+  splitVert: localStorage.getItem('maur_split') === 'v',
 
   get day() { return Math.floor(this.tick / DAY_LEN); },
   tod() { return (this.tick % DAY_LEN) / DAY_LEN; },
@@ -325,6 +327,26 @@ function loadWorld(slot, playerCount) {
 // ---------------------------------------------------------------------------
 // player control
 // ---------------------------------------------------------------------------
+
+// a soldier's call to arms: nearby ants turn on the soldier's closest enemy.
+// Returns the number of ants rallied, or -1 if there was no enemy in range.
+function rallyAllies(soldier, radius, foe) {
+  foe = foe || G.nearestPredator(soldier.x, soldier.y, 400);
+  if (!foe) return -1;
+  let n = 0;
+  for (const a of G.ants) {
+    if (a === soldier || a.hp <= 0 || a.playerIdx >= 0 || a.caste === 'queen') continue;
+    if (dist2(a.x, a.y, soldier.x, soldier.y) > radius * radius) continue;
+    if (a.carry) continue; // laden ants finish their errand
+    a.state = 'fight';
+    a.target = foe;
+    a.nav = null;
+    a.rallyT = 600; // courage: don't immediately flee the thing we charge
+    n++;
+  }
+  return n;
+}
+
 function controlPlayer(pIdx) {
   const p = G.players[pIdx];
   const a = p.ant;
@@ -339,7 +361,9 @@ function controlPlayer(pIdx) {
   a.vx = dx * SPEED;
   if (dx !== 0) a.dir = dx;
 
-  // climbing: ants go up walls and hang from ceilings
+  // climbing: ants go up walls and hang from ceilings. Underground the
+  // walls are implied -- every passage is a chewed-out tunnel, so holding
+  // up always climbs even in wide dug-out chambers.
   a.climbing = false;
   a.ceiling = false;
   if (dy < 0) {
@@ -355,11 +379,14 @@ function controlPlayer(pIdx) {
       if (dx === 0) a.vx = wallDir * SPEED * 0.6; // drift onto the wall
     } else if (ceil) {
       a.ceiling = true; // hang from the roof; crawl with left/right
+    } else if (underground(a)) {
+      a.climbing = true; a.climbV = -SPEED * 1.1; // tunnel climb, no wall needed
     } else if (a.onGround) {
       a.vy = -1.9; // hop
     }
   } else if (dy > 0 && !a.onGround &&
-      (sideWall(a, a.dir) || sideWall(a, -a.dir) || wallNear(a, 1, 5) || wallNear(a, -1, 5))) {
+      (underground(a) ||
+       sideWall(a, a.dir) || sideWall(a, -a.dir) || wallNear(a, 1, 5) || wallNear(a, -1, 5))) {
     a.climbing = true; a.climbV = SPEED * 1.1;
   }
 
@@ -389,13 +416,22 @@ function controlPlayer(pIdx) {
       // second pass right at the body so the ant can sink into its own shaft
       const res2 = T.dig(a.x + ux * 2, a.y + uy * 2, c.digR * 0.8);
       res.count += res2.count; res.leaves += res2.leaves;
+      res.fungi += res2.fungi; res.crystals += res2.crystals;
       if (res.count > 0) {
         G.particles.dirt(bx, by, 4);
         Sfx.play('dig');
         // expansion task: only digging below the surface counts
         const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, bx)));
         if (by > T.surf[sx] + 40) G.colony.progress('dig', res.count);
-        if (res.leaves > 0 && Math.random() < 0.3 && !a.carry) {
+        // underground harvest: crystals and mushrooms tumble out of the wall
+        if (res.crystals > 1) {
+          G.items.push(G.makeItem('crystal', bx, by));
+          G.particles.sparkle(bx, by, 6);
+          G.msg(L('m_crystalFound'), '#80e0ff');
+          Sfx.play('task');
+        } else if (res.fungi > 1 && Math.random() < 0.6) {
+          G.items.push(G.makeItem('fungus', bx, by));
+        } else if (res.leaves > 0 && Math.random() < 0.3 && !a.carry) {
           const it = G.makeItem('leaf', bx, by);
           G.items.push(it);
         }
@@ -404,6 +440,53 @@ function controlPlayer(pIdx) {
         G.particles.add(bx, by, (Math.random() - 0.5), -0.5, 10, '#c0c0c8');
       }
     }
+  }
+
+  // caste ability: soldiers rally, nurses heal
+  if (tookPress(b.abil)) {
+    if (a.caste === 'soldier') {
+      if (a.abilCd > 0) {
+        // still catching its breath
+      } else {
+        const n = rallyAllies(a, 280);
+        if (n < 0) {
+          G.msg(L('m_noEnemy'));
+        } else {
+          a.abilCd = 600;
+          G.msg(n > 0 ? L('m_rally', n) : L('m_rallyAlone'), '#ff8040');
+          Sfx.play('danger');
+        }
+      }
+    } else if (a.caste === 'nurse') {
+      if (a.abilCd <= 0) {
+        if (G.colony.food < 2) {
+          G.msg(L('m_noFood'), '#ff8040');
+        } else {
+          let healed = 0;
+          for (const o of G.ants) {
+            if (o.hp <= 0 || o.hp >= o.maxHp) continue;
+            if (dist2(a.x, a.y, o.x, o.y) > 40 * 40) continue;
+            o.hp = Math.min(o.maxHp, o.hp + 10);
+            G.particles.sparkle(o.x, o.y - 4, 4);
+            healed++;
+          }
+          if (healed > 0) {
+            G.colony.food -= 2;
+            a.abilCd = 360;
+            G.msg(L('m_healed', healed), '#80ff80');
+            Sfx.play('milk');
+          } else {
+            G.msg(L('m_noWounded'));
+          }
+        }
+      }
+    }
+  }
+
+  // switch to another ant
+  if (tookPress(b.swap)) {
+    buildTakeover(pIdx, a.x, a.y, a);
+    return;
   }
 
   // interact
@@ -420,7 +503,7 @@ function controlPlayer(pIdx) {
         larva.feed();
         it.dead = true; a.carry = null;
         col.progress('feed', 1);
-        G.msg('FED THE LARVA');
+        G.msg(L('m_fed'));
         Sfx.play('milk');
       } else {
         it.carried = null; a.carry = null;
@@ -429,8 +512,22 @@ function controlPlayer(pIdx) {
       }
     } else {
       const it = G.nearestItem(a.x, a.y, 10);
+      // nurses can scoop up eggs and larvae and carry them to safety
+      let broodNear = null;
+      if (!it && a.caste === 'nurse') {
+        let bd = 100;
+        for (const br of G.brood) {
+          if (br.dead || br.carried) continue;
+          const d = dist2(a.x, a.y, br.x, br.y);
+          if (d < bd) { bd = d; broodNear = br; }
+        }
+      }
       if (it) {
         it.carried = a; a.carry = it;
+        Sfx.play('pickup');
+      } else if (broodNear) {
+        broodNear.carried = a; a.carry = broodNear;
+        G.msg(L('m_carrying', broodNameDef(broodNear.kind)));
         Sfx.play('pickup');
       } else {
         // milk an aphid?
@@ -441,7 +538,7 @@ function controlPlayer(pIdx) {
           const hd = G.makeItem('honeydew', a.x, a.y);
           hd.carried = a; a.carry = hd;
           G.items.push(hd);
-          G.msg('MILKED THE APHID! +HONEYDEW');
+          G.msg(L('m_milked'));
           Sfx.play('milk');
         }
       }
@@ -470,8 +567,10 @@ function updatePlay() {
         }
       }
       a.vBlocked = false;
-      // ledge-boost: only once no wall remains in grab reach
-      if (a.climbV < 0 && !wallNear(a, a.dir, 5) && !wallNear(a, -a.dir, 5)) {
+      // ledge-boost: only once no wall remains in grab reach -- and never
+      // underground, where wall-less climbing is the whole point
+      if (a.climbV < 0 && !underground(a) &&
+          !wallNear(a, a.dir, 5) && !wallNear(a, -a.dir, 5)) {
         a.climbing = false; a.vy = -1.5; a.vx = a.dir * 0.8;
       }
     }
@@ -485,15 +584,16 @@ function updatePlay() {
       G.colony.stats.antsDied++;
       if (a.playerIdx >= 0) {
         Sfx.play('die');
-        G.msg(G.playerCount > 1 ? 'PLAYER ' + (a.playerIdx + 1) + ' DIED!' : 'YOU DIED!', '#ff5040');
+        G.msg(G.playerCount > 1 ? L('m_pDied', a.playerIdx + 1) : L('m_youDied'), '#ff5040');
         G.deadQueue.push(a.playerIdx);
         G.players[a.playerIdx].ant = null;
+        G.players[a.playerIdx].deathPos = { x: a.x, y: a.y };
       } else {
         if (a.caste === 'queen') {
-          G.msg('THE QUEEN IS DEAD!', '#ff4030');
+          G.msg(L('m_queenDead'), '#ff4030');
           Sfx.play('danger');
         } else if (G.nearPlayer(a.x, a.y) < 300) {
-          G.msg('AN ANT HAS DIED', '#c08070');
+          G.msg(L('m_antDied'), '#c08070');
           Sfx.play('kill');
         }
       }
@@ -507,7 +607,7 @@ function updatePlay() {
     if (b.hp <= 0 && !b.dead) {
       b.dead = true;
       G.particles.blood(b.x, b.y, 4);
-      G.msg('A LARVA HAS PERISHED', '#c08070');
+      G.msg(L('m_larvaDied'), '#c08070');
     }
   }
   G.brood = G.brood.filter(b => !b.dead);
@@ -522,7 +622,7 @@ function updatePlay() {
       G.particles.blood(b.x, b.y, 8);
       if (b.predator) {
         G.colony.stats.predatorsSlain++;
-        G.msg('THE ' + b.kind.toUpperCase() + ' IS SLAIN!', '#ffe040');
+        G.msg(L('m_slain', bugNameDef(b.kind)), '#ffe040');
         Sfx.play('kill');
       } else if (G.nearPlayer(b.x, b.y) < 250) {
         Sfx.play('kill');
@@ -555,9 +655,10 @@ function updatePlay() {
   G.msgs = G.msgs.filter(m => m.t > 0);
 
   // cameras
-  for (const p of G.players) {
+  for (let i = 0; i < G.players.length; i++) {
+    const p = G.players[i];
     if (!p.ant) continue;
-    const vh = G.playerCount > 1 ? (VIEW_H - HUD_H) / 2 : VIEW_H - HUD_H;
+    const v = playerView(i);
     // focus point with a deadzone: pixel jiggle (digging, climbing) doesn't
     // shake the view; big jumps (takeover, load) snap it
     if (p.fx === undefined || Math.abs(p.ant.x - p.fx) > 100 || Math.abs(p.ant.y - p.fy) > 100) {
@@ -570,32 +671,22 @@ function updatePlay() {
     else if (p.ant.y < p.fy - DZY) p.fy = p.ant.y + DZY;
     // eased look-ahead so turning around doesn't yank the view
     p.look += (p.ant.dir * 24 - p.look) * 0.03;
-    const tx = p.fx - VIEW_W / 2 + p.look;
-    const ty = p.fy - vh / 2 - 8;
+    const tx = p.fx - v.vw / 2 + p.look;
+    const ty = p.fy - v.vh / 2 - 8;
     p.cam.x += (tx - p.cam.x) * 0.08;
     p.cam.y += (ty - p.cam.y) * 0.08;
-    p.cam.x = Math.max(0, Math.min(WORLD_W - VIEW_W, p.cam.x));
-    p.cam.y = Math.max(0, Math.min(WORLD_H - vh, p.cam.y));
+    p.cam.x = Math.max(0, Math.min(WORLD_W - v.vw, p.cam.x));
+    p.cam.y = Math.max(0, Math.min(WORLD_H - v.vh, p.cam.y));
   }
 
   // takeover queue
   if (G.deadQueue.length > 0 && !G.takeover) {
     const pIdx = G.deadQueue[0];
-    const candidates = G.ants
-      .filter(a => a.hp > 0 && a.playerIdx < 0)
-      .sort((x, y) => {
-        // queen last
-        if (x.caste === 'queen') return 1;
-        if (y.caste === 'queen') return -1;
-        return 0;
-      })
-      .slice(0, 6);
-    if (candidates.length === 0) {
+    const ref = G.players[pIdx].deathPos || G.colony.entrance;
+    if (!buildTakeover(pIdx, ref.x, ref.y, null)) {
       endWorld();
       return;
     }
-    G.takeover = { pIdx, list: candidates, sel: 0 };
-    G.state = 'dead';
   }
 
   // extinction check
@@ -608,13 +699,40 @@ function updatePlay() {
   G.autosaveT--;
   if (G.autosaveT <= 0) {
     G.autosaveT = 7200;
-    if (saveWorld(G.slot)) { G.msg('GAME SAVED', '#80c0ff'); Sfx.play('save'); }
+    if (saveWorld(G.slot)) { G.msg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
   }
 
   if (tookPress('KeyM')) G.showMap = !G.showMap;
   if (tookPress('Escape') || tookPress('KeyP')) {
     G.state = 'pause'; G.menuSel = 0; Sfx.play('menu');
   }
+}
+
+// the ant-selection overlay, shared by death takeover and live switching.
+// Lists available CASTES (not individuals); choosing one takes the nearest
+// NPC ant of that caste. prevAnt set = a live switch (cancellable, releases
+// the current ant); prevAnt null = death takeover.
+const CASTE_ORDER = ['worker', 'soldier', 'nurse', 'queen'];
+
+function takeoverCounts() {
+  const counts = {};
+  for (const a of G.ants) {
+    if (a.hp > 0 && a.playerIdx < 0) counts[a.caste] = (counts[a.caste] || 0) + 1;
+  }
+  return counts;
+}
+
+function buildTakeover(pIdx, refX, refY, prevAnt) {
+  const counts = takeoverCounts();
+  const types = CASTE_ORDER.filter(c => counts[c]).map(c => ({ caste: c, count: counts[c] }));
+  if (types.length === 0) {
+    if (prevAnt) G.msg(L('m_noSwitch'), '#ff8040');
+    return false;
+  }
+  G.takeover = { pIdx, types, sel: 0, refX, refY, prevAnt };
+  G.state = 'dead';
+  if (prevAnt) Sfx.play('menu');
+  return true;
 }
 
 function endWorld() {
@@ -795,13 +913,13 @@ function drawHud() {
     drawText(ctx, 'P' + (i + 1), px2, y + 4, i === 0 ? '#ffe080' : '#80d0ff');
     if (p.ant) {
       drawHpBar(px2 + 14, y + 5, 40, Math.max(0, p.ant.hp / p.ant.maxHp));
-      drawText(ctx, p.ant.caste, px2 + 14, y + 13, '#b0a080');
+      drawText(ctx, casteName(p.ant.caste), px2 + 14, y + 13, '#b0a080');
       if (p.ant.carry) {
         drawItem(ctx, { kind: p.ant.carry.kind, x: 0, y: 0 },
           -(px2 + 62), -(y + 8));
       }
     } else {
-      drawText(ctx, 'DEAD', px2 + 14, y + 5, '#e03020');
+      drawText(ctx, L('w_dead'), px2 + 14, y + 5, '#e03020');
     }
   }
 
@@ -810,10 +928,10 @@ function drawHud() {
   const ants = G.ants.filter(a => a.hp > 0).length;
   drawText(ctx, '\x02' + ants, cx - 56, y + 4, '#e8c8a0');
   drawText(ctx, '\x03' + Math.floor(col.food), cx - 22, y + 4, '#d8b878');
-  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + 'DAY ' + (G.day + 1), cx + 14, y + 4, '#c0c0d8');
-  drawText(ctx, 'SCORE ' + col.score, cx - 56, y + 14, '#a0c8a0');
+  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + L('w_day') + ' ' + (G.day + 1), cx + 14, y + 4, '#c0c0d8');
+  drawText(ctx, L('w_score') + ' ' + col.score, cx - 56, y + 14, '#a0c8a0');
   const brood = G.brood.length;
-  drawText(ctx, 'BROOD ' + brood, cx + 14, y + 14, '#d0c8b0');
+  drawText(ctx, L('w_brood') + ' ' + brood, cx + 14, y + 14, '#d0c8b0');
 }
 
 function drawTaskAndMsgs() {
@@ -821,9 +939,9 @@ function drawTaskAndMsgs() {
   const t = G.colony.tasks.find(t => !t.done) || G.colony.tasks.find(t => t.done && t.doneT > 0);
   if (t) {
     let str;
-    if (t.done) str = t.text + ' - COMPLETE!';
-    else if (t.type === 'dig') str = t.text + ' ' + Math.floor(t.n) + '/' + t.need;
-    else str = t.text + ' ' + t.n + '/' + t.need;
+    if (t.done) str = L('m_complete', taskText(t));
+    else if (t.type === 'dig') str = taskText(t) + ' ' + Math.floor(t.n) + '/' + t.need;
+    else str = taskText(t) + ' ' + t.n + '/' + t.need;
     const blink = t.done && (G.tick >> 3) % 2;
     if (!blink) drawTextS(ctx, str, 4, 3, t.done ? '#ffe040' : '#a8e8a0');
   }
@@ -860,15 +978,30 @@ function drawMinimap() {
   }
 }
 
+// each player's viewport rectangle on the screen (above the HUD).
+// 2P splits horizontally (stacked) or vertically (side by side).
+function playerView(i) {
+  const fullH = VIEW_H - HUD_H;
+  if (G.playerCount === 1) return { vx: 0, vy: 0, vw: VIEW_W, vh: fullH };
+  if (G.splitVert) {
+    const vw = (VIEW_W - 2) / 2;
+    return { vx: i === 0 ? 0 : vw + 2, vy: 0, vw, vh: fullH };
+  }
+  const vh = (fullH - 2) / 2;
+  return { vx: 0, vy: i === 0 ? 0 : vh + 2, vw: VIEW_W, vh };
+}
+
 function drawPlay() {
   if (G.playerCount === 1) {
     drawViewport(G.players[0], 0, 0, VIEW_W, VIEW_H - HUD_H);
   } else {
-    const vh = (VIEW_H - HUD_H - 2) / 2;
-    drawViewport(G.players[0], 0, 0, VIEW_W, vh);
     ctx.fillStyle = '#000';
-    ctx.fillRect(0, vh, VIEW_W, 2);
-    drawViewport(G.players[1], 0, vh + 2, VIEW_W, vh);
+    if (G.splitVert) ctx.fillRect((VIEW_W - 2) / 2, 0, 2, VIEW_H - HUD_H);
+    else ctx.fillRect(0, (VIEW_H - HUD_H - 2) / 2, VIEW_W, 2);
+    for (let i = 0; i < 2; i++) {
+      const v = playerView(i);
+      drawViewport(G.players[i], v.vx, v.vy, v.vw, v.vh);
+    }
   }
   drawHud();
   drawTaskAndMsgs();
@@ -913,13 +1046,14 @@ function drawTitle() {
   drawTextC(ctx, 'MAUR', VIEW_W / 2 + 3, ly + 3, '#3a1408', 6);
   drawTextC(ctx, 'MAUR', VIEW_W / 2, ly, '#d86020', 6);
   drawTextC(ctx, 'MAUR', VIEW_W / 2 - 1, ly - 1, '#ffa040', 6);
-  drawTextCS(ctx, 'AN ANT COLONY UNDER YOUR COMMAND', VIEW_W / 2, ly + 50, '#b09060');
+  drawTextCS(ctx, L('ui_tagline'), VIEW_W / 2, ly + 50, '#b09060');
 
   // menu
-  const items = ['START GAME', 'HELP',
-    'SOUND: ' + (Sfx.muted ? 'OFF' : 'ON'),
-    'CRT: ' + (document.getElementById('crt').classList.contains('off') ? 'OFF' : 'ON')];
-  const my = 118;
+  const items = [L('ui_start'), L('ui_help'),
+    L('ui_sound', L(Sfx.muted ? 'w_off' : 'w_on')),
+    L('ui_crt', L(document.getElementById('crt').classList.contains('off') ? 'w_off' : 'w_on')),
+    L('ui_lang')];
+  const my = 112;
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
     if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, my + i * 12, '#ffe040');
@@ -945,13 +1079,14 @@ function drawTitle() {
 }
 
 function updateTitle() {
-  if (menuNav(4)) {
+  if (menuNav(5)) {
     Sfx.play('select');
     switch (G.menuSel) {
       case 0: G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
       case 1: G.prevState = 'title'; G.state = 'help'; break;
       case 2: Sfx.toggleMute(); break;
       case 3: document.getElementById('crt').classList.toggle('off'); break;
+      case 4: setLang(LANG === 0); break;
     }
   }
 }
@@ -959,7 +1094,7 @@ function updateTitle() {
 function drawSlots() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  drawTextCS(ctx, 'CHOOSE A WORLD', VIEW_W / 2, 18, '#ffa040', 2);
+  drawTextCS(ctx, L('ui_choose'), VIEW_W / 2, 18, '#ffa040', 2);
 
   for (let i = 0; i < 3; i++) {
     const info = slotInfo(i + 1);
@@ -974,17 +1109,17 @@ function drawSlots() {
       ctx.fillRect(279, sy - 4, 1, 28);
       drawText(ctx, '\x06', 28, sy + 5, '#ffe040');
     }
-    drawText(ctx, 'WORLD ' + (i + 1), 48, sy, sel ? '#ffe040' : '#c8b890');
+    drawText(ctx, L('ui_world', i + 1), 48, sy, sel ? '#ffe040' : '#c8b890');
     if (info) {
-      drawText(ctx, 'DAY ' + (info.day + 1) + '  \x02' + info.ants + '  \x03' + info.food + '  SCORE ' + info.score,
+      drawText(ctx, L('w_day') + ' ' + (info.day + 1) + '  \x02' + info.ants + '  \x03' + info.food + '  ' + L('w_score') + ' ' + info.score,
         48, sy + 10, '#a09070');
-      if (G.eraseArm === i) drawText(ctx, 'X AGAIN TO ERASE!', 180, sy, '#ff5040');
+      if (G.eraseArm === i) drawText(ctx, L('ui_eraseArm'), 180, sy, '#ff5040');
     } else {
-      drawText(ctx, 'EMPTY - A NEW COLONY AWAITS', 48, sy + 10, '#706050');
+      drawText(ctx, L('ui_empty'), 48, sy + 10, '#706050');
     }
   }
-  drawTextC(ctx, 'ENTER: 1 PLAYER    T: 2 PLAYERS', VIEW_W / 2, 164, '#b0a080');
-  drawTextC(ctx, 'X: ERASE    ESC: BACK', VIEW_W / 2, 176, '#706050');
+  drawTextC(ctx, L('ui_slotKeys'), VIEW_W / 2, 164, '#b0a080');
+  drawTextC(ctx, L('ui_slotKeys2'), VIEW_W / 2, 176, '#706050');
 }
 
 function updateSlots() {
@@ -1008,7 +1143,7 @@ function updateSlots() {
     Sfx.play('select');
     const slot = G.slotSel + 1;
     if (slotInfo(slot) && loadWorld(slot, pc)) {
-      G.state = 'play'; G.msg('WELCOME BACK TO THE COLONY');
+      G.state = 'play'; G.msg(L('m_welcome'));
     } else {
       // empty slot, or a save from an incompatible world size: start fresh
       newWorld(slot, pc);
@@ -1018,34 +1153,19 @@ function updateSlots() {
   }
 }
 
-const INTRO_TEXT = [
-  'SPRING. THE THAW HAS COME.',
-  '',
-  'DEEP BENEATH THE FOREST FLOOR,',
-  'A YOUNG QUEEN STIRS. HER COLONY',
-  'IS SMALL, HUNGRY, AND SURROUNDED',
-  'BY THINGS THAT BITE.',
-  '',
-  'YOU ARE ONE OF HER WORKERS.',
-  '',
-  'DIG. FORAGE. FEED THE BROOD.',
-  'DEFEND THE NEST.',
-  '',
-  'THE COLONY MUST SURVIVE.',
-];
-
 function drawIntro() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const lines = introText();
   G.introLine += 0.4;
-  const shown = Math.min(INTRO_TEXT.length, Math.floor(G.introLine / 6) + 1);
+  const shown = Math.min(lines.length, Math.floor(G.introLine / 6) + 1);
   let y = 30;
   for (let i = 0; i < shown; i++) {
-    drawTextC(ctx, INTRO_TEXT[i], VIEW_W / 2, y, i === INTRO_TEXT.length - 1 ? '#ffa040' : '#c8b890');
+    drawTextC(ctx, lines[i], VIEW_W / 2, y, i === lines.length - 1 ? '#ffa040' : '#c8b890');
     y += 11;
   }
-  if (shown >= INTRO_TEXT.length && (G.tick >> 4) % 2 === 0) {
-    drawTextC(ctx, 'PRESS SPACE', VIEW_W / 2, 182, '#ffe040');
+  if (shown >= lines.length && (G.tick >> 4) % 2 === 0) {
+    drawTextC(ctx, L('ui_pressSpace'), VIEW_W / 2, 182, '#ffe040');
   }
   G.tick++;
 }
@@ -1053,36 +1173,21 @@ function drawIntro() {
 function updateIntro() {
   if (tookPress('Space') || tookPress('Enter')) {
     G.state = 'play';
-    G.msg('GATHER FOOD FOR THE COLONY', '#80ff80');
+    G.msg(L('m_gather'), '#80ff80');
     Sfx.play('select');
   }
 }
 
-const HELP_TEXT = [
-  ['PLAYER 1', '#ffe080'],
-  ['  W A S D ....... MOVE / CLIMB', '#c8b890'],
-  ['  SPACE ......... BITE / DIG', '#c8b890'],
-  ['  E ............. PICK UP / USE', '#c8b890'],
-  ['PLAYER 2', '#80d0ff'],
-  ['  ARROWS ........ MOVE / CLIMB', '#c8b890'],
-  ['  . ............. BITE / DIG', '#c8b890'],
-  ['  , ............. PICK UP / USE', '#c8b890'],
-  ['', ''],
-  ['M: MAP   ESC: PAUSE   HOLD UP AT WALLS TO CLIMB', '#a09070'],
-  ['BRING FOOD TO THE STORAGE CHAMBER.', '#a8e8a0'],
-  ['FEED LARVAE. MILK APHIDS. SLAY SPIDERS.', '#a8e8a0'],
-];
-
 function drawHelp() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  drawTextCS(ctx, 'HOW TO ANT', VIEW_W / 2, 12, '#ffa040', 2);
+  drawTextCS(ctx, L('ui_howto'), VIEW_W / 2, 12, '#ffa040', 2);
   let y = 40;
-  for (const [line, color] of HELP_TEXT) {
+  for (const [line, color] of helpText()) {
     if (line) drawText(ctx, line, 24, y, color);
     y += 11;
   }
-  drawTextC(ctx, 'ESC: BACK', VIEW_W / 2, 186, '#706050');
+  drawTextC(ctx, L('ui_escBack'), VIEW_W / 2, 186, '#706050');
 }
 
 function updateHelp() {
@@ -1092,32 +1197,54 @@ function updateHelp() {
   }
 }
 
+function pauseItems() {
+  const items = [
+    { id: 'resume', label: L('ui_resume') },
+    { id: 'save', label: L('ui_saveGame') },
+    { id: 'help', label: L('ui_help') },
+  ];
+  if (G.playerCount > 1) {
+    items.push({ id: 'split', label: L('ui_split', L(G.splitVert ? 'ui_vert' : 'ui_horiz')) });
+  }
+  items.push({ id: 'quit', label: L('ui_saveQuit') });
+  return items;
+}
+
 function drawPause() {
   drawPlay();
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  bevelPanel(100, 56, 120, 88);
-  drawTextCS(ctx, 'PAUSED', VIEW_W / 2, 64, '#ffa040', 2);
-  const items = ['RESUME', 'SAVE GAME', 'HELP', 'SAVE + QUIT'];
+  const items = pauseItems();
+  bevelPanel(90, 56, 140, 32 + items.length * 12);
+  drawTextCS(ctx, L('ui_paused'), VIEW_W / 2, 64, '#ffa040', 2);
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
-    if (sel) drawText(ctx, '\x06', 110, 88 + i * 12, '#ffe040');
-    drawText(ctx, items[i], 122, 88 + i * 12, sel ? '#ffe040' : '#c8b890');
+    if (sel) drawText(ctx, '\x06', 100, 88 + i * 12, '#ffe040');
+    drawText(ctx, items[i].label, 112, 88 + i * 12, sel ? '#ffe040' : '#c8b890');
   }
 }
 
 function updatePause() {
   if (tookPress('Escape')) { G.state = 'play'; return; }
-  if (menuNav(4)) {
+  const items = pauseItems();
+  if (menuNav(items.length)) {
     Sfx.play('select');
-    switch (G.menuSel) {
-      case 0: G.state = 'play'; break;
-      case 1:
-        if (saveWorld(G.slot)) { G.msg('GAME SAVED', '#80c0ff'); Sfx.play('save'); }
+    switch (items[G.menuSel].id) {
+      case 'resume':
         G.state = 'play';
         break;
-      case 2: G.prevState = 'pause'; G.state = 'help'; break;
-      case 3:
+      case 'save':
+        if (saveWorld(G.slot)) { G.msg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
+        G.state = 'play';
+        break;
+      case 'help':
+        G.prevState = 'pause'; G.state = 'help';
+        break;
+      case 'split':
+        G.splitVert = !G.splitVert;
+        localStorage.setItem('maur_split', G.splitVert ? 'v' : 'h');
+        break;
+      case 'quit':
         saveWorld(G.slot);
         G.running = false;
         G.state = 'title'; G.menuSel = 0;
@@ -1134,40 +1261,76 @@ function drawDead() {
   if (!tk) return;
   bevelPanel(70, 30, 180, 140);
   const pcol = tk.pIdx === 0 ? '#ffe080' : '#80d0ff';
-  drawTextCS(ctx, (G.playerCount > 1 ? 'PLAYER ' + (tk.pIdx + 1) + ' ' : '') + 'YOU DIED', VIEW_W / 2, 38, '#ff5040', 2);
-  drawTextC(ctx, 'THE COLONY LIVES ON.', VIEW_W / 2, 58, '#c8b890');
-  drawTextC(ctx, 'CONTINUE AS:', VIEW_W / 2, 70, pcol);
-  for (let i = 0; i < tk.list.length; i++) {
-    const a = tk.list[i];
+  const pTag = G.playerCount > 1 ? L('ui_player', tk.pIdx + 1) + ' ' : '';
+  if (tk.prevAnt) {
+    drawTextCS(ctx, pTag + L('ui_switchAnt'), VIEW_W / 2, 38, pcol, 2);
+    drawTextC(ctx, L('ui_lendLegs'), VIEW_W / 2, 58, '#c8b890');
+  } else {
+    drawTextCS(ctx, pTag + L('ui_youDied'), VIEW_W / 2, 38, '#ff5040', 2);
+    drawTextC(ctx, L('ui_colonyLives'), VIEW_W / 2, 58, '#c8b890');
+  }
+  drawTextC(ctx, L('ui_continueAs'), VIEW_W / 2, 70, pcol);
+  for (let i = 0; i < tk.types.length; i++) {
+    const t = tk.types[i];
     const sel = i === tk.sel;
-    const label = a.caste.toUpperCase() + '  HP ' + Math.ceil(a.hp) + '/' + a.maxHp;
+    const label = casteName(t.caste) + '  X' + t.count;
     if (sel) drawText(ctx, '\x06', 92, 84 + i * 12, '#ffe040');
     drawText(ctx, label, 104, 84 + i * 12, sel ? '#ffe040' : '#c8b890');
   }
-  drawTextC(ctx, 'ENTER: TAKE OVER', VIEW_W / 2, 160, '#a09070');
+  drawTextC(ctx, tk.prevAnt ? L('ui_switchKeys') : L('ui_takeOver'),
+    VIEW_W / 2, 160, '#a09070');
 }
 
 function updateDead() {
   const tk = G.takeover;
   if (!tk) { G.state = 'play'; return; }
-  // prune list of any who died while menu open
-  tk.list = tk.list.filter(a => a.hp > 0);
-  if (tk.list.length === 0) { endWorld(); return; }
-  tk.sel = Math.min(tk.sel, tk.list.length - 1);
+  // refresh against ants that died (or got taken) while the menu was open
+  const counts = takeoverCounts();
+  tk.types = tk.types.filter(t => counts[t.caste]);
+  for (const t of tk.types) t.count = counts[t.caste];
+  if (tk.types.length === 0) {
+    if (tk.prevAnt && tk.prevAnt.hp > 0) { G.takeover = null; G.state = 'play'; }
+    else endWorld();
+    return;
+  }
+  tk.sel = Math.min(tk.sel, tk.types.length - 1);
 
-  if (tookPress('ArrowUp') || tookPress('KeyW')) { tk.sel = (tk.sel + tk.list.length - 1) % tk.list.length; Sfx.play('menu'); }
-  if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.list.length; Sfx.play('menu'); }
+  if (tk.prevAnt && tookPress('Escape')) {
+    G.takeover = null; G.state = 'play';
+    Sfx.play('menu');
+    return;
+  }
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { tk.sel = (tk.sel + tk.types.length - 1) % tk.types.length; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.types.length; Sfx.play('menu'); }
   if (tookPress('Enter') || tookPress('Space')) {
-    const a = tk.list[tk.sel];
+    const caste = tk.types[tk.sel].caste;
+    // nearest free ant of the chosen caste
+    let a = null, bd = Infinity;
+    for (const c of G.ants) {
+      if (c.hp <= 0 || c.playerIdx >= 0 || c.caste !== caste) continue;
+      const d = dist2(c.x, c.y, tk.refX, tk.refY);
+      if (d < bd) { bd = d; a = c; }
+    }
+    if (!a) return; // died this very frame; the prune above catches it next tick
+    if (tk.prevAnt && tk.prevAnt.hp > 0) {
+      // hand the old body back to the colony
+      const prev = tk.prevAnt;
+      prev.playerIdx = -1;
+      prev.state = 'idle'; prev.stateT = 120;
+      prev.target = null; prev.nav = null;
+      prev.climbing = false; prev.ceiling = false;
+    }
     a.playerIdx = tk.pIdx;
     a.state = 'idle';
     a.climbing = false;
+    a.ceiling = false;
+    a.nav = null;
     G.players[tk.pIdx].ant = a;
     G.players[tk.pIdx].cam = { x: a.x - VIEW_W / 2, y: a.y - 60 };
-    G.deadQueue.shift();
+    if (!tk.prevAnt) G.deadQueue.shift();
     G.takeover = null;
     G.state = 'play';
-    G.msg('NOW PLAYING: ' + a.caste.toUpperCase(), tk.pIdx === 0 ? '#ffe080' : '#80d0ff');
+    G.msg(L('m_nowPlaying', casteName(a.caste)), tk.pIdx === 0 ? '#ffe080' : '#80d0ff');
     Sfx.play('select');
   }
 }
@@ -1176,22 +1339,22 @@ function drawGameOver() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const s = G.gameOverStats;
-  drawTextCS(ctx, 'THE COLONY', VIEW_W / 2, 24, '#ff5040', 2);
-  drawTextCS(ctx, 'HAS PERISHED', VIEW_W / 2, 42, '#ff5040', 2);
+  drawTextCS(ctx, L('ui_gameover1'), VIEW_W / 2, 24, '#ff5040', 2);
+  drawTextCS(ctx, L('ui_gameover2'), VIEW_W / 2, 42, '#ff5040', 2);
   if (s) {
     const lines = [
-      ['SURVIVED ' + (s.day + 1) + ' DAYS', '#c8b890'],
-      ['FINAL SCORE: ' + s.score, '#ffe040'],
-      ['FOOD GATHERED: ' + Math.floor(s.stats.foodGathered), '#a09070'],
-      ['TASKS DONE: ' + s.stats.tasksDone, '#a09070'],
-      ['ANTS BORN: ' + s.stats.antsBorn, '#a09070'],
-      ['ANTS LOST: ' + s.stats.antsDied, '#a09070'],
-      ['PREDATORS SLAIN: ' + s.stats.predatorsSlain, '#a09070'],
+      [L('ui_survived', s.day + 1), '#c8b890'],
+      [L('ui_finalScore', s.score), '#ffe040'],
+      [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],
+      [L('ui_tasksDone', s.stats.tasksDone), '#a09070'],
+      [L('ui_antsBorn', s.stats.antsBorn), '#a09070'],
+      [L('ui_antsLost', s.stats.antsDied), '#a09070'],
+      [L('ui_predSlain', s.stats.predatorsSlain), '#a09070'],
     ];
     let y = 74;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
   }
-  if ((G.tick >> 4) % 2 === 0) drawTextC(ctx, 'PRESS ENTER', VIEW_W / 2, 178, '#ffe040');
+  if ((G.tick >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
   G.tick++;
 }
 
@@ -1209,7 +1372,7 @@ function globalKeys() {
   if (tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
   if (tookPress('KeyN')) {
     const m = Sfx.toggleMute();
-    if (G.state === 'play') G.msg('SOUND ' + (m ? 'OFF' : 'ON'), '#80c0ff');
+    if (G.state === 'play') G.msg(L('m_sound', L(m ? 'w_off' : 'w_on')), '#80c0ff');
   }
 }
 

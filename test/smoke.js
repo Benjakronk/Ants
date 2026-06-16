@@ -132,7 +132,7 @@ const path = require('path');
   await page.evaluate(() => { G.players[0].ant.hp = 0; });
   await page.waitForTimeout(500);
   console.log('takeover state:', await page.evaluate(() => G.state),
-    'list:', await page.evaluate(() => G.takeover ? G.takeover.list.length : 0));
+    'types:', await page.evaluate(() => G.takeover ? JSON.stringify(G.takeover.types) : 'none'));
   await page.screenshot({ path: 'test/shot-takeover.png' });
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);

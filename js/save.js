@@ -79,6 +79,7 @@ function saveWorld(slot) {
       food: Math.round(c.food * 10) / 10, score: c.score,
       eggT: c.eggT, lastDigTaskDay: c.lastDigTaskDay,
       lastRaidDay: c.lastRaidDay || 0,
+      lastCrystalTaskDay: c.lastCrystalTaskDay || 0,
       tasks: c.tasks.filter(t => !t.done),
       stats: c.stats,
     },
