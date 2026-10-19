@@ -34,7 +34,7 @@ const TerrainView = {
         const depth = y - bgSurf[x];
 
         if (mat !== M_AIR) {
-          const c = matColor(mat, x, y, h, depth);
+          const c = matColor(mat, x, y, h, depth, mat === M_PACKED ? T.wear.get(i) : 0);
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
         // backdrop below the original surface
@@ -65,7 +65,9 @@ const TerrainView = {
         for (let x = x0; x <= x1; x++) {
           const mat = T.m[y * WORLD_W + x];
           if (mat === M_AIR) continue;
-          const c = matColor(mat, x, y, pxHash(x, y), y - T.bgSurf[x]);
+          const i = y * WORLD_W + x;
+          const c = matColor(mat, x, y, pxHash(x, y), y - T.bgSurf[x],
+            mat === M_PACKED ? T.wear.get(i) : 0);
           const o = ((y - y0) * w + (x - x0)) * 4;
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
@@ -76,7 +78,8 @@ const TerrainView = {
   },
 };
 
-function matColor(mat, x, y, h, depth) {
+// wear: bite damage on packed earth (shows as cracks)
+function matColor(mat, x, y, h, depth, wear) {
   switch (mat) {
     case M_DIRT: {
       const shades = [[122, 76, 44], [107, 66, 38], [94, 57, 32], [113, 72, 41]];
@@ -125,6 +128,21 @@ function matColor(mat, x, y, h, depth) {
       const shades = [[120, 180, 224], [96, 152, 208], [148, 204, 240]];
       let c = shades[h % 3];
       if (h % 11 === 0) c = [220, 240, 255]; // glint
+      return c;
+    }
+    case M_PACKED: {
+      // rammed earth: tamped clay in level bands, cracking as it's bitten
+      const shades = [[156, 106, 64], [140, 94, 56], [126, 84, 50]];
+      let c = shades[((y >> 1) + (h % 7 === 0 ? 1 : 0)) % 3];
+      if ((y & 1) === 0 && h % 3 === 0) c = [112, 74, 44];  // tamp lines
+      if (wear && h % 6 < wear * 1.6) c = [62, 40, 24];      // cracks
+      return c;
+    }
+    case M_THATCH: {
+      // straw and pine needles laid in diagonal strands
+      const shades = [[210, 176, 92], [190, 154, 72], [224, 194, 112]];
+      let c = shades[((x + y + (h & 1)) >> 1) % 3];
+      if (h % 13 === 0) c = [150, 108, 48];   // dark needle
       return c;
     }
   }

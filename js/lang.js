@@ -17,6 +17,7 @@ const STR = {
   w_score: ['SCORE', 'POENG'],
   w_brood: ['BROOD', 'YNGEL'],
   w_dead: ['DEAD', 'DØD'],
+  w_cramped: ['CRAMPED!', 'TRANGT!'],
 
   // menus & screens
   ui_start: ['START GAME', 'START SPILL'],
@@ -98,12 +99,35 @@ const STR = {
   t_gather: ['GATHER FOOD', 'SANK MAT'],
   t_feed: ['FEED THE LARVAE', 'MAT LARVENE'],
   t_hunt: ['DRIVE OFF {0}', 'JAG BORT {0}'],
-  t_dig: ['EXPAND THE NEST', 'UTVID TUA'],
+  t_dig: ['EXPAND THE CHAMBERS', 'UTVID KAMRENE'],
   t_crystal: ['FIND A CRYSTAL BELOW', 'FINN EN KRYSTALL I DYPET'],
 
   // underground riches
   m_crystalFound: ['YOU DUG OUT A CRYSTAL!', 'DU GRAVDE FREM EN KRYSTALL!'],
   m_crystal: ['THE CRYSTAL GLEAMS IN THE HOARD! +{0}', 'KRYSTALLEN GLITRER I SKATTEN! +{0}'],
+
+  // building
+  mat_packed: ['PACKED EARTH', 'STAMPET JORD'],
+  mat_thatch: ['THATCH', 'STRÅ'],
+  m_buildMat: ['BUILDING WITH {0}', 'BYGGER MED {0}'],
+  m_noSoil: ['NO SOIL - DIG FIRST', 'INGEN JORD - GRAV FØRST'],
+  m_noThatch: ['NO THATCH - BITE LEAVES FIRST', 'INGEN STRÅ - BIT AV BLADER FØRST'],
+
+  // chambers
+  ch_storage: ['STORAGE', 'LAGER'],
+  ch_nursery: ['NURSERY', 'YNGELKAMMER'],
+  ch_barracks: ['BARRACKS', 'SOLDATKAMMER'],
+  ch_royal: ['ROYAL CHAMBER', 'DRONNINGKAMMER'],
+  m_chamberNew: ['NEW CHAMBER: {0}', 'NYTT KAMMER: {0}'],
+  m_chamberType: ['MARKED AS {0}', 'MERKET SOM {0}'],
+  m_chamberGone: ['CHAMBER MARKER REMOVED', 'KAMMERMERKET ER FJERNET'],
+  m_lastRoyal: ["THE QUEEN'S ONLY ROYAL CHAMBER CAN'T CHANGE", 'DRONNINGENS ENESTE KAMMER KAN IKKE ENDRES'],
+  m_chamberFixed: ["THE NEST'S FIRST {0} CAN'T CHANGE", 'TUAS FØRSTE {0} KAN IKKE ENDRES'],
+  m_markDeep: ['MARK CHAMBERS DEEPER UNDERGROUND', 'MERK KAMRE DYPERE UNDER BAKKEN'],
+  m_markClose: ['TOO CLOSE TO ANOTHER CHAMBER', 'FOR NÆR ET ANNET KAMMER'],
+  m_markCramped: ['TOO CRAMPED - DIG OUT MORE SPACE', 'FOR TRANGT - GRAV UT MER PLASS'],
+  m_storageFull: ['STORAGE FULL - DIG AND MARK MORE STORAGE', 'LAGERET ER FULLT - GRAV OG MERK MER LAGER'],
+  m_storageFullNpc: ['THE STORES ARE FULL! MARK MORE STORAGE (X)', 'LAGRENE ER FULLE! MERK MER LAGER (X)'],
 };
 
 function L(key) {
@@ -212,13 +236,13 @@ function helpText() {
     ['  E ............. PLUKK OPP / BRUK', '#c8b890'],
     ['  Q ............. EVNE', '#c8b890'],
     ['  TAB ........... BYTT MAUR', '#c8b890'],
-    ['', ''],
-    ['', ''],
-    ['', ''],
+    ['  F (HOLD INNE) . BYGG MED JORD / STRÅ', '#c8b890'],
+    ['  R ............. BYTT BYGGEMATERIALE', '#c8b890'],
+    ['  X ............. MERK / BYTT KAMMER', '#c8b890'],
     ['M: KART  ESC: PAUSE  HOLD OPP FOR Å KLATRE', '#a09070'],
     ['SOLDATER KALLER KOLONIEN TIL KAMP. PLEIERE', '#a8e8a0'],
     ['HELBREDER OG BÆRER YNGELEN I SIKKERHET.', '#a8e8a0'],
-    ['BÆR MAT TIL LAGERKAMMERET.', '#a8e8a0'],
+    ['BÆR MAT TIL LAGERET. MERK KAMRE FOR Å VOKSE.', '#a8e8a0'],
   ] : [
     ['CONTROLS', '#ffe080'],
     ['  WASD / ARROWS . MOVE / CLIMB', '#c8b890'],
@@ -226,12 +250,12 @@ function helpText() {
     ['  E ............. PICK UP / USE', '#c8b890'],
     ['  Q ............. ABILITY', '#c8b890'],
     ['  TAB ........... SWITCH ANT', '#c8b890'],
-    ['', ''],
-    ['', ''],
-    ['', ''],
+    ['  F (HOLD) ...... BUILD WITH SOIL / THATCH', '#c8b890'],
+    ['  R ............. CHANGE BUILD MATERIAL', '#c8b890'],
+    ['  X ............. MARK / CYCLE CHAMBER', '#c8b890'],
     ['M: MAP   ESC: PAUSE   HOLD UP AT WALLS TO CLIMB', '#a09070'],
     ['SOLDIERS RALLY THE COLONY TO WAR. NURSES', '#a8e8a0'],
     ['HEAL AND CARRY THE BROOD TO SAFETY.', '#a8e8a0'],
-    ['BRING FOOD TO THE STORAGE CHAMBER.', '#a8e8a0'],
+    ['BRING FOOD TO STORAGE. MARK CHAMBERS TO GROW.', '#a8e8a0'],
   ];
 }

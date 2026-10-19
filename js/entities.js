@@ -3,12 +3,17 @@
 
 let ENT_ID = 1;
 
+// digPow: bite strength against packed earth (PACKED_HP 3: workers need 3
+// bites, soldiers 2)
 const CASTE = {
-  worker:  { hp: 30,  dmg: 5,  speed: 0.55, size: 1.0,  color: [168, 76, 42],  digR: 4.5, digCd: 13 },
-  soldier: { hp: 55,  dmg: 14, speed: 0.50, size: 1.35, color: [120, 46, 24],  digR: 6.5, digCd: 11 },
-  nurse:   { hp: 26,  dmg: 4,  speed: 0.55, size: 0.95, color: [196, 110, 64], digR: 4.2, digCd: 15 },
-  queen:   { hp: 120, dmg: 12, speed: 0.30, size: 1.9,  color: [142, 42, 54],  digR: 6.5, digCd: 11 },
+  worker:  { hp: 30,  dmg: 5,  speed: 0.55, size: 1.0,  color: [168, 76, 42],  digR: 4.5, digCd: 13, digPow: 1 },
+  soldier: { hp: 55,  dmg: 14, speed: 0.50, size: 1.35, color: [120, 46, 24],  digR: 6.5, digCd: 11, digPow: 1.5 },
+  nurse:   { hp: 26,  dmg: 4,  speed: 0.55, size: 0.95, color: [196, 110, 64], digR: 4.2, digCd: 15, digPow: 1 },
+  queen:   { hp: 120, dmg: 12, speed: 0.30, size: 1.9,  color: [142, 42, 54],  digR: 6.5, digCd: 11, digPow: 1.5 },
 };
+
+// what a (player) ant can haul in its mandibles for building, in pixels
+const LOAD_CAP = 100;
 
 const ITEM_DEF = {
   seed:     { value: 5,  food: true },
@@ -155,6 +160,9 @@ class Ant {
     this.patrolI = 0;
     this.abilCd = 0;   // caste ability cooldown (rally, heal)
     this.rallyT = 0;   // courage: rallied ants fight instead of fleeing
+    this.buildCd = 0;  // building cooldown
+    this.soil = 0;     // building loads (pixels), collected by player digging
+    this.thatch = 0;
   }
 
   get def() { return CASTE[this.caste]; }
@@ -178,6 +186,7 @@ class Ant {
     if (this.biteAnim > 0) this.biteAnim--;
     if (this.abilCd > 0) this.abilCd--;
     if (this.rallyT > 0) this.rallyT--;
+    if (this.buildCd > 0) this.buildCd--;
     this.phase += Math.abs(this.vx) * 0.6 + (this.climbing ? 0.4 : 0);
 
     // buried (squeezed through a pinch, loose soil): chew yourself free
@@ -380,8 +389,8 @@ class Ant {
           if (T.digHasTarget(bx, by, c.digR)) hit = { bx, by };
         }
         if (hit) {
-          T.dig(hit.bx, hit.by, c.digR);
-          T.dig(this.x + ux * 2, this.y + uy * 2, c.digR * 0.8); // clear around the body too
+          T.dig(hit.bx, hit.by, c.digR, c.digPow);
+          T.dig(this.x + ux * 2, this.y + uy * 2, c.digR * 0.8, 0); // clear around the body too
           G.fx('dirt', hit.bx, hit.by, 3);
           G.sfx('dig', hit.bx, hit.by, 200);
           this.digCd = c.digCd + 6;
@@ -776,10 +785,12 @@ class Ant {
       case 'return': {
         const d = this.navTo('storage');
         if (d < 26) {
-          if (this.carry) {
-            G.colony.deposit(this.carry, this);
-            this.carry = null;
+          if (this.carry && !G.colony.deposit(this.carry, this)) {
+            // stores are full: hold on to the load and wait for room
+            this.state = 'idle'; this.stateT = 400 + Math.random() * 400;
+            break;
           }
+          this.carry = null;
           // short, staggered breather so returners don't pool at the cache
           this.state = 'idle'; this.stateT = 60 + Math.random() * 180;
         }
@@ -1128,6 +1139,7 @@ class Bug {
     this.swoopT = 0;     // wasp hit-and-run timer
     this.digT = 0;       // beetle bulldozing cooldown
     this.turnT = 0;      // beetle: committed to walking away from a tree
+    this.digWait = 0;    // gnawing packed earth: pause between bites
     this.raidT = 2700;   // redant: how long the raid lasts (~45s)
     this.resident = false; // redant: a defender of the rival nest (never raids/expires)
     this.homeX = null;     // redant: x to garrison/march toward (rival entrance)
@@ -1159,6 +1171,7 @@ class Bug {
 
     if (this.swoopT > 0) this.swoopT--;
     if (this.digT > 0) this.digT--;
+    if (this.digWait > 0) this.digWait--;
     if (this.turnT > 0) this.turnT--;
 
     // predator freeze-shake: anything pinned in one spot for ~10s either
@@ -1231,6 +1244,20 @@ class Bug {
     }
   }
 
+  // a burrowing bite for the bugs that dig every step. Packed earth only
+  // wears down, so after a bite that hit it the bug pauses like a biting
+  // ant would: walls slow it in proportion to their toughness. Returns true
+  // when the way ahead (nx, ny) is open.
+  gnaw(nx, ny, r) {
+    if (this.digWait > 0) return false;
+    const res = T.dig(nx, ny, r);
+    if (res.worn > 0) {
+      this.digWait = 14;
+      return !T.boxSolid(nx, ny, this.hw, this.hh);
+    }
+    return true;
+  }
+
   aphidThink() {
     // cling to whatever it sits on; tiny crawls
     this.vx = 0;
@@ -1263,7 +1290,7 @@ class Bug {
     // dig if needed
     if (T.boxSolid(nx, ny, this.hw, this.hh)) {
       if (T.digHasTarget(nx, ny, digR + 1)) {
-        T.dig(nx, ny, digR + 1);
+        if (!this.gnaw(nx, ny, digR + 1)) return;
       } else {
         this.angle += Math.PI * (0.5 + Math.random() * 0.5);
         // hemmed in by rock on every side: turning forever won't help.
@@ -1302,8 +1329,10 @@ class Bug {
       const nx = this.x + Math.cos(ang) * d.speed * 1.5;
       const ny = this.y + Math.sin(ang) * d.speed * 1.5;
       if (T.boxSolid(nx, ny, this.hw, this.hh)) {
-        if (T.digHasTarget(nx, ny, 4)) { T.dig(nx, ny, 4); this.rockN = 0; }
-        else {
+        if (T.digHasTarget(nx, ny, 4)) {
+          this.rockN = 0;
+          if (!this.gnaw(nx, ny, 4)) return;
+        } else {
           this.angle += 1.5;
           // prey on the far side of bedrock: stop circling at the wall
           // and go back to wandering for a while
@@ -1409,7 +1438,7 @@ class Bug {
       this.treeN = 0;
     } else if (T.digHasTarget(nx, ny, 3)) {
       // foliage in the way: chew straight through the leaves
-      T.dig(nx, ny, 3);
+      this.gnaw(nx, ny, 3);
       if (!T.boxSolid(nx, ny, this.hw, this.hh)) { this.x = nx; this.y = ny; }
       this.treeN = 0;
     } else if (!T.boxSolid(this.x, this.y - 1, this.hw, this.hh)) {

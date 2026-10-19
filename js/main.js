@@ -13,6 +13,7 @@ const BIND = {
   up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['Tab'],
+  build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'],
 };
 
 // client-side state, layered onto the simulation's G
@@ -152,8 +153,11 @@ function readInput() {
   inp.dx = (held('right') ? 1 : 0) - (held('left') ? 1 : 0);
   inp.dy = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
   inp.bite = held('bite');
+  inp.build = held('build');
   if (tookAction('act')) inp.act = true;
   if (tookAction('abil')) inp.abil = true;
+  if (tookAction('buildMat')) inp.buildMat = true;
+  if (tookAction('mark')) inp.mark = true;
 }
 
 function clearInput() {
@@ -401,6 +405,10 @@ function drawViewport(vx, vy, vw, vh) {
     ctx.fillRect(Math.round(px2 - camx), Math.round(py2 - camy), 2, 1);
   }
 
+  // the marker X would act on (in sight and in reach) gets a blinking frame
+  const markCh = me ? col.markTarget(me.x, me.y) : null;
+  drawChamberSigns(camx, camy, vw, vh, markCh);
+
   // pheromones
   ctx.fillStyle = '#c04848';
   for (const ph of G.pheromones) {
@@ -420,6 +428,25 @@ function drawViewport(vx, vy, vw, vh) {
 
   Particles.draw(ctx, camx, camy);
 
+  // while building, show where the stamp will land (a red x: nowhere)
+  const pl = G.players[LOCAL];
+  if (me && pl && pl.input.build) {
+    const aim = buildAim(me, pl.input.dx, pl.input.dy);
+    if (aim) {
+      const ex = Math.round(aim.bx - camx), ey = Math.round(aim.by - camy);
+      ctx.fillStyle = (G.frame >> 3) % 2 ? '#ffe040' : '#fff8c0';
+      ctx.fillRect(ex - 2, ey, 1, 1); ctx.fillRect(ex + 2, ey, 1, 1);
+      ctx.fillRect(ex, ey - 2, 1, 1); ctx.fillRect(ex, ey + 2, 1, 1);
+    } else {
+      const f = aimPoint(me, pl.input.dx, pl.input.dy);
+      const ex = Math.round(f.bx - camx), ey = Math.round(f.by - camy);
+      ctx.fillStyle = '#ff4030';
+      for (let k = -1; k <= 1; k++) {
+        ctx.fillRect(ex + k, ey + k, 1, 1); ctx.fillRect(ex + k, ey - k, 1, 1);
+      }
+    }
+  }
+
   // darkness: depth + night, with a pool of sight around your ant
   if (me) {
     const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, me.x)));
@@ -436,9 +463,66 @@ function drawViewport(vx, vy, vw, vh) {
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, vw, vh);
     }
+    drawChamberLabels(camx, camy, me, markCh);
   }
 
   ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// chamber markers: a little signpost on the chamber floor
+// ---------------------------------------------------------------------------
+const CH_LOOK = {
+  storage:  { icon: '\x03', color: '#d8b878' },
+  nursery:  { icon: '\x0E', color: '#efe9d8' },
+  barracks: { icon: '\x12', color: '#e07050' },
+  royal:    { icon: '\x11', color: '#ff90e0' },
+};
+
+// the floor under a marker (markers sit at a chamber's middle)
+function chamberFloor(ch) {
+  let y = ch.y;
+  for (let i = 0; i < 28 && !T.solid(ch.x, y + 1); i++) y++;
+  return y;
+}
+
+function chamberCramped(ch) { return ch.area < CH_MIN_AREA; }
+
+function drawChamberSigns(camx, camy, vw, vh, target) {
+  for (const ch of G.colony.chambers) {
+    const ex = Math.round(ch.x - camx), ey = Math.round(chamberFloor(ch) - camy);
+    if (ex < -10 || ex > vw + 10 || ey < -10 || ey > vh + 20) continue;
+    const look = CH_LOOK[ch.type];
+    ctx.fillStyle = '#5a3e22';               // stake
+    ctx.fillRect(ex, ey - 6, 1, 7);
+    if (ch === target && (G.frame >> 4) % 2) {
+      ctx.fillStyle = '#ffe040';             // X acts on this one
+      ctx.fillRect(ex - 5, ey - 16, 11, 12);
+    }
+    ctx.fillStyle = '#7a6044';               // plaque
+    ctx.fillRect(ex - 4, ey - 15, 9, 10);
+    ctx.fillStyle = '#2a1c10';
+    ctx.fillRect(ex - 3, ey - 14, 7, 8);
+    const blink = chamberCramped(ch) && (G.frame >> 4) % 2;
+    drawText(ctx, look.icon, ex - 2, ey - 14, blink ? '#ff4030' : look.color);
+  }
+}
+
+// the name (and a cramped warning) of one sign: the one X would act on, or
+// else the nearest near the player's ant. One label never overlaps another.
+function drawChamberLabels(camx, camy, me, target) {
+  let ch = target, bd = Infinity;
+  if (!ch) {
+    for (const c of G.colony.chambers) {
+      if (Math.abs(c.x - me.x) > 70 || Math.abs(c.y - me.y) > 50) continue;
+      const d = dist2(c.x, c.y, me.x, me.y);
+      if (d < bd) { bd = d; ch = c; }
+    }
+  }
+  if (!ch) return;
+  const ex = Math.round(ch.x - camx), ey = Math.round(chamberFloor(ch) - camy);
+  drawTextCS(ctx, L('ch_' + ch.type), ex, ey - 25, CH_LOOK[ch.type].color);
+  if (chamberCramped(ch)) drawTextCS(ctx, L('w_cramped'), ex, ey - 34, '#ff5040');
 }
 
 function bevelPanel(x, y, w, h) {
@@ -460,35 +544,58 @@ function drawHpBar(x, y, w, pct) {
   ctx.fillRect(x + 1, y + 1, fw, 3);
 }
 
+// a small 5 px load bar; the selected building material gets a gold frame
+function drawLoadBar(x, y, w, pct, color, sel) {
+  if (sel) {
+    ctx.fillStyle = '#ffe040';
+    ctx.fillRect(x - 1, y - 1, w + 2, 7);
+  }
+  ctx.fillStyle = '#1a1008';
+  ctx.fillRect(x, y, w, 5);
+  ctx.fillStyle = color;
+  ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * Math.max(0, Math.min(1, pct))), 3);
+}
+
 function drawHud() {
   const y = VIEW_H - HUD_H;
   bevelPanel(0, y, VIEW_W, HUD_H);
   const col = G.colony;
+  const caps = col.caps;
 
-  // player panel
+  // player panel: health, caste, carried item
   const me = localAnt();
+  const pl = G.players[LOCAL];
   const px2 = 4;
   drawText(ctx, 'P1', px2, y + 4, '#ffe080');
   if (me) {
     drawHpBar(px2 + 14, y + 5, 40, Math.max(0, me.hp / me.maxHp));
-    drawText(ctx, casteName(me.caste), px2 + 14, y + 13, '#b0a080');
+    drawText(ctx, casteName(me.caste), px2 + 14, y + 14, '#b0a080');
     if (me.carry) {
       drawItem(ctx, { kind: me.carry.kind, x: 0, y: 0 },
         -(px2 + 62), -(y + 8));
     }
+    // building loads: soil above, thatch below
+    const thatchSel = pl.buildMat === M_THATCH;
+    drawText(ctx, '\x0F', 74, y + 4, thatchSel ? '#806040' : '#c08850');
+    drawLoadBar(81, y + 5, 28, me.soil / LOAD_CAP, '#a06a3c', !thatchSel);
+    drawText(ctx, '\x10', 74, y + 14, thatchSel ? '#e8c870' : '#a08848');
+    drawLoadBar(81, y + 15, 28, me.thatch / LOAD_CAP, '#d8b860', thatchSel);
   } else {
     drawText(ctx, L('w_dead'), px2 + 14, y + 5, '#e03020');
   }
 
-  // colony status, center
-  const cx = VIEW_W / 2;
+  // colony: ants and brood against capacity, food against the stores
   const ants = G.ants.filter(a => a.hp > 0).length;
-  drawText(ctx, '\x02' + ants, cx - 56, y + 4, '#e8c8a0');
-  drawText(ctx, '\x03' + Math.floor(col.food), cx - 22, y + 4, '#d8b878');
-  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + L('w_day') + ' ' + (G.day + 1), cx + 14, y + 4, '#c0c0d8');
-  drawText(ctx, L('w_score') + ' ' + col.score, cx - 56, y + 14, '#a0c8a0');
   const brood = G.brood.length;
-  drawText(ctx, L('w_brood') + ' ' + brood, cx + 14, y + 14, '#d0c8b0');
+  const food = Math.floor(col.food);
+  // the queen stops laying once adults + brood fill the room: warn on that
+  drawText(ctx, '\x02' + ants + '/' + caps.pop, 116, y + 4,
+    ants + brood >= caps.pop ? '#ff9040' : '#e8c8a0');
+  drawText(ctx, '\x0E' + brood + '/' + caps.brood, 116, y + 14, brood >= caps.brood ? '#ff9040' : '#d0c8b0');
+  drawText(ctx, '\x03' + food + '/' + caps.food, 162, y + 4, food >= caps.food ? '#ff9040' : '#d8b878');
+  drawText(ctx, L('w_score') + ' ' + col.score, 162, y + 14, '#a0c8a0');
+  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + L('w_day') + ' ' + (G.day + 1), 234, y + 4, '#c0c0d8');
+  if (me) drawText(ctx, L(buildMatKey(pl.buildMat)), 234, y + 14, '#a09070');
 }
 
 function drawTaskAndMsgs() {
@@ -522,6 +629,14 @@ function drawMinimap() {
   ctx.drawImage(TerrainView.bgCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   ctx.drawImage(TerrainView.terCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   const sx = mw / WORLD_W, sy = mh / WORLD_H;
+  // chamber markers in their type colors (cramped ones blink), under the ants
+  for (const ch of G.colony.chambers) {
+    const cx = Math.round(mx + ch.x * sx), cy = Math.round(my + ch.y * sy);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(cx - 2, cy - 2, 4, 4);
+    ctx.fillStyle = chamberCramped(ch) && (G.frame >> 4) % 2 ? '#ff4030' : CH_LOOK[ch.type].color;
+    ctx.fillRect(cx - 1, cy - 1, 2, 2);
+  }
   for (const a of G.ants) {
     if (a.hp <= 0) continue;
     ctx.fillStyle = a.playerIdx === 0 ? '#ffff40' : a.playerIdx === 1 ? '#40d0ff'

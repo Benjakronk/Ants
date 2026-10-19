@@ -65,7 +65,7 @@ const Sfx = {
   play(name) {
     if (!this.ctx || this.muted) return;
     const now = performance.now();
-    const minGap = { dig: 70, bite: 90, step: 120, hurt: 80 }[name] || 30;
+    const minGap = { dig: 70, bite: 90, step: 120, hurt: 80, build: 90 }[name] || 30;
     if (this._last[name] && now - this._last[name] < minGap) return;
     this._last[name] = now;
 
@@ -91,6 +91,8 @@ const Sfx = {
       case 'save':    this._tone(440, 0.05, 'square', 0.3); this._tone(440, 0.05, 'square', 0.3, 0, 0.09); break;
       case 'starve':  this._tone(233, 0.3, 'triangle', 0.4, -60); break;
       case 'step':    this._noise(0.02, 0.06, 1500); break;
+      case 'build':   this._noise(0.05, 0.4, 350); this._tone(110, 0.05, 'square', 0.2, -30); break;
+      case 'mark':    this._tone(392, 0.06, 'square', 0.3); this._tone(523, 0.1, 'square', 0.3, 0, 0.07); break;
     }
   }
 };

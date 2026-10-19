@@ -83,12 +83,27 @@ const G = {
 };
 
 function newInput() {
-  // dx/dy/bite are held state; act/abil are one-shot presses the sim consumes
-  return { dx: 0, dy: 0, bite: false, act: false, abil: false };
+  // dx/dy/bite/build are held state; act/abil/buildMat/mark are one-shot
+  // presses the sim consumes
+  return {
+    dx: 0, dy: 0, bite: false, act: false, abil: false,
+    build: false, buildMat: false, mark: false,
+  };
 }
 
+// what the build key places, in cycle order
+const BUILD_MATS = [M_PACKED, M_THATCH];
+const BUILD_R = 2.5, BUILD_CD = 8;
+
 function newPlayer(ant) {
-  return { ant, input: newInput(), deathPos: null };
+  // buildMat: selected building material; buildWarned: told "load empty"
+  // during this press already; buildFailT: quiet time after a "nothing to
+  // build on" clank; refuseT: a refused deposit lets the next E (within
+  // this many ticks) just put the item down
+  return {
+    ant, input: newInput(), deathPos: null, buildMat: M_PACKED, buildWarned: false,
+    buildFailT: 0, refuseT: 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +182,7 @@ function newWorld(seed, playerCount) {
     G.bugs.push(def);
   }
 
+  G.colony.recalcChambers();
   G.running = true;
 }
 
@@ -179,14 +195,27 @@ function restoreWorld(d, playerCount) {
   world.m = rleDecode(d.terrain, WORLD_W * WORLD_H);
   resetWorldState(world, d.seed);
   G.tick = d.tick;
+  // v2 saves have no chambers: the generated nest's markers (made by the
+  // Colony constructor) stand in for them. Chambers without `claimed` get
+  // their current area as claimed on the recount below.
   Object.assign(G.colony, d.colony);
   G.colony.tasks = d.colony.tasks || [];
   G.colony.stats = d.colony.stats;
+  if (!Array.isArray(G.colony.chambers) || !G.colony.chambers.length) {
+    G.colony.chambers = new Colony(world.colony).chambers;
+  }
+  G.colony.nextChamberId = Math.max(G.colony.nextChamberId || 1,
+    ...G.colony.chambers.map(c => c.id + 1));
+  // the surface line as dug and built (v2 saves: the generated one)
+  if (d.surf) T.surf.set(int16Decode(d.surf, WORLD_W));
+  T.loadWear(d.wear);
 
   const byId = {};
   for (const s of d.ants) {
     const a = new Ant(s.x, s.y, s.caste);
     a.id = s.id; a.hp = s.hp; a.playerIdx = -1;
+    a.soil = Math.max(0, Math.min(LOAD_CAP, s.soil || 0));
+    a.thatch = Math.max(0, Math.min(LOAD_CAP, s.thatch || 0));
     G.ants.push(a); byId[a.id] = a;
   }
   for (const s of d.brood) {
@@ -224,9 +253,13 @@ function restoreWorld(d, playerCount) {
       ant.playerIdx = p;
       ant.state = 'idle';
     }
-    G.players.push(newPlayer(ant));
+    const pl = newPlayer(ant);
+    const bm = d.buildMats && d.buildMats[p];
+    if (BUILD_MATS.includes(bm)) pl.buildMat = bm;
+    G.players.push(pl);
   }
 
+  G.colony.recalcChambers();
   G.running = true;
   return true;
 }
@@ -254,11 +287,60 @@ function rallyAllies(soldier, radius, foe) {
   return n;
 }
 
+// where a player's bite or build lands: the held direction, or straight
+// ahead when idle, just past the front of the body
+function aimPoint(a, dx, dy) {
+  let ux = dx, uy = dy;
+  if (ux === 0 && uy === 0) ux = a.dir;
+  const len = Math.hypot(ux, uy);
+  ux /= len; uy /= len;
+  return { ux, uy, bx: a.x + ux * (a.hw + 3.5), by: a.y + uy * (a.hh + 3.5) };
+}
+
+// where a build stamp goes: the aim point, stepped outward (up to BUILD_REACH
+// px) past solid ground or an earlier stamp to the first spot with open air
+// at its middle. Returns null when there's nothing but solid in reach.
+const BUILD_REACH = 8;
+function buildAim(a, dx, dy) {
+  const { ux, uy, bx, by } = aimPoint(a, dx, dy);
+  for (let k = 0; k <= BUILD_REACH; k += 2) {
+    const x = bx + ux * k, y = by + uy * k;
+    if (!T.solid(x, y)) return { bx: x, by: y };
+  }
+  return null;
+}
+
+// a pixel test for T.place: never wall anything in. Rejects pixels within a
+// pixel of any ant, brood, bug (and worm/centipede segment) or loose item.
+function buildClear(cx, cy, r) {
+  const reach = r + 16;
+  const boxes = [];
+  const near = e => Math.abs(e.x - cx) < reach && Math.abs(e.y - cy) < reach;
+  const add = e => { if (near(e)) boxes.push(e.x, e.y, e.hw + 1, e.hh + 1); };
+  for (const a of G.ants) if (a.hp > 0) add(a);
+  for (const b of G.brood) if (!b.dead) add(b);
+  for (const it of G.items) if (!it.dead) add(it);
+  for (const b of G.bugs) {
+    if (b.dead) continue;
+    add(b);
+    for (const t of b.trail) if (near(t)) boxes.push(t.x, t.y, 2.5, 2.5);
+  }
+  return (x, y) => {
+    for (let k = 0; k < boxes.length; k += 4) {
+      if (Math.abs(x - boxes[k]) <= boxes[k + 2] && Math.abs(y - boxes[k + 1]) <= boxes[k + 3]) return false;
+    }
+    return true;
+  };
+}
+
+// lang key naming a build material (for messages and the HUD)
+function buildMatKey(m) { return m === M_THATCH ? 'mat_thatch' : 'mat_packed'; }
+
 function controlPlayer(pIdx) {
   const p = G.players[pIdx];
   const a = p.ant;
   const inp = p.input;
-  if (!a || a.hp <= 0) { inp.act = inp.abil = false; return; }
+  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; return; }
   const c = a.def;
 
   const dx = inp.dx, dy = inp.dy;
@@ -300,11 +382,7 @@ function controlPlayer(pIdx) {
   if (inp.bite && a.biteCd <= 0) {
     a.biteCd = c.digCd;
     a.biteAnim = 8;
-    let ux = dx, uy = dy;
-    if (ux === 0 && uy === 0) ux = a.dir;
-    const len = Math.hypot(ux, uy);
-    ux /= len; uy /= len;
-    const bx = a.x + ux * (a.hw + 3.5), by = a.y + uy * (a.hh + 3.5);
+    const { ux, uy, bx, by } = aimPoint(a, dx, dy);
 
     // bite a bug?
     let bit = null, bd = 90;
@@ -318,17 +396,23 @@ function controlPlayer(pIdx) {
       bit.lastHitBy = 'player';
       G.sfx('bite', a.x, a.y);
     } else {
-      const res = T.dig(bx, by, c.digR);
+      const res = T.dig(bx, by, c.digR, c.digPow);
       // second pass right at the body so the ant can sink into its own shaft
-      const res2 = T.dig(a.x + ux * 2, a.y + uy * 2, c.digR * 0.8);
+      // (power 0: packed earth only yields to the real bite)
+      const res2 = T.dig(a.x + ux * 2, a.y + uy * 2, c.digR * 0.8, 0);
       res.count += res2.count; res.leaves += res2.leaves;
       res.fungi += res2.fungi; res.crystals += res2.crystals;
+      res.natural += res2.natural;
+      // the spoil goes into the mandibles as building material
+      a.soil = Math.min(LOAD_CAP, a.soil + res.soil + res2.soil);
+      a.thatch = Math.min(LOAD_CAP, a.thatch + res.thatch + res2.thatch);
       if (res.count > 0) {
         G.fx('dirt', bx, by, 4);
         G.sfx('dig', a.x, a.y);
-        // expansion task: only digging below the surface counts
-        const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, bx)));
-        if (by > T.surf[sx] + 40) G.colony.progress('dig', res.count);
+        // expansion: digging out natural ground inside a marked chamber
+        // claims that room for it (and counts for the dig task). Re-biting
+        // your own packed earth or thatch doesn't.
+        if (G.colony.claimDug(bx, by, res.natural)) G.colony.progress('dig', res.natural);
         // underground harvest: crystals and mushrooms tumble out of the wall
         if (res.crystals > 1) {
           G.items.push(G.makeItem('crystal', bx, by));
@@ -341,11 +425,57 @@ function controlPlayer(pIdx) {
           const it = G.makeItem('leaf', bx, by);
           G.items.push(it);
         }
+      } else if (res.worn > 0) {
+        // packed earth: it cracks, but holds for now
+        G.fx('dirt', bx, by, 2);
+        G.sfx('dig', a.x, a.y);
       } else if (T.digHitsHard(bx, by, c.digR)) {
         G.sfx('clank', a.x, a.y);
         G.fx('clank', bx, by, 1);
       }
     }
+  }
+
+  // building: R picks the material, F (held) lays it where the ant aims
+  if (inp.buildMat) {
+    inp.buildMat = false;
+    const i = BUILD_MATS.indexOf(p.buildMat);
+    p.buildMat = BUILD_MATS[(i + 1) % BUILD_MATS.length];
+    G.msg('m_buildMat', [{ key: buildMatKey(p.buildMat) }], '#e0c080', pIdx);
+    G.sfx('menu', a.x, a.y);
+  }
+  if (!inp.build) p.buildWarned = false;
+  if (inp.build && a.buildCd <= 0) {
+    const load = p.buildMat === M_THATCH ? 'thatch' : 'soil';
+    if (a[load] < 1) {
+      if (!p.buildWarned) {
+        p.buildWarned = true;
+        G.msg(load === 'soil' ? 'm_noSoil' : 'm_noThatch', [], '#ff8040', pIdx);
+      }
+    } else {
+      a.buildCd = BUILD_CD;
+      const aim = buildAim(a, dx, dy);
+      const n = aim ? T.place(aim.bx, aim.by, BUILD_R, p.buildMat,
+        buildClear(aim.bx, aim.by, BUILD_R), Math.floor(a[load])) : 0;
+      if (n > 0) {
+        a[load] -= n;
+        a.biteAnim = 5;
+        G.fx('dirt', aim.bx, aim.by, 2);
+        G.sfx('build', a.x, a.y);
+      } else if (p.buildFailT <= 0) {
+        // no room there (solid, or someone in the way): say so, softly
+        p.buildFailT = 40;
+        G.sfx('clank', a.x, a.y);
+      }
+    }
+  }
+  if (p.buildFailT > 0) p.buildFailT--;
+  if (p.refuseT > 0) p.refuseT--;
+
+  // mark the chamber underfoot (or claim this cavity as a new one)
+  if (inp.mark) {
+    inp.mark = false;
+    G.colony.markChamber(a, pIdx);
   }
 
   // caste ability: soldiers rally, nurses heal
@@ -396,17 +526,24 @@ function controlPlayer(pIdx) {
     const col = G.colony;
     if (a.carry) {
       const it = a.carry;
-      const nearStorage = Math.hypot(a.x - col.storage.x, a.y - col.storage.y) < 28;
+      // the main cache, or any chamber marked as storage
+      const nearStorage = Math.hypot(a.x - col.storage.x, a.y - col.storage.y) < 28 ||
+        !!col.chamberNear(a.x, a.y, 30, 'storage');
       const larva = G.brood.find(l => l.kind === 'larva' && l.hungry && !l.dead &&
         dist2(a.x, a.y, l.x, l.y) < 144);
-      if (nearStorage && ITEM_DEF[it.kind]) {
-        col.deposit(it, a);
+      // a refused deposit (stores full) falls through to feeding a larva;
+      // pressing E again straight after just puts the item down
+      const tryStore = nearStorage && ITEM_DEF[it.kind] && p.refuseT <= 0;
+      if (tryStore && col.deposit(it, a)) {
+        // stored
       } else if (larva && ITEM_DEF[it.kind]) {
         larva.feed();
         it.dead = true; a.carry = null;
         col.progress('feed', 1);
         G.msg('m_fed', [], null, pIdx);
         G.sfx('milk', a.x, a.y);
+      } else if (tryStore) {
+        p.refuseT = 120;
       } else {
         it.carried = null; a.carry = null;
         it.vx = a.dir * 0.6; it.vy = -0.5;

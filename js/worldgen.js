@@ -18,10 +18,13 @@ const M_LEAF = 5;   // diggable (bite through, sometimes drops food)
 const M_ROOT = 6;   // diggable (tree roots -- chewy, so nobody gets trapped)
 const M_FUNGUS = 7; // diggable (cave mushrooms -- hearty food, bite to harvest)
 const M_CRYSTAL = 8;// diggable (buried crystals -- treasure for the colony)
+// player-built materials (never generated; appended so saves keep their bytes)
+const M_PACKED = 9; // diggable but tough (packed earth walls: several bites)
+const M_THATCH = 10;// diggable in one bite (straw and pine needles, light)
 
 function DIGGABLE(m) {
   return m === M_DIRT || m === M_GRASS || m === M_LEAF || m === M_ROOT ||
-         m === M_FUNGUS || m === M_CRYSTAL;
+         m === M_FUNGUS || m === M_CRYSTAL || m === M_PACKED || m === M_THATCH;
 }
 
 // --- seeded rng -------------------------------------------------------------

@@ -2,16 +2,24 @@
 // canvas here (the client's TerrainView draws it), so it runs headless too.
 'use strict';
 
+// bites of strength 1 (a worker's) that it takes to break packed earth
+const PACKED_HP = 3;
+
+// player-built materials (the surface line climbs over these)
+function BUILT(m) { return m === M_PACKED || m === M_THATCH; }
+
 const T = {
   m: null,          // Uint8Array WORLD_W*WORLD_H
   surf: null,
   bgSurf: null,
+  wear: null,       // Map pixel index -> bite damage on packed earth (sparse)
   onEdit: null,     // fn(x0, y0, x1, y1): a rect of pixels changed (client redraws, server relays)
 
   init(world) {
     this.m = world.m;
     this.surf = world.surf;
     this.bgSurf = world.bgSurf;
+    this.wear = new Map();
   },
 
   get(x, y) {
@@ -51,12 +59,18 @@ const T = {
     return false;
   },
 
-  // dig a circle; removes diggable materials only.
-  // returns {count, leaves, fungi, crystals} -- pixels removed by kind
-  dig(cx, cy, r) {
+  // dig a circle; removes diggable materials only. `power` is how hard the
+  // bite is (default 1): packed earth only gives way once its accumulated
+  // wear reaches PACKED_HP, and power 0 leaves it untouched entirely.
+  // returns {count, leaves, fungi, crystals, soil, thatch, worn, natural} --
+  // pixels removed by kind (soil = dirt/grass/root/packed), worn = packed
+  // pixels that took damage but held, natural = removed pixels that weren't
+  // player-built
+  dig(cx, cy, r, power) {
+    if (power === undefined) power = 1;
     cx = Math.round(cx); cy = Math.round(cy);
     const r2 = r * r;
-    let count = 0, leaves = 0, fungi = 0, crystals = 0;
+    let count = 0, leaves = 0, fungi = 0, crystals = 0, soil = 0, thatch = 0, worn = 0, natural = 0;
     const x0 = Math.max(0, cx - Math.ceil(r)), x1 = Math.min(WORLD_W - 1, cx + Math.ceil(r));
     const y0 = Math.max(0, cy - Math.ceil(r)), y1 = Math.min(WORLD_H - 1, cy + Math.ceil(r));
     for (let y = y0; y <= y1; y++) {
@@ -66,16 +80,26 @@ const T = {
         const i = y * WORLD_W + x;
         const mat = this.m[i];
         if (!DIGGABLE(mat)) continue;
-        if (mat === M_LEAF) leaves++;
+        if (mat === M_PACKED) {
+          if (power <= 0) continue;
+          const w = (this.wear.get(i) || 0) + power;
+          if (w < PACKED_HP - 0.01) { this.wear.set(i, w); worn++; continue; }
+          this.wear.delete(i);
+          soil++;
+        } else if (mat === M_LEAF || mat === M_THATCH) thatch++;
         else if (mat === M_FUNGUS) fungi++;
         else if (mat === M_CRYSTAL) crystals++;
+        else soil++;
+        if (mat === M_LEAF) leaves++;
+        if (!BUILT(mat)) natural++;
         this.m[i] = M_AIR;
         count++;
       }
     }
+    // cracks in worn packed earth show too
+    if ((count > 0 || worn > 0) && this.onEdit) this.onEdit(x0, y0, x1, y1);
     // digging away the ground lowers the surface line for that column
     if (count > 0) {
-      if (this.onEdit) this.onEdit(x0, y0, x1, y1);
       for (let x = x0; x <= x1; x++) {
         let s = this.surf[x];
         if (s < y0 - 1 || s > y1 + 1) continue;
@@ -83,7 +107,69 @@ const T = {
         this.surf[x] = s;
       }
     }
-    return { count, leaves, fungi, crystals };
+    return { count, leaves, fungi, crystals, soil, thatch, worn, natural };
+  },
+
+  // build: fill AIR pixels of a disk with `mat`, at most `budget` of them,
+  // skipping any pixel canPlace(x, y) rejects (bodies in the way). Building
+  // on top of the ground raises the surface line. Returns pixels placed.
+  place(cx, cy, r, mat, canPlace, budget) {
+    cx = Math.round(cx); cy = Math.round(cy);
+    const r2 = r * r;
+    const x0 = Math.max(0, cx - Math.ceil(r)), x1 = Math.min(WORLD_W - 1, cx + Math.ceil(r));
+    const y0 = Math.max(0, cy - Math.ceil(r)), y1 = Math.min(WORLD_H - 1, cy + Math.ceil(r));
+    let n = 0, ex0 = x1, ey0 = y1, ex1 = x0, ey1 = y0;
+    for (let y = y0; y <= y1 && n < budget; y++) {
+      for (let x = x0; x <= x1 && n < budget; x++) {
+        const dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy > r2) continue;
+        const i = y * WORLD_W + x;
+        if (this.m[i] !== M_AIR) continue;
+        if (canPlace && !canPlace(x, y)) continue;
+        this.m[i] = mat;
+        this.wear.delete(i);
+        n++;
+        if (x < ex0) ex0 = x;
+        if (x > ex1) ex1 = x;
+        if (y < ey0) ey0 = y;
+        if (y > ey1) ey1 = y;
+      }
+    }
+    if (n > 0) {
+      if (this.onEdit) this.onEdit(ex0, ey0, ex1, ey1);
+      for (let x = ex0; x <= ex1; x++) this.raiseSurf(x);
+    }
+    return n;
+  },
+
+  // the surface climbs over built material stacked on the ground (through
+  // any grass blades under it, but not over trunks or a bridge floating in
+  // mid-air)
+  raiseSurf(x) {
+    let s = this.surf[x], top = s;
+    while (s > 0) {
+      const m = this.m[(s - 1) * WORLD_W + x];
+      if (!BUILT(m) && m !== M_GRASS) break;
+      s--;
+      if (BUILT(m)) top = s;
+    }
+    this.surf[x] = top;
+  },
+
+  // sparse packed-earth wear for saves: flat [index, wear*10, ...]
+  wearList() {
+    const out = [];
+    for (const [i, w] of this.wear) {
+      if (this.m[i] === M_PACKED) out.push(i, Math.round(w * 10));
+    }
+    return out;
+  },
+  loadWear(list) {
+    this.wear = new Map();
+    if (!Array.isArray(list)) return;
+    for (let k = 0; k + 1 < list.length; k += 2) {
+      if (this.m[list[k]] === M_PACKED) this.wear.set(list[k], list[k + 1] / 10);
+    }
   },
 
   // would this circle hit anything diggable?

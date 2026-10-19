@@ -27,6 +27,55 @@ run('G.players[0].input.dx = 0');
 const moved = run('G.players[0].ant.x') - x0;
 console.log('input moved ant:', moved > 5, '(' + moved.toFixed(1) + ' px)');
 
+// building and chamber marking, all through the input struct
+const fails = [];
+const check = (name, ok, info) => {
+  console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (info ? '  ' + info : ''));
+  if (!ok) fails.push(name);
+};
+run(`{
+  const a = G.players[0].ant, j = G.colony.junction;
+  a.x = j.x; a.y = j.y; a.vx = a.vy = 0; a.soil = 0; a.thatch = 0;
+  for (let i = 0; i < 40; i++) stepSim();   // settle onto the junction floor
+}`);
+// dig into the wall to the right: spoil goes into the soil load
+run('G.players[0].input.dx = 1; G.players[0].input.bite = true');
+for (let i = 0; i < 40; i++) run('stepSim()');
+run('G.players[0].input.dx = 0; G.players[0].input.bite = false');
+const soil0 = run('G.players[0].ant.soil');
+check('digging fills the soil load', soil0 > 0 && soil0 <= run('LOAD_CAP'), 'soil ' + soil0);
+// face back down the dug tunnel and build into it
+const packedIn = 'G.colony.junction.x - 40, G.colony.junction.y - 40, 120, 80';
+const countPacked = `((x0, y0, w, h) => { let n = 0;
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) if (T.get(x, y) === M_PACKED) n++;
+  return n; })(${packedIn})`;
+const packed0 = run(countPacked);
+run('G.players[0].input.dx = -1'); run('stepSim()');
+run('G.players[0].input.dx = 0; G.players[0].input.build = true');
+for (let i = 0; i < 30; i++) run('stepSim()');
+run('G.players[0].input.build = false');
+const placed = run(countPacked) - packed0;
+const soil1 = run('G.players[0].ant.soil');
+check('build places packed earth from the load', placed > 0 && soil0 - soil1 === placed,
+  placed + ' px placed, soil ' + soil0 + ' -> ' + soil1);
+check('build never buries the builder', !run('{ const a = G.players[0].ant; T.boxSolid(a.x, a.y, a.hw, a.hh) }'));
+// R: cycle the material
+run('G.players[0].input.buildMat = true'); run('stepSim()');
+check('buildMat cycles to thatch', run('G.players[0].buildMat === M_THATCH && !G.players[0].input.buildMat'));
+run('G.players[0].input.buildMat = true'); run('stepSim()');
+// X at the junction: the generated barracks marker cycles to royal, then
+// (with two royals) the next press removes it
+const nCh = run('G.colony.chambers.length');
+run('G.players[0].input.mark = true'); run('stepSim()');
+const t1 = run(`(G.colony.chamberNear(G.players[0].ant.x, G.players[0].ant.y, CH_NEAR) || {}).type`);
+run('G.players[0].input.mark = true'); run('stepSim()');
+check('mark cycles and removes a chamber', t1 === 'royal' && run('G.colony.chambers.length') === nCh - 1,
+  'barracks -> ' + t1 + ', chambers ' + nCh + ' -> ' + run('G.colony.chambers.length'));
+const caps = run('JSON.stringify(G.colony.caps)');
+console.log('caps after removing the barracks:', caps);
+// put the barracks back so the timing run below matches a fresh colony
+run(`G.colony.addChamber('barracks', G.colony.junction.x, G.colony.junction.y); G.colony.recalcChambers()`);
+
 // event stream: count what a client would be sent
 const counts = {};
 run('G.events.length = 0');
@@ -56,3 +105,6 @@ console.log('avg', (ms / ticks).toFixed(3), 'ms/tick, slowest', slowest.toFixed(
   '-> one world uses ~' + (ms / ticks * 60 / 10).toFixed(1) + '% of a CPU core at 60 Hz');
 console.log('events per second:', Object.entries(counts).map(([k, v]) => k + ' ' + (v / (ticks / 60)).toFixed(1)).join(', '));
 console.log('final:', JSON.stringify(run(`({ day: G.day, food: Math.round(G.colony.food), ants: G.ants.length })`)));
+check('no NaN in colony food', isFinite(run('G.colony.food')));
+console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');
+process.exitCode = fails.length ? 1 : 0;

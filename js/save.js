@@ -36,11 +36,27 @@ function rleDecode(b64, len) {
   return arr;
 }
 
+// the surface line (Int16 per column), as plain little-endian base64
+function int16Encode(arr) {
+  let bin = '';
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i] & 0xFF, (arr[i] >> 8) & 0xFF);
+  return btoa(bin);
+}
+function int16Decode(b64, len) {
+  const bin = atob(b64);
+  const arr = new Int16Array(len);
+  for (let i = 0; i < len && 2 * i + 1 < bin.length; i++) {
+    arr[i] = (bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)) << 16 >> 16;
+  }
+  return arr;
+}
+
 function serializeAnt(a) {
   return {
     id: a.id, caste: a.caste, x: Math.round(a.x), y: Math.round(a.y),
     hp: Math.round(a.hp * 10) / 10, playerIdx: a.playerIdx,
     carryId: a.carry ? a.carry.id : 0,
+    soil: Math.round(a.soil || 0), thatch: Math.round(a.thatch || 0),
   };
 }
 function serializeBrood(b) {
@@ -67,8 +83,11 @@ function serializeItem(it) {
 function saveWorld(slot) {
   if (!G || !G.running) return false;
   const c = G.colony;
+  // v3: chambers, building loads, surface line, packed-earth wear, build
+  // material.
+  // restoreWorld still loads v2 saves (missing fields get defaults).
   const data = {
-    v: 2,
+    v: 3,
     w: WORLD_W, h: WORLD_H,
     seed: G.seed,
     tick: G.tick,
@@ -82,7 +101,16 @@ function saveWorld(slot) {
       lastCrystalTaskDay: c.lastCrystalTaskDay || 0,
       tasks: c.tasks.filter(t => !t.done),
       stats: c.stats,
+      chambers: c.chambers.map(ch => {
+        const o = { id: ch.id, type: ch.type, x: ch.x, y: ch.y, area: ch.area, claimed: ch.claimed };
+        if (ch.anchor) o.anchor = true;
+        return o;
+      }),
+      nextChamberId: c.nextChamberId,
     },
+    surf: int16Encode(T.surf),
+    wear: T.wearList(),
+    buildMats: G.players.map(p => p.buildMat),
     nextId: ENT_ID,
     ants: G.ants.filter(a => a.hp > 0).map(serializeAnt),
     brood: G.brood.filter(b => !b.dead).map(serializeBrood),

@@ -2,12 +2,89 @@
 'use strict';
 
 const DAY_LEN = 60 * 240; // 4 minutes of frames per day
-const POP_CAP = 30;
+
+// chambers: marked cavities whose dug-out area sets the colony's capacity
+const CH_TYPES = ['storage', 'nursery', 'barracks', 'royal'];
+const CH_R = 32;          // a chamber's area is the air inside this disk
+const CH_MIN_AREA = 300;  // smaller is cramped: counts as zero
+const CH_ROOM = 4;        // only air within reach of a (2*4+1) px open square
+                          // counts: a room, not the tunnels running through it
+const CH_NEAR = 40;       // X within this of a marker (in sight) cycles its type
+const CH_SPACING = 50;    // new markers keep this far from the others
+const CH_DEPTH = 30;      // markers go at least this far below the ground
+const CH_RECALC = 480;    // ticks between area recounts
+
+// scratch grids for roomyGrid(): a square around a marker, wide enough for
+// the opening to see every pixel of the disk
+const ROOM_R = CH_R + 2 * CH_ROOM;
+const ROOM_S = 2 * ROOM_R + 1;
+const ROOM_A = new Uint8Array(ROOM_S * ROOM_S);
+const ROOM_B = new Uint8Array(ROOM_S * ROOM_S);
+
+// is there open air all along the line between two points? (the last few
+// pixels at each end are let off: a marker may sit in a settled floor)
+function airLine(x0, y0, x1, y1) {
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0));
+  for (let k = 3; k <= n - 3; k++) {
+    const t = k / n;
+    if (T.solid(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
+  }
+  return true;
+}
+
+// one sliding-window pass over the grid, along rows (dir 1) or columns
+// (dir ROOM_S): dst = at least `need` of src's 2*CH_ROOM+1 window are set
+function roomPass(src, dst, dir, need) {
+  const S = ROOM_S, H = CH_ROOM, step = dir === 1 ? S : 1;
+  for (let l = 0; l < S; l++) {
+    const base = l * step;
+    let c = 0;
+    for (let k = 0; k < H; k++) c += src[base + k * dir];
+    for (let k = 0; k < S; k++) {
+      if (k + H < S) c += src[base + (k + H) * dir];
+      if (k - H - 1 >= 0) c -= src[base + (k - H - 1) * dir];
+      dst[base + k * dir] = c >= need ? 1 : 0;
+    }
+  }
+}
+
+// the roomy air around (cx, cy): ROOM_A[(y-cy+ROOM_R)*ROOM_S + x-cx+ROOM_R].
+// Erode (every pixel of the window open), then dilate (any pixel set).
+function roomyGrid(cx, cy) {
+  const S = ROOM_S, R = ROOM_R, A = ROOM_A, B = ROOM_B;
+  for (let j = 0; j < S; j++) {
+    const wy = cy - R + j;
+    for (let i = 0; i < S; i++) {
+      const wx = cx - R + i;
+      A[j * S + i] = wx >= 0 && wx < WORLD_W && wy >= 0 && wy < WORLD_H &&
+        wy >= T.bgSurf[wx] && T.m[wy * WORLD_W + wx] === M_AIR ? 1 : 0;
+    }
+  }
+  const full = 2 * CH_ROOM + 1;
+  roomPass(A, B, 1, full); roomPass(B, A, S, full); // erode
+  roomPass(A, B, 1, 1); roomPass(B, A, S, 1);       // dilate
+  // the opening may only keep pixels that were air to begin with: it can't
+  // (dilation stays inside the eroded squares), so A is ready
+  return A;
+}
 
 class Colony {
   constructor(info) {
     // info: { x, entrance, junction, queenCh, storage, nursery }
     Object.assign(this, info);
+    // the generated nest's chambers become the first markers; the NPC
+    // anchors above (storage, nursery, queenCh) stay the navigation targets.
+    // `anchor` markers keep their type and are never removed.
+    this.chambers = [];
+    this.nextChamberId = 1;
+    this.addChamber('storage', info.storage.x, info.storage.y, true);
+    this.addChamber('nursery', info.nursery.x, info.nursery.y, true);
+    this.addChamber('royal', info.queenCh.x, info.queenCh.y, false);
+    if (!this.chamberNear(info.junction.x, info.junction.y, CH_SPACING)) {
+      this.addChamber('barracks', info.junction.x, info.junction.y, false);
+    }
+    this.caps = null;     // derived from chamber areas by recalcChambers()
+    this.fullMsgT = 0;
     this.food = 60;
     this.score = 0;
     this.eggT = 1800;
@@ -22,7 +99,159 @@ class Colony {
     };
   }
 
+  // ---- chambers and capacity ----------------------------------------------
+  addChamber(type, x, y, anchor) {
+    const ch = { id: this.nextChamberId++, type, x: Math.round(x), y: Math.round(y), area: 0 };
+    if (anchor) ch.anchor = true;
+    this.chambers.push(ch);
+    return ch;
+  }
+
+  // nearest chamber marker within r of (x, y), or null
+  chamberNear(x, y, r, type) {
+    let best = null, bd = r * r;
+    for (const ch of this.chambers) {
+      if (type && ch.type !== type) continue;
+      const d = dist2(x, y, ch.x, ch.y);
+      if (d < bd) { bd = d; best = ch; }
+    }
+    return best;
+  }
+
+  // roomy air pixels in the disk around (x, y), below the original ground.
+  // "Roomy" is a morphological opening: air that some open (2*CH_ROOM+1) px
+  // square covers, so a tunnel crossing the disk adds nothing while a real
+  // hollow counts in full. Where two disks overlap a pixel belongs to the
+  // nearer marker only, so packing markers together doesn't count the same
+  // hollow twice.
+  areaAt(x, y, self) {
+    const others = this.chambers.filter(c => c !== self &&
+      dist2(x, y, c.x, c.y) < 4 * CH_R * CH_R);
+    const R2 = CH_R * CH_R;
+    const cx = Math.round(x), cy = Math.round(y);
+    const room = roomyGrid(cx, cy);
+    const S = ROOM_S, R = ROOM_R;
+    let n = 0;
+    for (let py = cy - CH_R; py <= cy + CH_R; py++) {
+      for (let px = cx - CH_R; px <= cx + CH_R; px++) {
+        const d = dist2(px, py, x, y);
+        if (d > R2 || !room[(py - cy + R) * S + (px - cx + R)]) continue;
+        let mine = true;
+        for (const o of others) if (dist2(px, py, o.x, o.y) < d) { mine = false; break; }
+        if (mine) n++;
+      }
+    }
+    return n;
+  }
+
+  // recount every chamber and derive the colony's capacities from them.
+  // A chamber only counts the room the colony has claimed (`claimed`: its
+  // roomy area when marked, plus what players dug out inside it since), so
+  // the NPCs' path-digging doesn't hollow out capacity on its own.
+  // Tuned so a generated nest (storage ~1050, nursery ~950, junction
+  // barracks ~350-650, royal ~1400 px) gives food ~125, brood 5, population
+  // ~17-20: a fresh colony soon fills it, and grows by digging and marking.
+  recalcChambers() {
+    const sum = { storage: 0, nursery: 0, barracks: 0, royal: 0 };
+    for (const ch of this.chambers) {
+      const room = this.areaAt(ch.x, ch.y, ch);
+      if (!(ch.claimed >= 0)) ch.claimed = room;
+      ch.area = Math.min(room, ch.claimed);
+      if (ch.area >= CH_MIN_AREA) sum[ch.type] += ch.area;
+    }
+    this.caps = {
+      // never below what the queen needs to keep laying (eggs need 30)
+      food: Math.max(40, Math.round(20 + sum.storage * 0.1)),
+      brood: 1 + Math.floor(sum.nursery / 200),
+      pop: Math.max(10, Math.floor((sum.nursery + sum.barracks) / 75)),
+      // ticks between eggs: a roomier royal chamber, a busier queen
+      eggT: Math.round(2700 * Math.max(0.5, Math.min(2.5, 1550 / Math.max(1, sum.royal)))),
+      soldiers: 0.1 + Math.min(0.3, sum.barracks / 10000),  // soldier share
+    };
+  }
+
+  // a player dug n pixels of natural ground at (x, y): inside a chamber's
+  // disk that's new room claimed for it. Returns true if it counted.
+  claimDug(x, y, n) {
+    const ch = this.chamberNear(x, y, CH_R);
+    if (!ch || n <= 0) return false;
+    ch.claimed = (ch.claimed || 0) + n;
+    return true;
+  }
+
+  // the marker the mark key acts on for an ant at (x, y): the nearest one
+  // within CH_NEAR that the ant can see through open air (a marker behind
+  // solid earth belongs to another cavity)
+  markTarget(x, y) {
+    let best = null, bd = CH_NEAR * CH_NEAR;
+    for (const ch of this.chambers) {
+      const d = dist2(x, y, ch.x, ch.y);
+      if (d < bd && airLine(x, y, ch.x, ch.y)) { bd = d; best = ch; }
+    }
+    return best;
+  }
+
+  // player pIdx pressed the mark key with ant `a`: cycle the chamber marker
+  // in sight, or found a new storage chamber in this cavity
+  markChamber(a, pIdx) {
+    const refuse = key => {
+      G.msg(key, [], '#ff8040', pIdx);
+      G.sfx('clank', a.x, a.y);
+    };
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, a.x)));
+    if (a.y < T.bgSurf[sx] + CH_DEPTH) { refuse('m_markDeep'); return; }
+    const ch = this.markTarget(a.x, a.y);
+    if (ch) {
+      // the generated nest's storage and nursery are where the NPCs haul
+      // food and brood: their types stay put
+      if (ch.anchor) {
+        G.msg('m_chamberFixed', [{ key: 'ch_' + ch.type }], '#ff8040', pIdx);
+        G.sfx('clank', a.x, a.y);
+        return;
+      }
+      if (ch.type === 'royal' && this.chambers.filter(c => c.type === 'royal').length <= 1) {
+        refuse('m_lastRoyal');
+        return;
+      }
+      const i = CH_TYPES.indexOf(ch.type);
+      if (i === CH_TYPES.length - 1) {
+        this.chambers = this.chambers.filter(c => c !== ch);
+        G.msg('m_chamberGone', [], '#e0c080', pIdx);
+      } else {
+        ch.type = CH_TYPES[i + 1];
+        G.msg('m_chamberType', [{ key: 'ch_' + ch.type }], '#e0c080', pIdx);
+      }
+      G.sfx('mark', a.x, a.y);
+      this.recalcChambers();
+      return;
+    }
+    if (this.chamberNear(a.x, a.y, CH_SPACING)) { refuse('m_markClose'); return; }
+    const area = this.areaAt(a.x, a.y, null);
+    if (area < CH_MIN_AREA) { refuse('m_markCramped'); return; }
+    // (no dig-task credit: claiming a hollow isn't digging one)
+    this.addChamber('storage', a.x, a.y, false);
+    this.recalcChambers();
+    G.msg('m_chamberNew', [{ key: 'ch_storage' }], '#80ff80', pIdx);
+    G.sfx('mark', a.x, a.y);
+    G.fx('sparkle', a.x, a.y - 6, 5);
+  }
+
+  // stores at capacity? Excess food is kept, but deposits are refused
+  storageFull() { return this.food >= this.caps.food; }
+
+  // returns false when the stores are full (the item stays carried).
+  // A deposit only fills the stores up to the cap: the rest spills.
   deposit(item, who) {
+    if (item.kind !== 'crystal' && this.storageFull()) {
+      if (who && who.playerIdx >= 0) {
+        G.msg('m_storageFull', [], '#ff8040', who.playerIdx);
+        G.sfx('drop', who.x, who.y);
+      } else if (this.fullMsgT <= 0 && G.nearPlayer(this.storage.x, this.storage.y) < 400) {
+        G.msg('m_storageFullNpc', [], '#ff8040');
+        this.fullMsgT = 3600;
+      }
+      return false;
+    }
     if (item.kind === 'crystal') {
       // treasure, not food: the colony hoards it for pure score
       this.score += 80;
@@ -30,18 +259,20 @@ class Colony {
       G.msg('m_crystal', [80], '#80e0ff');
       G.sfx('task');
     } else {
-      const v = Number(item.value) || 0;
+      const v = Math.min(Number(item.value) || 0, this.caps.food - this.food);
       this.food += v;
       this.stats.foodGathered += v;
       if (who && who.playerIdx >= 0) {
         this.progress('gather', 1);
-        G.msg('m_foodStored', [item.value], null, who.playerIdx);
+        G.msg('m_foodStored', [Math.round(v)], null, who.playerIdx);
       }
     }
     item.dead = true;
     if (who) who.carry = null;
-    G.fx('sparkle', this.storage.x, this.storage.y - 6, 5);
-    G.sfx('deposit', this.storage.x, this.storage.y, 280);
+    const at = who || this.storage;
+    G.fx('sparkle', at.x, at.y - 6, 5);
+    G.sfx('deposit', at.x, at.y, 280);
+    return true;
   }
 
   spawnAdult(x, y) {
@@ -49,7 +280,8 @@ class Colony {
     const soldiers = ants.filter(a => a.caste === 'soldier').length;
     const nurses = ants.filter(a => a.caste === 'nurse').length;
     let caste = 'worker';
-    if (soldiers < ants.length * 0.2 && Math.random() < 0.4) caste = 'soldier';
+    // barracks space raises the colony's appetite for soldiers
+    if (soldiers < ants.length * this.caps.soldiers && Math.random() < 0.4) caste = 'soldier';
     else if (nurses < ants.length * 0.15 && Math.random() < 0.35) caste = 'nurse';
     const a = new Ant(x, y, caste);
     G.ants.push(a);
@@ -61,6 +293,10 @@ class Colony {
   update() {
     if (!isFinite(this.food)) { console.error('colony.food was NaN'); this.food = 0; }
     const pop = G.ants.filter(a => a.hp > 0).length;
+    if (this.fullMsgT > 0) this.fullMsgT--;
+
+    // digging (and building) reshapes the chambers: recount now and then
+    if (!this.caps || G.tick % CH_RECALC === 0) this.recalcChambers();
 
     // digging erodes the nest: keep the colony's mental map (chamber anchors,
     // tunnel waypoints) settled on the floors that actually exist now
@@ -92,11 +328,12 @@ class Colony {
     if (queen) {
       this.eggT--;
       const broodCount = G.brood.filter(b => !b.dead).length;
-      if (this.eggT <= 0 && this.food >= 30 && broodCount < 6 && pop + broodCount < POP_CAP) {
+      const caps = this.caps;
+      if (this.eggT <= 0 && this.food >= 30 && broodCount < caps.brood && pop + broodCount < caps.pop) {
         this.food -= 10;
         const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg');
         G.brood.push(e);
-        this.eggT = 2700;
+        this.eggT = caps.eggT;
         G.msg('m_eggLaid');
         G.sfx('lay', queen.x, queen.y, 300);
       }

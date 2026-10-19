@@ -20,6 +20,27 @@ const path = require('path');
   check('font has Æ Ø Å', await page.evaluate(() =>
     !!(FONT_GLYPHS['Æ'] && FONT_GLYPHS['Ø'] && FONT_GLYPHS['Å'])));
 
+  // every UI string, in both languages, is drawable with the bitmap font
+  const missing = await page.evaluate(() => {
+    const out = new Set();
+    const scan = s => {
+      for (const ch of String(s).replace(/\{\d+\}/g, '').toUpperCase()) {
+        if (!FONT_GLYPHS[ch] && ch !== '\n') out.add(ch);
+      }
+    };
+    for (const k in STR) STR[k].forEach(scan);
+    for (const t of [CASTE_NAME, BUG_NAME_DEF, BROOD_NAME_DEF]) for (const k in t) t[k].forEach(scan);
+    for (const lang of [0, 1]) {
+      LANG = lang;
+      introText().forEach(scan);
+      helpText().forEach(([line]) => scan(line));
+    }
+    LANG = 0;
+    return [...out];
+  });
+  check('font has glyphs for every UI string', missing.length === 0);
+  if (missing.length) console.log('  missing glyphs:', JSON.stringify(missing));
+
   // title menu: 5th item toggles language
   check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'START GAME'));
   for (let i = 0; i < 4; i++) { // down to LANGUAGE

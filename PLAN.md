@@ -92,7 +92,9 @@ that march out from their own nest. This is also the foundation for versus.
    running; the sim runs headless in Node (`test/nodesim.js`). No new gameplay;
    `smoke.js` and `longsim.js` keep passing.
 1. **Building and chambers.** Soil load, packed earth, thatch, chamber marking,
-   capacity.
+   capacity. **Done** (soil/thatch loads, F/R/X, packed-earth wear, chamber
+   areas drive food/brood/population/egg-rate caps, save v3). Thatch is plain
+   building material for now; its mound warmth effect moves to Phase 2.
 2. **Seasons, objectives, the real rival colony, queen rules, crystal upgrades.**
 3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing.
 4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus.
