@@ -8,7 +8,7 @@ the rival colony is set dressing, crystals are just score, and death is free.
 The full version gives it a goal (one colony year ending in a nuptial
 flight), a core loop (dig → designate chambers → capacity → growth), free-form
 building, a real rival colony, and online multiplayer hosted on the VPS at
-`ants.lektorensrud.no`.
+`maur.lektorensrud.no`.
 
 ## Decisions (2026-10-19)
 
@@ -129,6 +129,10 @@ that march out from their own nest. This is also the foundation for versus.
      screen; brighter red ants; a contested-fruit label; nodesim is seeded.
      To Phase 3: raid/rival balance against active players, red
      princesses and a red nuptial flight, raid warnings in the HUD/arrow.
-3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing.
+3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing. **Done** (7-hint spring tutorial, guide arrow `G`, regrouped HUD + plurals, charcoal-vs-scarlet factions and enemy health bars, raid banner + FOOD STOLEN, map icons + nest inset, readable labels/gates/shelters/fruit, idle colonies grow past the pop-cap stall, ~80% less mound erosion, soldier rally escort, red queen 1.5x and a wound-ledger bonus, save v6).
 4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus.
+   Carried over from Phase 3: hints and the guide arrow per connected player
+   (they are per viewer already), red princesses and a red nuptial flight, a
+   raid-defence hint, and a look at the ~7% slower early foraging that
+   came with the erosion fix.
 5. **Deploy to the VPS.**

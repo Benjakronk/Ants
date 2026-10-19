@@ -14,7 +14,12 @@ const BIND = {
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['Tab'],
   build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'], obj: ['KeyO'],
+  arrow: ['KeyG'], skipHint: ['KeyH'],
 };
+
+// per-viewer settings kept in this browser (never in the sim or a save)
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
 // client-side state, layered onto the simulation's G
 Object.assign(G, {
@@ -37,7 +42,111 @@ Object.assign(G, {
   prevState: 'title',
   gameOverStats: null,
   frame: 0,           // render frame counter (blinking, title animation)
+  arrowOn: lsGet('maur_arrow') !== 'off',   // the guide arrow (G)
+  gates: [],          // ant gate spots for the map, rescanned while it's open
+  gatesT: 0,
 });
+
+// an overlay that owns the screen: the HUD toasts wait (their timers stop)
+// and the hint and arrow keep out of its way
+function overlayOpen() { return !!(G.objScreen || G.takeover || G.showMap); }
+
+// ---------------------------------------------------------------------------
+// the tutorial: spring of year 1 teaches the basics one hint at a time. A
+// hint stays up until the player does the thing (seen in the local ant and
+// in the sim's messages to this player), then the next one comes. Progress
+// (per save slot) and the on/off switch live in this browser only. What the
+// player does ahead of its hint is remembered: that hint, when it comes,
+// shows just long enough to read and ticks itself off.
+// ---------------------------------------------------------------------------
+const TUT_STEPS = ['move', 'dig', 'food', 'build', 'mark', 'obj', 'tab'];
+const TUT_GAP = 70;      // frames the tick mark shows before the next hint
+const TUT_END = 420;     // frames the closing hint shows
+const TUT_KNOWN = 150;   // frames a hint already done ahead shows before its tick
+const Tut = {
+  on: lsGet('maur_hints') !== 'off',
+  step: TUT_STEPS.length,    // TUT_STEPS.length: done (and hidden)
+  gapT: 0, endT: 0, shownT: 0,
+  seen: {},                  // what the player did this tick (see tutSaw)
+  did: {},                   // what the player has done so far (food, built, cycled, mark, obj, tab)
+  moved: 0, climbed: false, lastX: null, lastLoad: 0,
+
+  key() { return 'maur_tut_' + G.slot; },
+  // a world entered: a fresh one starts at the first hint; a saved one where
+  // it left off (a world older than the hints, past its first day: done)
+  start(fresh) {
+    const v = fresh ? null : lsGet(this.key());
+    this.step = fresh ? 0 : v !== null ? Math.max(0, Math.min(TUT_STEPS.length, Number(v) || 0))
+      : G.day >= 1 ? TUT_STEPS.length : 0;
+    if (fresh) lsSet(this.key(), '0');
+    this.reset();
+    this.did = {};
+    this.endT = 0;
+  },
+  reset() {
+    this.gapT = 0; this.shownT = 0; this.seen = {};
+    this.moved = 0; this.climbed = false;
+    this.lastX = null; this.lastLoad = 0;
+  },
+  setOn(on) {
+    this.on = on;
+    lsSet('maur_hints', on ? 'on' : 'off');
+  },
+  // the hint showing now (its step name, 'done' for the closing one), or null
+  active() {
+    if (!this.on || G.year > 1) return null;
+    if (this.step < TUT_STEPS.length) return TUT_STEPS[this.step];
+    return this.endT > 0 ? 'done' : null;
+  },
+  next() {
+    this.step++;
+    lsSet(this.key(), String(this.step));
+    this.reset();
+    if (this.step >= TUT_STEPS.length) this.endT = TUT_END;
+  },
+  // once per tick in play: has the player done what the hint asks?
+  update() {
+    const me = localAnt();
+    const seen = this.seen;
+    this.seen = {};
+    if (this.endT > 0 && !overlayOpen()) this.endT--;
+    const st = this.active();
+    if (!st || st === 'done' || !me) return;
+    // (everything the hints ask for counts whichever hint is up)
+    const pl = G.players[LOCAL], did = this.did;
+    const load = me.soil + me.thatch;
+    if (pl.input.build && load < this.lastLoad) did.built = true;
+    this.lastLoad = load;
+    if (seen.m_buildMat) did.cycled = true;
+    if (seen.m_foodStored || seen.m_fed || seen.m_storageFull) did.food = true;   // (full stores: it got there)
+    if (seen.m_chamberNew || seen.m_chamberType || seen.m_shelterNew) did.mark = true;
+    if (seen.obj) did.obj = true;
+    if (seen.tab) did.tab = true;
+    if (st !== 'dig' && (me.soil >= 20 || me.thatch >= 20)) did.dug = true;
+    if (tookAction('skipHint')) { this.next(); Sfx.play('menu'); return; }
+    if (this.gapT > 0) { if (--this.gapT === 0) this.next(); return; }
+    // (walking only: a switch to another ant is no stroll)
+    if (this.lastX !== null && Math.abs(me.x - this.lastX) < 4) this.moved += Math.abs(me.x - this.lastX);
+    this.lastX = me.x;
+    if (me.climbing || me.ceiling) this.climbed = true;
+    if (!overlayOpen()) this.shownT++;
+    let ok = false, now = false;   // now: done while this hint showed
+    switch (st) {
+      case 'move': ok = now = this.moved > 60 && (this.climbed || this.moved > 400); break;
+      case 'dig': ok = me.soil >= 20 || me.thatch >= 20; now = ok && !did.dug; break;
+      case 'food': ok = !!did.food; now = !!(seen.m_foodStored || seen.m_fed || seen.m_storageFull); break;
+      case 'build': ok = !!(did.built && did.cycled); now = !!(seen.m_buildMat || pl.input.build); break;
+      case 'mark': ok = !!did.mark; now = !!(seen.m_chamberNew || seen.m_chamberType || seen.m_shelterNew); break;
+      case 'obj': ok = !!did.obj; now = !!seen.obj; break;
+      case 'tab': ok = !!did.tab; now = !!seen.tab; break;
+    }
+    // (done ahead of time: shown a moment first, so it is read)
+    if (ok && (now || this.shownT >= TUT_KNOWN)) { this.gapT = TUT_GAP; Sfx.play('select'); }
+  },
+};
+// something the hints wait for happened (a sim message to this player, or
+// a client action like opening the O screen)
+function tutSaw(what) { Tut.seen[what] = true; }
 
 function localAnt() {
   const p = G.players[LOCAL];
@@ -115,7 +224,10 @@ function listenDist(x, y) {
 function drainEvents() {
   for (const e of G.events) {
     if (e.t === 'msg') {
-      if (e.to < 0 || e.to === LOCAL) pushMsg(msgText(e), e.color);
+      if (e.to < 0 || e.to === LOCAL) {
+        pushMsg(msgText(e), e.color);
+        if (e.to === LOCAL) tutSaw(e.key);
+      }
     } else if (e.t === 'sfx') {
       if (e.x == null || listenDist(e.x, e.y) < e.r) Sfx.play(e.k);
     } else if (e.t === 'fx') {
@@ -190,12 +302,14 @@ function enterWorld(slot) {
 function startNewWorld(slot) {
   newWorld((Math.random() * 0xFFFFFFFF) >>> 0, 1);
   enterWorld(slot);
+  Tut.start(true);
 }
 
 function startSavedWorld(slot) {
   const d = loadWorldData(slot);
   if (!d || !restoreWorld(d, 1)) return false;
   enterWorld(slot);
+  Tut.start(false);
   return true;
 }
 
@@ -262,6 +376,7 @@ function updatePlay() {
     G.objScreen = { page: 0, sel: 0 };
     Sfx.play('menu');
     clearInput();
+    tutSaw('obj');
   } else if (tookAction('swap') && localAnt()) {
     const a = localAnt();
     if (!openTakeover(a.x, a.y, true)) pushMsg(L('m_noSwitch'), '#ff8040');
@@ -272,11 +387,12 @@ function updatePlay() {
 
   stepSim();
   drainEvents();
+  Tut.update();
   Particles.update();
   if (G.flyers.length) updateFlyers();
 
-  // messages
-  for (const m of G.msgs) m.t--;
+  // messages (they wait while an overlay covers them, and show after)
+  if (!overlayOpen()) for (const m of G.msgs) m.t--;
   G.msgs = G.msgs.filter(m => m.t > 0);
 
   updateCamera();
@@ -297,7 +413,13 @@ function updatePlay() {
     if (saveWorld(G.slot)) { pushMsg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
   }
 
-  if (tookPress('KeyM')) G.showMap = !G.showMap;
+  if (tookPress('KeyM')) { G.showMap = !G.showMap; G.gatesT = 0; }
+  if (tookAction('arrow')) {
+    G.arrowOn = !G.arrowOn;
+    lsSet('maur_arrow', G.arrowOn ? 'on' : 'off');
+    pushMsg(L('m_arrow', L(G.arrowOn ? 'w_on' : 'w_off')), '#ffe080');
+    Sfx.play('menu');
+  }
   if (tookPress('Escape') || tookPress('KeyP')) {
     if (G.takeover && G.takeover.live) { G.takeover = null; Sfx.play('menu'); }
     else { G.state = 'pause'; G.menuSel = 0; Sfx.play('menu'); }
@@ -367,6 +489,7 @@ function updateTakeover() {
   if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.types.length; Sfx.play('menu'); }
   if (tookPress('Enter') || tookPress('Space')) {
     if (takeOver(LOCAL, tk.types[tk.sel].caste, tk.refX, tk.refY)) {
+      if (tk.live) tutSaw('tab');
       G.takeover = null;
       G.cam.fx = undefined; // snap the camera to the new body
       Sfx.play('select');
@@ -410,32 +533,36 @@ function drawObjScreen() {
   const col = G.colony;
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  // (a tall panel over the HUD too: the milestones, then the colony's
+  // standing below a groove, the newest message, the keys)
+  const PX = 10, PY = 6, PW = 300, PH = 186;
   // the world runs on under the panel: a hurt (or freezing) ant flashes it red
   const me = localAnt();
   if (me && me.flash > 0) {
     ctx.fillStyle = '#e03020';
-    ctx.fillRect(8, 18, 304, 158);
+    ctx.fillRect(PX - 2, PY - 2, PW + 4, PH + 4);
   }
-  bevelPanel(10, 20, 300, 154);
+  bevelPanel(PX, PY, PW, PH);
   const title = os.page === 0 ? L('ui_objectives') : L('ui_upgrades');
-  drawTextCS(ctx, title, VIEW_W / 2, 26, '#ffa040');
-  drawText(ctx, '<', 18, 26, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
-  drawText(ctx, '>', 297, 26, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
-  drawText(ctx, (os.page + 1) + '/2', 270, 26, '#706050');
+  drawTextCS(ctx, title, VIEW_W / 2, PY + 6, '#ffa040');
+  drawText(ctx, '<', 18, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
+  drawText(ctx, '>', 297, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
+  drawText(ctx, (os.page + 1) + '/2', 270, PY + 6, '#706050');
+  const R = 300;   // right edge of the text column
 
   if (os.page === 0) {
     const s = G.season;
-    drawText(ctx, SEASON_ICON[s] + ' ' + L('ui_seasonYear', seasonName(s), G.year), 20, 40, SEASON_COLOR[s]);
+    drawText(ctx, SEASON_ICON[s] + ' ' + L('ui_seasonYear', seasonName(s), G.year), 20, 26, SEASON_COLOR[s]);
     const left = SEASON_DAYS - G.seasonDay;
-    const ls = left <= 1 ? L('ui_lastDay') : L('ui_daysLeft', left);
-    drawText(ctx, ls, 300 - textWidth(ls), 40, '#c8b890');
-    let y = 56;
+    const ls = left <= 1 ? L('ui_lastDay') : Ln('ui_daysLeft', left);
+    drawText(ctx, ls, R - textWidth(ls), 26, '#c8b890');
+    let y = 40;
     for (const o of G.objectives.list) {
       const def = objDef(o.id);
       drawText(ctx, o.done ? '\x19' : '-', 20, y, o.done ? '#80ff80' : '#a09070');
       drawText(ctx, objName(o), 30, y, o.done ? '#80ff80' : '#e8e0c8');
       const pr = objProgress(o);
-      drawText(ctx, pr, 300 - textWidth(pr), y, o.done ? '#80ff80' : '#ffe080');
+      drawText(ctx, pr, R - textWidth(pr), y, o.done ? '#80ff80' : '#ffe080');
       // a food goal the stores can't hold yet says so (taking turns with
       // the end-of-season note)
       const capped = !o.done && FOOD_GOALS.includes(o.id) && col.caps && o.need > col.caps.food;
@@ -447,37 +574,36 @@ function drawObjScreen() {
         drawText(ctx, L('ui_atEnd'), 30, y + 9, '#806e58');
         y += 9;
       }
-      y += 14;
+      y += 12;
     }
-    y = Math.max(y, 108);
-    drawText(ctx, L('ui_mound', col.mound.size), 20, y, '#d8b860');
-    const seal = col.sealed ? L('ui_sealed') : L('ui_open');
-    drawText(ctx, seal, 300 - textWidth(seal), y, col.sealed ? '#80ff80' : '#ff9040');
-    drawText(ctx, L('ui_crystals', col.crystals), 20, y + 10, '#80e0ff');
-    const ms = L('ui_milestones', G.objectives.yearDone);
-    drawText(ctx, ms, 300 - textWidth(ms), y + 10, '#ffe040');
+    // the colony's standing, in two columns under a groove
+    groove(18, 106, 284);
+    const rowL = (str, yy, color) => drawText(ctx, str, 20, yy, color);
+    const rowR = (str, yy, color) => drawText(ctx, str, R - textWidth(str), yy, color);
+    rowL(L('ui_mound', col.mound.size), 111, '#d8b860');
+    rowR(col.sealed ? L('ui_sealed') : L('ui_open'), 111, col.sealed ? '#80ff80' : '#ff9040');
+    rowL(L('ui_crystals', col.crystals), 121, '#80e0ff');
+    rowR(L('ui_milestones', G.objectives.yearDone), 121, '#ffe040');
+    rowL(L('ui_score', col.score), 131, '#a0c8a0');
     // the rival: a rough head count (nobody counts red ants one by one)
     const r = G.rival;
     if (r) {
       const rs = r.defeated ? L(r.slain ? 'ui_rivalSlain' : 'ui_rivalDied')
         : L('ui_rival', Math.max(5, Math.round(r.members().length / 5) * 5));
-      drawText(ctx, rs, 20, y + 20, r.defeated ? '#80ff80' : '#ff7060');
+      rowL(rs, 141, r.defeated ? '#80ff80' : '#ff7060');
       // once found, how her health stands (the bonus is a long campaign)
       const q = !r.defeated && r.queenSeen ? r.queen() : null;
-      if (q) {
-        const qs = L('ui_rivalQueen', Math.max(1, Math.round(q.hp / q.maxHp * 100)));
-        drawText(ctx, qs, 300 - textWidth(qs), y + 20, '#ff9080');
-      }
+      if (q) rowR(L('ui_rivalQueen', Math.max(1, Math.round(q.hp / q.maxHp * 100))), 141, '#ff9080');
     }
     // the next flight: this spring's if it hasn't flown yet, else next year's
     const flightYear = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year ? G.year : G.year + 1;
-    drawTextC(ctx, L('ui_yearGoal', flightYear), VIEW_W / 2, y + 31, '#ff90e0');
-    drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 162, '#a09070');
+    drawTextC(ctx, L('ui_yearGoal', flightYear), VIEW_W / 2, 153, '#ff90e0');
+    drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
   } else {
-    drawText(ctx, '\x13 ' + L('ui_crystals', col.crystals), 20, 40, '#80e0ff');
+    drawText(ctx, '\x13 ' + L('ui_crystals', col.crystals), 20, 26, '#80e0ff');
     for (let i = 0; i < UPGRADE_IDS.length; i++) {
       const id = UPGRADE_IDS[i];
-      const y = 58 + i * 16;
+      const y = 44 + i * 16;
       const sel = i === os.sel;
       const lv = col.upg[id] || 0;
       if (sel) drawText(ctx, '\x06', 18, y, '#ffe040');
@@ -488,23 +614,32 @@ function drawObjScreen() {
       }
       const cost = col.upgradeCost(id);
       const cs = cost === Infinity ? L('ui_max') : '\x13' + cost;
-      drawText(ctx, cs, 300 - textWidth(cs), y,
+      drawText(ctx, cs, R - textWidth(cs), y,
         cost === Infinity ? '#80ff80' : cost <= col.crystals ? '#80e0ff' : '#806e58');
     }
-    drawTextC(ctx, L('upd_' + UPGRADE_IDS[os.sel]), VIEW_W / 2, 128, '#c8b890');
-    drawTextC(ctx, L('ui_upgKeys'), VIEW_W / 2, 162, '#a09070');
+    groove(18, 110, 284);
+    drawTextC(ctx, L('upd_' + UPGRADE_IDS[os.sel]), VIEW_W / 2, 118, '#c8b890');
+    drawTextC(ctx, L('ui_upgKeys'), VIEW_W / 2, 179, '#a09070');
   }
   // the newest message (a purchase, a refusal, the cold) would hide under
-  // the panel: a status line shows it here
+  // the panel: a status line shows it here, clear of the keys
   const m = G.msgs[G.msgs.length - 1];
   if (m) {
     ctx.globalAlpha = Math.min(1, m.t / 60);
     const w = textWidth(m.text) + 8;
     ctx.fillStyle = '#241a10';
-    ctx.fillRect(Math.round((VIEW_W - w) / 2), 148, w, 11);
-    drawTextC(ctx, m.text, VIEW_W / 2, 150, m.color);
+    ctx.fillRect(Math.round((VIEW_W - w) / 2), 164, w, 11);
+    drawTextC(ctx, m.text, VIEW_W / 2, 166, m.color);
     ctx.globalAlpha = 1;
   }
+}
+
+// a carved groove dividing a panel (dark line over a light one)
+function groove(x, y, w) {
+  ctx.fillStyle = '#241a10';
+  ctx.fillRect(x, y, w, 1);
+  ctx.fillStyle = '#7a6044';
+  ctx.fillRect(x, y + 1, w, 1);
 }
 
 // milestones whose goal is food in the stores
@@ -599,8 +734,17 @@ function drawStructures(camx, camy, vw, vh) {
     ctx.fillStyle = G.isWinter() ? '#708060' : '#8cc85a';
     ctx.fillRect(sx - 2, ey - 9, 5, 3);
     ctx.fillRect(sx - 1, ey - 10, 3, 1);
+    // a little thatched dome over the herd, its doorway dark
+    for (let dx = -10; dx <= 10; dx++) {
+      const h = Math.round(8 * Math.sqrt(1 - (dx / 10.5) * (dx / 10.5)));
+      for (let j = 0; j < h; j++) {
+        const door = Math.abs(dx) <= 3 && j < 5;
+        ctx.fillStyle = door ? '#2a1c10' : j === h - 1 ? '#8a6a30' : ((dx + j) >> 1) & 1 ? '#d8b860' : '#b89040';
+        ctx.fillRect(ex + 2 + dx, ey + 2 - j, 1, 1);
+      }
+    }
     // the herd grazing (huddled and still in winter)
-    for (const o of [-6, -1, 4, 8]) {
+    for (const o of [-1, 3, -13, 15]) {
       const bob = G.isWinter() ? 0 : ((G.tick >> 5) + o) & 1;
       ctx.fillStyle = '#8cc85a';
       ctx.fillRect(ex + o - 1, ey + 1 - bob, 3, 2);
@@ -620,6 +764,35 @@ function drawStructures(camx, camy, vw, vh) {
       ctx.fillRect(mx, fy - 1, 1, 2);
       ctx.fillStyle = '#c8ecd0';
       ctx.fillRect(mx - 1, fy - 2, 3, 1);
+    }
+  }
+  // this summer's fallen fruit, where its pieces lie
+  const cs = G.contested;
+  if (cs && cs.active) {
+    const ex = Math.round(cs.x - camx), ey = Math.round(cs.y - camy) + 2;
+    if (ex > -20 && ex < vw + 20 && ey > -20 && ey < vh + 20) drawFruit(ex, ey);
+  }
+}
+
+// the contested fruit: a fat windfall with a stalk and a leaf (bottom at y)
+const FRUIT = [
+  '   ss    ',
+  '   s gg  ',
+  ' rRRRRr  ',
+  'rRHHRRRr ',
+  'rRHRRRRrr',
+  'rRRRRRRrr',
+  ' rRRRRrr ',
+  '  rrrrr  ',
+];
+const FRUIT_COL = { s: '#5a3e22', g: '#54a838', r: '#7a1828', R: '#c8304a', H: '#ff8c98' };
+function drawFruit(ex, ey) {
+  for (let j = 0; j < FRUIT.length; j++) {
+    for (let i = 0; i < FRUIT[j].length; i++) {
+      const c = FRUIT_COL[FRUIT[j][i]];
+      if (!c) continue;
+      ctx.fillStyle = c;
+      ctx.fillRect(ex - 4 + i, ey - FRUIT.length + j, 1, 1);
     }
   }
 }
@@ -713,8 +886,7 @@ function drawViewport(vx, vy, vw, vh) {
   for (const b of G.bugs) b.draw(ctx, camx, camy);
   for (const a of G.ants) if (a.playerIdx < 0) a.draw(ctx, camx, camy);
   for (const pp of G.players) if (pp.ant) pp.ant.draw(ctx, camx, camy);
-  drawFoeBars(camx, camy, vw, vh);
-  drawSiteLabel(camx, camy, me);
+  drawFoeBars(camx, camy, vw, vh, me);
 
   Particles.draw(ctx, camx, camy);
   if (G.flyers.length) drawFlyers(camx, camy);
@@ -757,11 +929,15 @@ function drawViewport(vx, vy, vw, vh) {
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, vw, vh);
     }
-    if (me) {
-      drawChamberLabels(camx, camy, me, markCh);
-      drawShelterLabel(camx, camy, me);
-    }
   }
+  // labels over the dark (each in a free spot), then the guide arrows
+  Labels.clear(camx, camy, vw, vh);
+  if (me) {
+    drawChamberLabels(camx, camy, me, markCh);
+    drawShelterLabel(camx, camy, me);
+    drawSiteLabel(camx, camy, me);
+  }
+  drawGuides(camx, camy, vw, vh, me);
 
   ctx.restore();
 }
@@ -779,28 +955,78 @@ const CH_LOOK = {
   fungus:   { icon: '\x14', color: '#a8d4b2' },
 };
 
-// a small health bar over the enemy queen once she's been found, and over
-// any enemy ant bitten in the last few seconds: a fight shows its progress
-function drawFoeBars(camx, camy, vw, vh) {
+// a small health bar over an enemy that is hurt: the red queen once she's
+// been found, an enemy ant bitten in the last few seconds, and a hurt big
+// bug (spider, centipede, wasp, beetle) bitten lately or near the player's
+// ant -- a fight shows its progress
+// Returns how many bars it drew.
+function drawFoeBars(camx, camy, vw, vh, me) {
+  let n = 0;
+  const bar = (e, w, up, color) => {
+    const ex = Math.round(e.x - camx) - (w >> 1), ey = Math.round(e.y - camy) - up;
+    if (ex < -w || ex > vw || ey < -4 || ey > vh) return;
+    n++;
+    ctx.fillStyle = '#1a1008';
+    ctx.fillRect(ex, ey, w, 3);
+    ctx.fillStyle = color;
+    ctx.fillRect(ex + 1, ey + 1, Math.max(1, Math.round((w - 2) * e.hp / e.maxHp)), 1);
+  };
   for (const a of G.ants) {
     if (a.hp <= 0 || a.colony === G.colony || a.hp >= a.maxHp) continue;
     const queen = a.caste === 'queen' && a.colony.queenSeen;
     if (!queen && !(G.tick - (a.hitT || -1e9) < FOE_BAR_T)) continue;
-    const w = queen ? 16 : 8;
-    const ex = Math.round(a.x - camx) - w / 2, ey = Math.round(a.y - camy) - (queen ? 12 : 9);
-    if (ex < -w || ex > vw || ey < -4 || ey > vh) continue;
-    ctx.fillStyle = '#1a1008';
-    ctx.fillRect(ex, ey, w, 3);
-    ctx.fillStyle = queen ? '#ff4060' : '#e08040';
-    ctx.fillRect(ex + 1, ey + 1, Math.max(1, Math.round((w - 2) * a.hp / a.maxHp)), 1);
+    bar(a, queen ? 16 : 8, queen ? 12 : 9, queen ? '#ff4060' : '#e08040');
   }
+  for (const b of G.bugs) {
+    if (b.dead || !b.predator || b.hp >= b.maxHp) continue;
+    const near = me && dist2(b.x, b.y, me.x, me.y) < 110 * 110;
+    if (!near && !(G.tick - (b.hitT || -1e9) < FOE_BAR_T)) continue;
+    bar(b, b.kind === 'beetle' || b.kind === 'centipede' ? 14 : 10, b.hh + 6, '#e0c040');
+  }
+  return n;
 }
+
+// labels in the world (chamber names, the aphid shelters, the fruit) are
+// placed one by one, each nudged up or down to a free spot or else left out,
+// so no label is ever drawn over another
+const Labels = {
+  rects: [],
+  // (the screen's own text keeps its place: the task lines, the toasts, the
+  // hint panel, the raid banner -- and the guide arrow over its target)
+  clear(camx, camy, vw, vh) {
+    this.rects.length = 0;
+    const me = localAnt(), t = me && G.arrowOn && !overlayOpen() ? guideTarget() : null;
+    if (t) {
+      const sp = edgeSpot(t.x, t.y, camx, camy, vw, vh);
+      if (sp.sight) this.rects.push({ x: sp.x - 6, y: sp.y - 7, w: 13, h: 15 });
+    }
+    this.rects.push({ x: 0, y: 0, w: VIEW_W, h: 22 });
+    if (G.msgs.length) this.rects.push({ x: 20, y: 23, w: VIEW_W - 40, h: G.msgs.length * 10 });
+    const hint = !!(Tut.active() && localAnt());
+    if (hint) this.rects.push({ x: 8, y: 142, w: 304, h: 34 });
+    const raid = raidAlert();
+    if (raid && raid.banner) this.rects.push({ x: 0, y: hint ? 131 : 159, w: VIEW_W, h: 13 });
+  },
+  // lines: [[text, color], ...] stacked upward from y (the bottom line's top)
+  place(cx, y, lines) {
+    const w = Math.max(...lines.map(l => textWidth(l[0]))) + 2;
+    const h = lines.length * 9;
+    for (const dy of [0, -9, 9, -18, 18]) {
+      const r = { x: cx - (w >> 1), y: y + dy - h + 9, w, h };
+      if (this.rects.some(o => r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h)) continue;
+      this.rects.push(r);
+      for (let i = 0; i < lines.length; i++) drawTextCS(ctx, lines[i][0], cx, r.y + i * 9, lines[i][1]);
+      return true;
+    }
+    return false;
+  },
+};
 
 // this summer's fallen fruit: named when the player's ant is near it
 function drawSiteLabel(camx, camy, me) {
   const cs = G.contested;
-  if (!me || !cs || !cs.active || Math.abs(cs.x - me.x) > 120 || Math.abs(cs.y - me.y) > 60) return;
-  drawTextCS(ctx, L('ui_siteLabel'), Math.round(cs.x - camx), Math.round(cs.y - camy) - 22, '#ffb0c0');
+  if (!me || !cs || !cs.active || Math.abs(cs.x - me.x) > 170 || Math.abs(cs.y - me.y) > 90) return;
+  Labels.place(Math.round(cs.x - camx), Math.round(cs.y - camy) - 22, [[L('ui_siteLabel'), '#ffb0c0']]);
 }
 
 // the floor under a marker (markers sit at a chamber's middle)
@@ -832,35 +1058,35 @@ function drawChamberSigns(camx, camy, vw, vh, target) {
   }
 }
 
-// the name (and a cramped warning) of one sign: the one X would act on, or
-// else the nearest near the player's ant. One label never overlaps another.
+// the names (and cramped warnings) of the signs near the player's ant: the
+// one X would act on first, then the nearest few, none over another
 function drawChamberLabels(camx, camy, me, target) {
-  let ch = target, bd = Infinity;
-  if (!ch) {
-    for (const c of G.colony.chambers) {
-      if (Math.abs(c.x - me.x) > 70 || Math.abs(c.y - me.y) > 50) continue;
-      const d = dist2(c.x, c.y, me.x, me.y);
-      if (d < bd) { bd = d; ch = c; }
-    }
+  const near = G.colony.chambers.filter(c => c !== target &&
+    Math.abs(c.x - me.x) < 110 && Math.abs(c.y - me.y) < 70);
+  near.sort((a, b) => dist2(a.x, a.y, me.x, me.y) - dist2(b.x, b.y, me.x, me.y));
+  const list = (target ? [target] : []).concat(near.slice(0, 3));
+  for (const ch of list) {
+    const ex = Math.round(ch.x - camx), ey = Math.round(chamberFloor(ch) - camy);
+    const lines = [[L('ch_' + ch.type), CH_LOOK[ch.type].color]];
+    if (chamberCramped(ch)) lines.unshift([L('w_cramped'), '#ff5040']);
+    Labels.place(ex, ey - 25, lines);
   }
-  if (!ch) return;
-  const ex = Math.round(ch.x - camx), ey = Math.round(chamberFloor(ch) - camy);
-  drawTextCS(ctx, L('ch_' + ch.type), ex, ey - 25, CH_LOOK[ch.type].color);
-  if (chamberCramped(ch)) drawTextCS(ctx, L('w_cramped'), ex, ey - 34, '#ff5040');
 }
 
-// an aphid shelter near the player's ant: its name, and whether it sleeps
-// (winter) or is short of thatch (it falls apart below half the need)
+// the aphid shelters near the player's ant: the name, and whether one
+// sleeps (winter) or is short of thatch (it falls apart below half the need)
 function drawShelterLabel(camx, camy, me) {
   const col = G.colony;
-  const sh = col.shelters.find(s => Math.abs(s.x - me.x) < 60 && Math.abs(s.y - me.y) < 40);
-  if (!sh) return;
-  const ex = Math.round(sh.x - 12 - camx), ey = Math.round(sh.y - camy);
-  drawTextCS(ctx, L('ui_shelter'), ex, ey - 24, '#8cc85a');
-  if (col.thatchNear(sh.x, sh.y, SHELTER_R) < SHELTER_THATCH) {
-    if ((G.frame >> 4) % 2) drawTextCS(ctx, L('ui_shelterWeak'), ex, ey - 33, '#ff5040');
-  } else if (G.isWinter()) {
-    drawTextCS(ctx, L('ui_shelterIdle'), ex, ey - 33, '#a0c0e0');
+  for (const sh of col.shelters) {
+    if (Math.abs(sh.x - me.x) > 120 || Math.abs(sh.y - me.y) > 70) continue;
+    const ex = Math.round(sh.x - 12 - camx), ey = Math.round(sh.y - camy);
+    const lines = [[L('ui_shelter'), '#8cc85a']];
+    if (col.thatchNear(sh.x, sh.y, SHELTER_R) < SHELTER_THATCH) {
+      if ((G.frame >> 4) % 2) lines.unshift([L('ui_shelterWeak'), '#ff5040']);
+    } else if (G.isWinter()) {
+      lines.unshift([L('ui_shelterIdle'), '#a0c0e0']);
+    }
+    Labels.place(ex, ey - 24, lines);
   }
 }
 
@@ -895,52 +1121,87 @@ function drawLoadBar(x, y, w, pct, color, sel) {
   ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * Math.max(0, Math.min(1, pct))), 3);
 }
 
+// the bottom HUD in three groups divided by grooves: your ant (caste,
+// health, what it carries, its building loads and the selected material),
+// the colony (ants, brood, food against their caps; crystals) and the time
+// (season and year, day of the season and the clock)
+const HUD_G1 = 108, HUD_G2 = 226;
+
 function drawHud() {
   const y = VIEW_H - HUD_H;
   bevelPanel(0, y, VIEW_W, HUD_H);
+  for (const gx of [HUD_G1, HUD_G2]) {
+    ctx.fillStyle = '#241a10';
+    ctx.fillRect(gx, y + 3, 1, HUD_H - 6);
+    ctx.fillStyle = '#7a6044';
+    ctx.fillRect(gx + 1, y + 3, 1, HUD_H - 6);
+  }
   const col = G.colony;
   const caps = col.caps;
 
-  // player panel: health, caste, carried item
+  // your ant
   const me = localAnt();
   const pl = G.players[LOCAL];
-  const px2 = 4;
-  drawText(ctx, 'P1', px2, y + 4, '#ffe080');
   if (me) {
+    drawText(ctx, casteName(me.caste), 4, y + 4, '#e8d8b0');
     // out in the winter cold: the bar frosts over (blinking)
     const freezing = G.isWinter() && !col.sheltered(me) && (G.frame >> 3) % 2;
-    drawHpBar(px2 + 14, y + 5, 40, Math.max(0, me.hp / me.maxHp), freezing ? '#a0d8ff' : null);
-    drawText(ctx, casteName(me.caste), px2 + 14, y + 14, '#b0a080');
-    if (me.carry) {
-      drawItem(ctx, { kind: me.carry.kind, x: 0, y: 0 },
-        -(px2 + 62), -(y + 8));
-    }
-    // building loads: soil above (packed earth and gates), thatch below
+    drawText(ctx, '\x01', 4, y + 14, freezing ? '#a0d8ff' : '#e05040');
+    drawHpBar(11, y + 15, 36, Math.max(0, me.hp / me.maxHp), freezing ? '#a0d8ff' : null);
+    if (me.carry) drawItem(ctx, { kind: me.carry.kind, x: 0, y: 0 }, -54, -(y + 17));
+    // building loads: soil above (packed earth and gates), thatch below;
+    // the selected material's bar is framed in gold, its swatch beside it
     const thatchSel = pl.buildMat === M_THATCH;
-    drawText(ctx, '\x0F', 74, y + 4, thatchSel ? '#806040' : '#c08850');
-    drawLoadBar(81, y + 5, 28, me.soil / LOAD_CAP, '#a06a3c', !thatchSel);
-    drawText(ctx, '\x10', 74, y + 14, thatchSel ? '#e8c870' : '#a08848');
-    drawLoadBar(81, y + 15, 28, me.thatch / LOAD_CAP, '#d8b860', thatchSel);
+    drawText(ctx, '\x0F', 61, y + 4, thatchSel ? '#806040' : '#c08850');
+    drawLoadBar(68, y + 5, 26, me.soil / LOAD_CAP, '#a06a3c', !thatchSel);
+    drawText(ctx, '\x10', 61, y + 14, thatchSel ? '#e8c870' : '#a08848');
+    drawLoadBar(68, y + 15, 26, me.thatch / LOAD_CAP, '#d8b860', thatchSel);
+    drawMatSwatch(98, thatchSel ? y + 14 : y + 4, pl.buildMat);
   } else {
-    drawText(ctx, L('w_dead'), px2 + 14, y + 5, '#e03020');
+    drawTextC(ctx, L('w_dead'), HUD_G1 / 2, y + 9, '#e03020');
   }
 
-  // colony: ants and brood against capacity, food against the stores
+  // the colony: ants and brood against capacity, food against the stores
   const ants = col.members().length;
   const brood = col.broodCount();
   const food = Math.floor(col.food);
+  const cx = HUD_G1 + 5, cx2 = HUD_G1 + 62;
   // the queen stops laying once adults + brood fill the room: warn on that
-  drawText(ctx, '\x02' + ants + '/' + caps.pop, 116, y + 4,
-    ants + brood >= caps.pop ? '#ff9040' : '#e8c8a0');
-  drawText(ctx, '\x0E' + brood + '/' + caps.brood, 116, y + 14, brood >= caps.brood ? '#ff9040' : '#d0c8b0');
-  drawText(ctx, '\x03' + food + '/' + caps.food, 162, y + 4, food >= caps.food ? '#ff9040' : '#d8b878');
-  drawText(ctx, L('w_score') + ' ' + col.score, 162, y + 14, '#a0c8a0');
-  drawText(ctx, SEASON_ICON[G.season] + L('ui_seasonDay', seasonName(G.season), G.seasonDay + 1), 234, y + 4,
-    G.isNight() ? '#9090b8' : SEASON_COLOR[G.season]);
-  if (me) drawText(ctx, L(buildMatKey(pl.buildMat)), 234, y + 14, '#a09070');
+  drawText(ctx, '\x02' + ants + '/' + caps.pop, cx, y + 4, ants + brood >= caps.pop ? '#ff9040' : '#e8c8a0');
+  drawText(ctx, '\x0E' + brood + '/' + caps.brood, cx2, y + 4, brood >= caps.brood ? '#ff9040' : '#d0c8b0');
+  drawText(ctx, '\x03' + food + '/' + caps.food, cx, y + 14, food >= caps.food ? '#ff9040' : '#d8b878');
+  drawText(ctx, '\x13' + col.crystals, cx2, y + 14, '#80e0ff');
+
+  // the time
+  const tx = HUD_G2 + 5;
+  drawText(ctx, SEASON_ICON[G.season] + L('ui_hudSeason', seasonName(G.season), G.year), tx, y + 4, SEASON_COLOR[G.season]);
+  const night = G.isNight();
+  drawText(ctx, (night ? '\x05' : '\x04') + L('ui_hudClock', (G.seasonDay + 1) + '/' + SEASON_DAYS, clockText()),
+    tx, y + 14, night ? '#9090b8' : '#c8b890');
+}
+
+// the time of day as a clock: the day breaks around five in the morning
+function clockText() {
+  const min = Math.floor(((5 + G.tod() * 24) % 24) * 6) * 10;
+  const h = Math.floor(min / 60), m = min % 60;
+  return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+}
+
+// a 5x5 sample of a building material (the selected one, by its load bar)
+function drawMatSwatch(x, y, mat) {
+  ctx.fillStyle = '#1a1008';
+  ctx.fillRect(x - 1, y - 1, 7, 7);
+  for (let j = 0; j < 5; j++) {
+    for (let i = 0; i < 5; i++) {
+      const c = matColor(mat, i + 3, j + 2, pxHash(i + 7, j + 3), 50, 0);
+      ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+      ctx.fillRect(x + i, y + j, 1, 1);
+    }
+  }
 }
 
 function drawTaskAndMsgs() {
+  if (G.showMap || G.objScreen) return;   // (the map and the O panel cover the screen)
   // current task, top left
   let ty = 3;
   const t = G.colony.tasks.find(t => !t.done) || G.colony.tasks.find(t => t.done && t.doneT > 0);
@@ -953,20 +1214,18 @@ function drawTaskAndMsgs() {
     if (!blink) drawTextS(ctx, str, 4, ty, t.done ? '#ffe040' : '#a8e8a0');
     ty += 10;
   }
-  // the season's next milestone, one line (O shows them all)
-  // crystals, top right
-  const cs = '\x13' + G.colony.crystals;
-  drawTextS(ctx, cs, VIEW_W - 5 - textWidth(cs), 3, '#80e0ff');
+  // the season's next milestone, one line (O shows them all), with the key
+  // that opens the full list where it fits
   const o = G.objectives && G.objectives.list.find(o => !o.done);
   if (o) {
-    // with the key that opens the full list, where it fits
     let str = '\x06' + objName(o) + ' ' + objProgress(o);
-    if (4 + textWidth(str + ' (O)') < VIEW_W - 12 - textWidth(cs)) str += ' (O)';
+    if (4 + textWidth(str + ' (O)') < VIEW_W - 8) str += ' (O)';
     drawTextS(ctx, str, 4, ty, '#ffd890');
   }
 
-  // messages (not over the O panel: its status line shows the newest)
-  if (G.objScreen) return;
+  // overlays hide the toasts (they wait, and show after) and the alerts
+  if (overlayOpen()) return;
+  const raid = raidAlert();
   let my = 24;
   for (const m of G.msgs) {
     ctx.globalAlpha = Math.min(1, m.t / 60);
@@ -974,81 +1233,427 @@ function drawTaskAndMsgs() {
     ctx.globalAlpha = 1;
     my += 10;
   }
+  const hint = drawHint();
+  if (raid && raid.banner) drawRaidBanner(raid, hint ? 132 : 160);
 }
 
+// the tutorial's hint, in a panel just above the HUD. Returns true if drawn.
+function drawHint() {
+  const st = Tut.active();
+  if (!st || !localAnt()) return false;
+  const lines = L('h_' + st).split('\n');
+  const y0 = 144;
+  bevelPanel(10, y0, 300, 30);
+  if (Tut.gapT > 0) {
+    // done: a tick mark while the next one waits
+    drawTextCS(ctx, '\x19', VIEW_W / 2, y0 + 11, '#80ff80');
+    return true;
+  }
+  if (st !== 'done') {
+    drawText(ctx, L('ui_hintHead', Tut.step + 1, TUT_STEPS.length), 14, y0 + 3, '#a09070');
+    const k = L('ui_hintKeys');
+    drawText(ctx, k, 306 - textWidth(k), y0 + 3, '#806e58');
+  }
+  drawTextC(ctx, lines[0], VIEW_W / 2, y0 + 12, '#ffe8a0');
+  if (lines[1]) drawTextC(ctx, lines[1], VIEW_W / 2, y0 + 21, '#ffe8a0');
+  return true;
+}
+
+// a raid on the players' nest: where its raiders are on average, how close
+// the nearest has come, what it has stolen -- or null. Marching, or on the
+// way home with our food (flee: then only the laden thieves count). banner:
+// worth the big banner -- the raid is close (the sim has warned of it), or
+// the thieves are still near enough to chase; before that just the marker.
+function raidAlert() {
+  const r = G.rival;
+  const raid = r && r.raid;
+  if (!raid || G.colonies[raid.target] !== G.colony) return null;
+  const flee = raid.phase !== 'march';
+  if (flee && !(raid.stolen > 0)) return null;
+  let n = 0, sx = 0, sy = 0, near = Infinity;
+  for (const a of G.ants) {
+    if (!a.raiding || a.colony !== r || a.hp <= 0) continue;
+    if (flee && !(a.carry && a.carry.kind === 'morsel')) continue;
+    n++; sx += a.x; sy += a.y;
+    near = Math.min(near, Math.abs(a.x - G.colony.x));
+  }
+  if (!n) return null;
+  const banner = flee ? near < RAID_FLEE_R : !!raid.warned || near < 600;
+  return { x: sx / n, y: sy / n, n, near, stolen: raid.stolen || 0, flee, banner };
+}
+const RAID_FLEE_R = 700;   // fleeing thieves within this of the nest keep the banner up
+
+// the raid alert: a blinking banner saying where the raid is, with arrows
+// toward it
+function drawRaidBanner(raid, y) {
+  const key = raid.flee ? 'ui_raidFlee' : raid.stolen > 0 ? 'ui_raidSteal' : raid.near < 220 ? 'ui_raidNest' : 'ui_raidMarch';
+  const str = L(key);
+  const me = localAnt();
+  const vx = me ? me.x : G.cam.x + VIEW_W / 2;
+  const dir = raid.x < vx - 40 ? -1 : raid.x > vx + 40 ? 1 : 0;
+  const w = textWidth(str) + 36;
+  const x = Math.round((VIEW_W - w) / 2);
+  const on = (G.frame >> 4) % 2;
+  ctx.fillStyle = on ? '#7a1408' : '#4a0c04';
+  ctx.fillRect(x, y, w, 11);
+  ctx.fillStyle = '#ff5040';
+  ctx.fillRect(x, y, w, 1);
+  ctx.fillRect(x, y + 10, w, 1);
+  drawTextC(ctx, str, VIEW_W / 2, y + 2, on ? '#ffe0c0' : '#ff9070');
+  if (dir) drawText(ctx, dir < 0 ? '<<' : '>>', dir < 0 ? x + 3 : x + w - 14, y + 2, '#ffe040');
+}
+
+// ---------------------------------------------------------------------------
+// the guide arrow (G): where the season's next milestone wants you. While a
+// hint asks for food it shows the food (and then the stores); a load of food
+// always goes to the stores; with the season's work done, the red nest.
+// Returns { x, y, color, icon } or null. A target down in a nest the
+// player isn't in yet is shown at that nest's entrance first (the arrow
+// points in a straight line, and through the mound is no way in).
+// ---------------------------------------------------------------------------
+function guideTarget() {
+  const me = localAnt();
+  // (the first two hints are about the keys: no arrow yet to distract)
+  const st = Tut.active();
+  if (st === 'move' || st === 'dig') return null;
+  const t = me ? guidePoint(me) : null;
+  if (!t) return null;
+  const nest = buriedInNest(t);
+  if (nest && buriedInNest(me) !== nest) return { x: nest.entrance.x, y: nest.entrance.y, color: t.color, icon: t.icon };
+  return t;
+}
+
+// the guide arrow's real target, wherever it lies
+function guidePoint(me) {
+  const col = G.colony;
+  const carryFood = me.carry && ITEM_DEF[me.carry.kind];
+  if (Tut.active() === 'food') return carryFood ? storageTarget(me) : foodTarget(me);
+  if (carryFood) return storageTarget(me);
+  if (col.active('gather')) return foodTarget(me);
+  const o = G.objectives && G.objectives.list.find(o => !o.done);
+  const at = (p, color, icon) => ({ x: p.x, y: p.y, color, icon });
+  if (o) {
+    switch (o.id) {
+      case 'food100': case 'stockpile': return foodTarget(me);
+      // (a new chamber is dug somewhere down in the nest: there, first)
+      case 'storage2': return nestDeep(me) ? null : at(col.junction, '#d8b878', '\x03');
+      case 'raise': case 'pop25': return at(col.nursery, '#efe9d8', '\x0E');
+      case 'mound': case 'sealed': return at(col.entrance, '#d8b860', '\x10');
+      case 'royal': case 'princess': return at(royalTarget(col), '#ff90e0', '\x11');
+      case 'queen': { const q = col.queen(); return q ? at(q, '#ff90e0', '\x11') : null; }
+      case 'contested': {
+        const cs = G.contested;
+        return cs && cs.active ? at(cs, '#ffb040', '\x03') : null;
+      }
+      case 'centipedes': {
+        let best = null, bd = 700 * 700;
+        for (const b of G.bugs) {
+          if (b.kind !== 'centipede' || b.dead) continue;
+          const d = dist2(b.x, b.y, me.x, me.y);
+          if (d < bd) { bd = d; best = b; }
+        }
+        return best ? at(best, '#ff6050', '!') : null;
+      }
+    }
+  }
+  // the season's work done (or nothing to point at), or a player already
+  // close to the red nest: the red queen once found, else her nest
+  const r = G.rival;
+  if (r && !r.defeated && (!o || Math.abs(me.x - r.x) < 700)) {
+    const q = r.queenSeen ? r.queen() : null;
+    return at(q || r.entrance, '#ff6050', '\x11');
+  }
+  return null;
+}
+
+// the nearest storage (the main cache or a storage chamber)
+function storageTarget(me) {
+  const col = G.colony;
+  let best = col.storage, bd = dist2(me.x, me.y, col.storage.x, col.storage.y);
+  for (const ch of col.chambers) {
+    if (ch.type !== 'storage' || ch.area < CH_MIN_AREA) continue;
+    const d = dist2(me.x, me.y, ch.x, ch.y);
+    if (d < bd) { bd = d; best = ch; }
+  }
+  return { x: best.x, y: best.y, color: '#d8b878', icon: '\x03' };
+}
+
+// the nearest loose food on the colony's side of the forest
+function foodTarget(me) {
+  let best = null, bd = Infinity;
+  for (const it of G.items) {
+    if (it.dead || it.carried || !ITEM_DEF[it.kind] || !ITEM_DEF[it.kind].food) continue;
+    if (Math.abs(it.x - G.colony.x) > FORAGE_R) continue;
+    const d = dist2(me.x, me.y, it.x, it.y);
+    if (d < bd) { bd = d; best = it; }
+  }
+  return best ? { x: best.x, y: best.y, color: '#a8e8a0', icon: '\x03' } : null;
+}
+
+// the roomiest royal chamber (the queen's own if none is marked)
+function royalTarget(col) {
+  let best = null;
+  for (const ch of col.chambers) if (ch.type === 'royal' && (!best || ch.area > best.area)) best = ch;
+  return best || col.queenCh;
+}
+
+// a small pixel arrow centred on (cx, cy) pointing along angle a, dark-rimmed
+function drawArrow(cx, cy, a, color) {
+  const ca = Math.cos(a), sa = Math.sin(a);
+  for (const pass of [0, 1]) {
+    ctx.fillStyle = pass ? color : '#100804';
+    const g = pass ? 0 : 1;
+    for (let py = -7; py <= 7; py++) {
+      for (let px = -7; px <= 7; px++) {
+        const u = px * ca + py * sa, v = -px * sa + py * ca;
+        const head = u <= 4 + g && u >= -1 - g && Math.abs(v) <= (4 - u) * 0.75 + g;
+        const tail = u < -1 && u >= -5 - g && Math.abs(v) <= 1 + g;
+        if (head || tail) ctx.fillRect(Math.round(cx + px), Math.round(cy + py), 1, 1);
+      }
+    }
+  }
+}
+
+// the guide arrow, and the raid's red marker: at the viewport's edge toward
+// a target out of sight, or bobbing over one in sight
+function drawGuides(camx, camy, vw, vh, me) {
+  if (overlayOpen() || !me) return;
+  drawYouRing(camx, camy, me);
+  const raid = raidAlert();
+  if (raid) drawEdgeMarker(raid.x, raid.y - 6, camx, camy, vw, vh, me, '#ff4030', '!');
+  if (!G.arrowOn) return;
+  const t = guideTarget();
+  if (t) drawEdgeMarker(t.x, t.y, camx, camy, vw, vh, me, t.color, t.icon);
+}
+
+// a new body (a switch, a world entered): a ring closing in on it for a
+// couple of seconds, so you see at once which ant you are now
+const YOU_T = 120;
+const You = { ant: null, t: 0 };
+function drawYouRing(camx, camy, me) {
+  if (me !== You.ant) { You.ant = me; You.t = YOU_T; }
+  if (You.t <= 0) return;
+  You.t--;
+  const r = 6 + You.t / 10, cx = me.x - camx, cy = me.y - camy;
+  ctx.fillStyle = (G.frame >> 2) % 2 ? '#ffe080' : '#fff8d0';
+  for (let i = 0; i < 16; i++) {
+    const a = i / 16 * Math.PI * 2 + You.t * 0.03;
+    ctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r * 0.8), 1, 1);
+  }
+}
+
+// where a guide arrow for world point (wx, wy) goes on screen: { x, y, a,
+// sight } -- bobbing over the point when it is in sight (sight true, a
+// pointing down), else on the viewport's edge pointing its way
+function edgeSpot(wx, wy, camx, camy, vw, vh) {
+  const ex = wx - camx, ey = wy - camy;
+  const top = 24, bot = Tut.active() ? 40 : 10, side = 8;
+  if (ex >= side && ex <= vw - side && ey >= top && ey <= vh - bot) {
+    return { x: Math.round(ex), y: Math.round(ey) - 12 - ((G.frame >> 3) % 2), a: Math.PI / 2, sight: true };
+  }
+  const cx = vw / 2, cy = (top + vh - bot) / 2;
+  const dx = ex - cx, dy = ey - cy;
+  const k = Math.min(dx ? (vw / 2 - side) / Math.abs(dx) : Infinity,
+    dy ? (dy < 0 ? cy - top : vh - bot - cy) / Math.abs(dy) : Infinity);
+  return { x: cx + dx * k, y: cy + dy * k, a: Math.atan2(dy, dx), sight: false };
+}
+
+function drawEdgeMarker(wx, wy, camx, camy, vw, vh, me, color, icon) {
+  const sp = edgeSpot(wx, wy, camx, camy, vw, vh);
+  // (in sight and right beside us: no arrow needed)
+  if (sp.sight && dist2(wx, wy, me.x, me.y) < 26 * 26) return;
+  drawArrow(sp.x, sp.y, sp.a, (G.frame >> 4) % 2 ? color : '#fff8d0');
+  // off screen, the target's sign just inside the arrow
+  if (icon && !sp.sight) {
+    const ca = Math.cos(sp.a), sa = Math.sin(sp.a);
+    drawTextS(ctx, icon, Math.round(sp.x - ca * 12) - 2, Math.round(sp.y - sa * 12) - 3, color);
+  }
+}
+
+// the ant gates around our nest, for the map: one spot per 8 px cell with
+// gate in it (a scan of the nest's surroundings, redone now and then while
+// the map is open -- gates are built rarely)
+function scanGates() {
+  const c = G.colony, cell = 8;
+  const x0 = Math.max(0, c.x - 900), x1 = Math.min(WORLD_W - 1, c.x + 900);
+  const y0 = Math.max(0, c.entrance.y - 120), y1 = Math.min(WORLD_H - 1, c.entrance.y + 700);
+  const seen = new Set(), out = [];
+  for (let y = y0; y <= y1; y++) {
+    const row = y * WORLD_W;
+    for (let x = x0; x <= x1; x++) {
+      if (T.m[row + x] !== M_GATE) continue;
+      const k = ((x / cell) | 0) * 4096 + ((y / cell) | 0);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ x: ((x / cell) | 0) * cell + 4, y: ((y / cell) | 0) * cell + 4 });
+    }
+  }
+  return out;
+}
+
+// map icons, drawn at a map pixel with a black backing
+function mapDot(x, y, color, r) {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - r - 1, y - r - 1, 2 * r + 3, 2 * r + 3);
+  ctx.fillStyle = color;
+  ctx.fillRect(x - r, y - r, 2 * r + 1, 2 * r + 1);
+}
+function mapGate(x, y) {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - 2, y - 2, 5, 5);
+  ctx.fillStyle = '#d8a860';
+  ctx.fillRect(x - 1, y - 1, 3, 3);
+  ctx.fillStyle = '#6a4424';
+  ctx.fillRect(x, y - 1, 1, 1); ctx.fillRect(x - 1, y, 1, 1); ctx.fillRect(x + 1, y, 1, 1); ctx.fillRect(x, y + 1, 1, 1);
+}
+function mapDome(x, y, color) {   // a shelter or the mound: a little dome
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - 4, y - 3, 9, 5);
+  ctx.fillRect(x - 3, y - 4, 7, 1);
+  ctx.fillStyle = color;
+  ctx.fillRect(x - 3, y - 2, 7, 3);
+  ctx.fillRect(x - 2, y - 3, 5, 1);
+}
+function mapFlag(x, y, color) {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - 1, y - 9, 7, 6);
+  ctx.fillRect(x - 1, y - 9, 3, 10);
+  ctx.fillStyle = '#c8b890';
+  ctx.fillRect(x, y - 8, 1, 8);
+  ctx.fillStyle = color;
+  ctx.fillRect(x + 1, y - 8, 4, 4);
+}
+function mapFruit(x, y) {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - 3, y - 3, 7, 7);
+  ctx.fillStyle = (G.frame >> 4) % 2 ? '#ffb040' : '#c8304a';
+  ctx.fillRect(x - 2, y - 2, 5, 5);
+  ctx.fillStyle = '#54a838';
+  ctx.fillRect(x, y - 3, 2, 1);
+}
+
+// M: the whole world in a panel, the nest close up below it, and a legend
 function drawMinimap() {
+  const col = G.colony;
+  if (--G.gatesT <= 0) { G.gates = scanGates(); G.gatesT = 120; }
   const mw = 296, mh = Math.round(mw * WORLD_H / WORLD_W);
-  const mx = (VIEW_W - mw) / 2, my = (VIEW_H - mh) / 2 - 6;
-  bevelPanel(mx - 3, my - 3, mw + 6, mh + 6);
+  const mx = (VIEW_W - mw) / 2, my = 10;
+  bevelPanel(mx - 3, my - 3, mw + 6, mh + 6 + 70);
   ctx.fillStyle = '#101418';
   ctx.fillRect(mx, my, mw, mh);
   ctx.drawImage(TerrainView.bgCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   ctx.drawImage(TerrainView.terCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   const sx = mw / WORLD_W, sy = mh / WORLD_H;
-  // chamber markers in their type colors (cramped ones blink), under the ants
-  for (const ch of G.colony.chambers) {
-    const cx = Math.round(mx + ch.x * sx), cy = Math.round(my + ch.y * sy);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(cx - 2, cy - 2, 4, 4);
-    ctx.fillStyle = chamberCramped(ch) && (G.frame >> 4) % 2 ? '#ff4030' : CH_LOOK[ch.type].color;
-    ctx.fillRect(cx - 1, cy - 1, 2, 2);
+  const P = (x, y) => [Math.round(mx + x * sx), Math.round(my + y * sy)];
+  // our nest: a flag over the entrance (on the mound, once thatched)
+  const [ex, ey] = P(col.entrance.x, col.entrance.y);
+  if (col.mound.size >= MOUND_WARM) mapDome(ex, ey, '#d8b860');
+  mapFlag(ex, ey - 2, '#ffe080');
+  // chambers in their type colours (cramped ones blink)
+  for (const ch of col.chambers) {
+    const [cx, cy] = P(ch.x, ch.y);
+    mapDot(cx, cy, chamberCramped(ch) && (G.frame >> 4) % 2 ? '#ff4030' : CH_LOOK[ch.type].color, 1);
   }
-  // aphid shelters: green dots
-  for (const sh of G.colony.shelters) {
-    const cx = Math.round(mx + sh.x * sx), cy = Math.round(my + sh.y * sy);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(cx - 2, cy - 2, 4, 4);
-    ctx.fillStyle = '#8cc85a';
-    ctx.fillRect(cx - 1, cy - 1, 2, 2);
-  }
+  for (const g of G.gates) { const [gx, gy] = P(g.x, g.y); mapGate(gx, gy); }
+  for (const sh of col.shelters) { const [hx, hy] = P(sh.x, sh.y); mapDome(hx, hy, '#8cc85a'); }
   // the rival nests: a red flag over each entrance (grey once its queen fell)
   for (const c of G.colonies) {
-    if (c === G.colony) continue;
-    const fx = Math.round(mx + c.entrance.x * sx), fy = Math.round(my + c.entrance.y * sy);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(fx - 1, fy - 9, 7, 6);
-    ctx.fillRect(fx - 1, fy - 9, 3, 10);
-    ctx.fillStyle = '#c8b890';
-    ctx.fillRect(fx, fy - 8, 1, 8);
-    ctx.fillStyle = c.defeated ? '#706050' : '#e03828';
-    ctx.fillRect(fx + 1, fy - 8, 4, 4);
+    if (c === col) continue;
+    const [fx, fy] = P(c.entrance.x, c.entrance.y);
+    mapFlag(fx, fy - 2, c.defeated ? '#706050' : '#e03828');
   }
   // this summer's fallen fruit between the nests
   const cs = G.contested;
-  if (cs && cs.active) {
-    const fx = Math.round(mx + cs.x * sx), fy = Math.round(my + cs.y * sy);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(fx - 2, fy - 2, 5, 5);
-    ctx.fillStyle = (G.frame >> 4) % 2 ? '#ffb040' : '#c8304a';
-    ctx.fillRect(fx - 1, fy - 1, 3, 3);
+  if (cs && cs.active) { const [fx, fy] = P(cs.x, cs.y); mapFruit(fx, fy - 2); }
+  drawMapAnts(mx, my, sx, sy, 0, 0, WORLD_W, WORLD_H);
+  ctx.fillStyle = '#ff3020';
+  for (const b of G.bugs) {
+    if (b.predator) ctx.fillRect(mx + b.x * sx - 1, my + b.y * sy - 1, 2, 2);
   }
+  // where the guide arrow points: a blinking ring
+  const t = G.arrowOn ? guideTarget() : null;
+  if (t && (G.frame >> 3) % 2) {
+    const [tx, ty] = P(t.x, t.y);
+    ctx.fillStyle = t.color;
+    ctx.fillRect(tx - 3, ty - 3, 7, 1); ctx.fillRect(tx - 3, ty + 3, 7, 1);
+    ctx.fillRect(tx - 3, ty - 3, 1, 7); ctx.fillRect(tx + 3, ty - 3, 1, 7);
+  }
+  drawNestInset(mx, my + mh + 6, 150, 62);
+  drawMapLegend(mx + 156, my + mh + 6);
+}
+
+// the ants as dots: players blink, the queen pink, rivals red (a rival queen
+// gets her own marker once found); clipped to the world box (wx0, wy0)-(wx1, wy1)
+function drawMapAnts(mx, my, sx, sy, wx0, wy0, wx1, wy1) {
   for (const a of G.ants) {
-    if (a.hp <= 0) continue;
+    if (a.hp <= 0 || a.x < wx0 || a.x > wx1 || a.y < wy0 || a.y > wy1) continue;
     const red = a.colony !== G.colony;
-    // a rival queen shows only once a player has found her
     if (red && a.caste === 'queen' && a.colony.queenSeen) continue;
+    const x = mx + (a.x - wx0) * sx, y = my + (a.y - wy0) * sy;
     if (red) {
       ctx.fillStyle = '#000000';
-      ctx.fillRect(mx + a.x * sx - 1, my + a.y * sy, 2, 2);
+      ctx.fillRect(x - 1, y, 2, 2);
     }
     ctx.fillStyle = a.playerIdx === 0 ? '#ffff40' : a.playerIdx === 1 ? '#40d0ff'
       : red ? '#ff6050' : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
     const sz = a.playerIdx >= 0 && (G.tick >> 3) % 2 ? 3 : 2;
-    ctx.fillRect(mx + a.x * sx - 1, my + a.y * sy - 1, sz, sz);
+    ctx.fillRect(x - 1, y - 1, sz, sz);
   }
-  // a found rival queen: a blinking crown-red marker
   for (const c of G.colonies) {
     const q = c !== G.colony && c.queenSeen ? c.queen() : null;
-    if (!q) continue;
-    const qx = Math.round(mx + q.x * sx), qy = Math.round(my + q.y * sy);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(qx - 2, qy - 2, 5, 5);
-    ctx.fillStyle = (G.frame >> 3) % 2 ? '#ff4060' : '#ffe040';
-    ctx.fillRect(qx - 1, qy - 1, 3, 3);
+    if (!q || q.x < wx0 || q.x > wx1 || q.y < wy0 || q.y > wy1) continue;
+    mapDot(Math.round(mx + (q.x - wx0) * sx), Math.round(my + (q.y - wy0) * sy),
+      (G.frame >> 3) % 2 ? '#ff4060' : '#ffe040', 1);
   }
-  ctx.fillStyle = '#ff3020';
-  for (const b of G.bugs) {
-    if (b.predator) ctx.fillRect(mx + b.x * sx - 1, my + b.y * sy - 1, 2, 2);
+}
+
+// our nest close up: its tunnels, chamber signs, gates and ants
+function drawNestInset(x, y, w, h) {
+  const col = G.colony, Z = 0.2;
+  const ww = w / Z, wh = h / Z;
+  const wx0 = Math.round(Math.max(0, Math.min(WORLD_W - ww, col.entrance.x - ww / 2)));
+  const wy0 = Math.round(Math.max(0, Math.min(WORLD_H - wh, col.entrance.y - 45)));
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+  const sc = seasonSky(skyColor(G.tod()));
+  ctx.fillStyle = `rgb(${sc[0]},${sc[1]},${sc[2]})`;
+  ctx.fillRect(x, y, w, h);
+  ctx.drawImage(TerrainView.bgCan, wx0, wy0, ww, wh, x, y, w, h);
+  ctx.drawImage(TerrainView.terCan, wx0, wy0, ww, wh, x, y, w, h);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  const P = (px, py) => [Math.round(x + (px - wx0) * Z), Math.round(y + (py - wy0) * Z)];
+  for (const g of G.gates) { const [gx, gy] = P(g.x, g.y); mapGate(gx, gy); }
+  drawMapAnts(x, y, Z, Z, wx0, wy0, wx0 + ww, wy0 + wh);
+  for (const ch of col.chambers) {
+    const [cx, cy] = P(ch.x, ch.y);
+    const blink = chamberCramped(ch) && (G.frame >> 4) % 2;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(cx - 4, cy - 5, 9, 9);
+    drawText(ctx, CH_LOOK[ch.type].icon, cx - 2, cy - 4, blink ? '#ff4030' : CH_LOOK[ch.type].color);
+  }
+  ctx.restore();
+  drawTextS(ctx, L('ui_ourNest'), x + 3, y + 2, '#ffe080');
+}
+
+// what the map's signs mean, in two columns
+function drawMapLegend(x, y) {
+  const items = [
+    [() => drawText(ctx, CH_LOOK.storage.icon, x, y, CH_LOOK.storage.color), 'lg_storage'],
+    [() => drawText(ctx, CH_LOOK.nursery.icon, x, y + 10, CH_LOOK.nursery.color), 'lg_nursery'],
+    [() => drawText(ctx, CH_LOOK.barracks.icon, x, y + 20, CH_LOOK.barracks.color), 'lg_barracks'],
+    [() => drawText(ctx, CH_LOOK.royal.icon, x, y + 30, CH_LOOK.royal.color), 'lg_royal'],
+    [() => drawText(ctx, CH_LOOK.fungus.icon, x, y + 40, CH_LOOK.fungus.color), 'lg_fungus'],
+    [() => mapDome(x + 72 + 2, y + 4, '#8cc85a'), 'lg_shelter'],
+    [() => mapGate(x + 72 + 2, y + 13), 'lg_gate'],
+    [() => mapDome(x + 72 + 2, y + 24, '#d8b860'), 'lg_mound'],
+    [() => mapFruit(x + 72 + 2, y + 33), 'lg_fruit'],
+    [() => mapFlag(x + 72 + 1, y + 48, '#e03828'), 'lg_red'],
+  ];
+  for (let i = 0; i < items.length; i++) {
+    items[i][0]();
+    const lx = i < 5 ? x + 8 : x + 81, ly = y + (i % 5) * 10;
+    drawText(ctx, L(items[i][1]), lx, ly, '#c8b890');
   }
 }
 
@@ -1112,8 +1717,8 @@ function drawTitle() {
   const items = [L('ui_start'), L('ui_help'),
     L('ui_sound', L(Sfx.muted ? 'w_off' : 'w_on')),
     L('ui_crt', L(document.getElementById('crt').classList.contains('off') ? 'w_off' : 'w_on')),
-    L('ui_lang')];
-  const my = 112;
+    L('ui_lang'), L('ui_hints', L(Tut.on ? 'w_on' : 'w_off'))];
+  const my = 108;
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
     if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, my + i * 12, '#ffe040');
@@ -1139,7 +1744,7 @@ function drawTitle() {
 }
 
 function updateTitle() {
-  if (menuNav(5)) {
+  if (menuNav(6)) {
     Sfx.play('select');
     switch (G.menuSel) {
       case 0: G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
@@ -1147,6 +1752,7 @@ function updateTitle() {
       case 2: Sfx.toggleMute(); break;
       case 3: document.getElementById('crt').classList.toggle('off'); break;
       case 4: setLang(LANG === 0); break;
+      case 5: Tut.setOn(!Tut.on); break;
     }
   }
 }
@@ -1216,10 +1822,10 @@ function drawIntro() {
   const lines = introText();
   G.introLine += 0.4;
   const shown = Math.min(lines.length, Math.floor(G.introLine / 6) + 1);
-  let y = 30;
+  let y = 18;
   for (let i = 0; i < shown; i++) {
     drawTextC(ctx, lines[i], VIEW_W / 2, y, i === lines.length - 1 ? '#ffa040' : '#c8b890');
-    y += 11;
+    y += 10;
   }
   if (shown >= lines.length && (G.frame >> 4) % 2 === 0) {
     drawTextC(ctx, L('ui_pressSpace'), VIEW_W / 2, 182, '#ffe040');
@@ -1230,7 +1836,7 @@ function updateIntro() {
   if (tookPress('Space') || tookPress('Enter')) {
     G.state = 'play';
     pushMsg(L('m_gather'), '#80ff80');
-    pushMsg(L('m_objHint'), '#ffd890');
+    if (!Tut.active()) pushMsg(L('m_objHint'), '#ffd890');   // (else hint 6 tells it)
     Sfx.play('select');
   }
 }
@@ -1259,6 +1865,7 @@ function pauseItems() {
     { id: 'resume', label: L('ui_resume') },
     { id: 'save', label: L('ui_saveGame') },
     { id: 'help', label: L('ui_help') },
+    { id: 'hints', label: L('ui_hints', L(Tut.on ? 'w_on' : 'w_off')) },
   ];
   items.push({ id: 'quit', label: L('ui_saveQuit') });
   return items;
@@ -1269,12 +1876,13 @@ function drawPause() {
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const items = pauseItems();
-  bevelPanel(90, 56, 140, 32 + items.length * 12);
-  drawTextCS(ctx, L('ui_paused'), VIEW_W / 2, 64, '#ffa040', 2);
+  // (clear of the hint panel below, y 144)
+  bevelPanel(90, 46, 140, 35 + items.length * 12);
+  drawTextCS(ctx, L('ui_paused'), VIEW_W / 2, 54, '#ffa040', 2);
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
-    if (sel) drawText(ctx, '\x06', 100, 88 + i * 12, '#ffe040');
-    drawText(ctx, items[i].label, 112, 88 + i * 12, sel ? '#ffe040' : '#c8b890');
+    if (sel) drawText(ctx, '\x06', 100, 78 + i * 12, '#ffe040');
+    drawText(ctx, items[i].label, 112, 78 + i * 12, sel ? '#ffe040' : '#c8b890');
   }
 }
 
@@ -1293,6 +1901,10 @@ function updatePause() {
         break;
       case 'help':
         G.prevState = 'pause'; G.state = 'help';
+        break;
+      case 'hints':
+        Tut.setOn(!Tut.on);
+        if (!Tut.on) pushMsg(L('m_hintsOff'), '#ffd890');
         break;
       case 'quit':
         saveWorld(G.slot);
@@ -1351,9 +1963,9 @@ function drawGameOver() {
     }
     drawStars(s.stars, 48);
     const lines = [
-      [L(s.reason, s.flown), s.win ? '#ffd0f0' : '#c8b890'],
+      [Ln(s.reason, s.flown), s.win ? '#ffd0f0' : '#c8b890'],
       [L('ui_milestones', s.milestones), '#ffe040'],
-      [L('ui_colonySize', s.pop || 0), '#c8b890'],
+      [Ln('ui_colonySize', s.pop || 0), '#c8b890'],
       [L(s.rivalDead ? 'ui_rivalDead' : s.rival ? 'ui_rivalWon' : 'ui_rivalLost'), s.rival ? '#80ff80' : '#ff7060'],
       [L('ui_finalScore', s.score), '#ffe040'],
       [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],
@@ -1374,7 +1986,7 @@ function drawGameOver() {
   if (s) {
     const lines = [
       [L(s.reason || 'r_extinct'), '#ff9070'],
-      [L('ui_survived', s.day + 1), '#c8b890'],
+      [Ln('ui_survived', s.day + 1), '#c8b890'],
       [L('ui_finalScore', s.score), '#ffe040'],
       [L('ui_milestones', s.milestones || 0), '#a09070'],
       [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],

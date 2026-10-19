@@ -26,12 +26,14 @@ python3 -m http.server   # then http://localhost:8000
 | Move / climb | `W A S D` or arrow keys |
 | Bite / dig | `Space` |
 | Pick up / use | `E` |
-| Caste ability | `Q` |
+| Caste ability (soldier: rally, nurse: heal) | `Q` |
 | Switch ant | `Tab` |
 | Build (hold) | `F` |
 | Change build material (earth / thatch / ant gate) | `R` |
 | Mark chamber (or, by a tree, an aphid shelter) | `X` |
 | Objectives / crystal upgrades | `O` (`←`/`→` page, `Enter` buy) |
+| Guide arrow on / off | `G` |
+| Skip the current hint | `H` |
 
 - **Hold up against a wall (or tree) to climb.** Ants climb everything.
   Hold up under a roof to hang and crawl upside-down — tunnel ceilings and
@@ -43,6 +45,30 @@ python3 -m http.server   # then http://localhost:8000
   thatch load) to a fungus garden.
 - `M` map · `Esc`/`P` pause · `N` sound · `C` CRT filter
 
+### Getting started
+
+Spring of year 1 doubles as the tutorial: a hint panel above the HUD
+teaches one thing at a time — walking and climbing, biting and the soil
+load, carrying food to the storage, building (`F`, `R`), marking a chamber
+(`X`), the `O` screen and switching ants (`Tab`). Each hint stays until you
+have done it; `H` skips one, and **HINTS** in the title or pause menu turns
+them off (your progress is remembered per world, in this browser only).
+
+The **guide arrow** (`G` toggles it, on by default) points the way to the
+season's next milestone — the nursery while you raise ants, the entrance
+for the mound or the seal, the roomiest royal chamber in autumn, the fallen
+fruit in summer; a load of food always to the nearest storage, the nearest
+food while the colony is hungry, and the red nest (or its queen, once
+found) when the season's work is done. Off screen it sits at the edge of the
+view with the target's sign beside it; in sight it bobs over the spot.
+
+The **HUD** has three groups: your ant (caste, health — it frosts over out
+in the winter cold — what it carries, the soil and thatch loads with the
+selected building material framed in gold and shown as a swatch), the colony
+(ants, brood and food against their caps, orange when full; crystals) and
+the time (season and year, day of the season and the clock). Messages wait
+while the `O` screen, the map or the ant switch is open, and show after.
+
 ### One year in the colony
 
 The game is one colony year of four seasons, three in-game days each (about
@@ -50,7 +76,10 @@ The game is one colony year of four seasons, three in-game days each (about
 but a fall of leaves; in **winter** nothing grows, the queen lays slowly,
 centipedes come up from the deep more often, and the surface is deadly cold:
 an ant outside loses health, unless it is below ground or within a thatched
-mound. Foragers stay home, so the colony lives off what it stored.
+mound. Foragers stay home, so the colony lives off what it stored (huddled
+below, it eats about half as much as in summer). When the stores run dry
+the ants starve; the last morsels go to the queen and the princesses, so a
+famine thins out the workers long before it takes the crown.
 
 Each season has three **milestones** (press **`O`**): spring — mark a second
 storage chamber, raise 5 new ants, store 100 food; summer — thatch a mound
@@ -62,7 +91,8 @@ Each gives score and crystals; missing one never ends the game, it only costs
 stars. In later years the targets grow (more storage, food, ants, a bigger
 mound and royal chamber). The random tasks in the corner remain as side jobs.
 
-In autumn, with a roomy royal chamber and full stores, the queen lays
+In autumn, with a roomy royal chamber and well-stocked stores (60% of
+their capacity, or 150 food, whichever is less), the queen lays
 **princess** eggs. On the first day of spring in year 2 every princess flies
 out of the entrance in the **nuptial flight**, and the year is rated 1–3
 stars (none without a princess flown): one for a princess flown, one for 3
@@ -107,13 +137,26 @@ often the queen lays, and room for princesses), **fungus garden** (leaves
 in, food out, even in winter), or remove it. A chamber's size is the open space
 around its marker; a cramped one counts for nothing. The HUD shows ants,
 brood and food against their capacity: when the stores are full, foragers
-wait with their loads until you dig and mark more storage.
+wait with their loads until you dig and mark more storage. The generated
+nest houses about 20 ants: an idle colony fills it in a day and a half and
+then stops, until its own workers, once it has been full for half a day,
+dig out a small nursery (at most once a season, never in spring) — a
+player who digs and marks chambers grows far faster. Chamber names show
+above their signs near your ant, never one over another.
+
+On the `M` map, chambers show in their type colours, with aphid shelters,
+ant gates, the thatched mound, the fallen fruit and the red nest as little
+icons; below it, the nest close up with its chamber signs, and a legend.
+Ant gates are woven in bright straw with a lit rim, so they stand out in a
+dark tunnel; aphid shelters get a little thatched dome and a sign.
 
 ### The colony
 
 The colony eats from the food stored in the **storage chamber**. The queen
-lays eggs when stores are full; nurses ferry morsels to hungry larvae;
-foragers gather seeds on the surface; soldiers patrol and fight. Follow the
+lays eggs while there is food and room (from autumn on she keeps a winter
+reserve of 1.5 food per ant); nurses ferry morsels to hungry larvae;
+foragers gather seeds on the surface; soldiers patrol and fight, and a
+worker or nurse a soldier rallies stands with it until badly hurt. Follow the
 **tasks** in the top-left corner — gathering, feeding, digging out the
 chambers, defending — to earn colony points.
 
@@ -124,7 +167,7 @@ the colony is gone.
 ### The red colony
 
 A **rival red-ant colony** holds the right quarter of the map, and it is as
-alive as yours: a red queen (twice as tough as yours) lays in her royal
+alive as yours: a red queen (half again as tough as yours) lays in her royal
 chamber, red nurses raise the brood, red workers forage their own side of
 the forest and red soldiers patrol the nest. It lives by the same rules —
 capacity from its chambers, the seasons, winter stores — and digs itself a
@@ -141,17 +184,30 @@ your gates or stop getting anywhere, and the survivors go home. Red ants
 are a bright scarlet with a glossy highlight; a bitten enemy shows a small
 health bar for a few seconds.
 
-Each summer a **fruit falls between the nests** (the orange dot on the `M`
-map, labelled *contested fruit* when you are near it): both colonies'
+Each summer a **fruit falls between the nests** (a big red windfall in the
+forest and on the `M` map, labelled *contested fruit* when you are near it): both colonies'
 foragers race for its pieces. Deliver 8 of them for the summer milestone.
 
-The bonus: fight into the red nest and **kill the red queen**. With no
-princess to succeed her, the red colony falls apart — its ants stop
+The bonus: fight into the red nest and **kill the red queen**. Don't go
+alone: as a soldier, press `Q` and the soldiers
+near you (up to eight) fall in behind you for 45 seconds, following you
+across the forest and down the red tunnels and fighting whatever they meet
+— with a few upgraded soldiers she can be taken in summer or autumn. With
+no princess to succeed her, the red colony falls apart — its ants stop
 raiding and slowly waste away — and the rival star at the flight is yours.
-If your colony dealt her last wound you also get 1000 points and 5
-crystals (dead of anything else, she pays nothing). Once a player has
-found her, the map marks her, she carries a health bar, and the `O`
-screen shows her health next to a rough count of the red colony.
+If your ants dealt at least a quarter of the wounds she took lately you also
+get 1000 points and 5 crystals; dead of anything else (a centipede, hunger,
+a last scratch from you after something else wore her down) she pays
+nothing. Once a player has found her, the map marks her, she carries a
+health bar, and the `O` screen shows her health next to a rough count of
+the red colony.
+
+While a raid marches on your nest a red banner says so (marching, at the
+nest, thieves in the stores) with arrows toward it, and a red marker at the
+edge of the view points at the raiders; each theft shows a short *food
+stolen* notice. Hurt enemies near you — red ants you bit, spiders,
+centipedes, wasps, beetles — show small health bars. Your ants are a dark
+charcoal with a pale rim, the rival's a bright scarlet.
 
 ### Worlds
 
@@ -205,9 +261,10 @@ js/game.js         world state G, setup/restore (and save migration),
 
 client
 js/terrainview.js  terrain canvases, repainted from edit rects
-js/main.js         input, event handling, camera, rendering, HUD, menus
-js/save.js         localStorage saves, RLE-packed terrain
-js/lang.js         English / Norwegian strings
+js/main.js         input, event handling, camera, rendering, HUD, menus,
+                   the tutorial hints, the guide arrow, the map
+js/save.js         localStorage saves, RLE-packed terrain (v6)
+js/lang.js         English / Norwegian strings, the plural helper Ln()
 js/font.js         bitmap font · js/sfx.js WebAudio bleeps
 ```
 
@@ -231,6 +288,14 @@ node test/rivalprobe.js   # the red colony: queen, brood, foraging, raids and
                           # theft, the contested fruit, the red queen slain,
                           # v5 saves + v4 migration; map and O screen
 node test/buildprobe.js   # soil loads, building, chambers, capacity, saves
+node test/polishprobe.js  # hints (advance, skip, off), the guide arrow and
+                          # its toggle, the raid alert and theft notice,
+                          # enemy health bars, plurals in both languages,
+                          # the O screen holding the toasts, map icons, gate
+                          # rims, rally-follow, the factions' colours
+node test/activeyear.js   # a scripted active player through a whole year:
+                          # milestones, stars, colony size per season
+                          # (--casual: a first-timer's year)
 ```
 
 © 1998 BENSOFT INTERACTIVE (in spirit)

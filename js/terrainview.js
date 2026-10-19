@@ -38,7 +38,7 @@ const TerrainView = {
         const depth = y - bgSurf[x];
 
         if (mat !== M_AIR) {
-          const c = matColor(mat, x, y, h, depth, TOUGH(mat) ? T.wear.get(i) : 0);
+          const c = matColor(mat, x, y, h, depth, TOUGH(mat) ? T.wear.get(i) : 0, mat === M_GATE && gateRim(x, y));
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
         // backdrop below the original surface
@@ -75,10 +75,13 @@ const TerrainView = {
     this.slow.sort((a, b) => Math.abs(b[0] - cx) - Math.abs(a[0] - cx)); // nearest last (popped first)
   },
 
-  // repaint every edited rect straight from the material map
+  // repaint every edited rect straight from the material map (a pixel
+  // wider all round: a gate's rim depends on its neighbours)
   flush() {
     for (let k = 0; k < 2 && this.slow.length; k++) this.dirty.push(this.slow.pop());
-    for (const [x0, y0, x1, y1] of this.dirty) {
+    for (const [rx0, ry0, rx1, ry1] of this.dirty) {
+      const x0 = Math.max(0, rx0 - 1), y0 = Math.max(0, ry0 - 1);
+      const x1 = Math.min(WORLD_W - 1, rx1 + 1), y1 = Math.min(WORLD_H - 1, ry1 + 1);
       const w = x1 - x0 + 1, h = y1 - y0 + 1;
       const img = this.terCtx.createImageData(w, h);
       const d = img.data;
@@ -88,7 +91,7 @@ const TerrainView = {
           if (mat === M_AIR) continue;
           const i = y * WORLD_W + x;
           const c = matColor(mat, x, y, pxHash(x, y), y - T.bgSurf[x],
-            TOUGH(mat) ? T.wear.get(i) : 0);
+            TOUGH(mat) ? T.wear.get(i) : 0, mat === M_GATE && gateRim(x, y));
           const o = ((y - y0) * w + (x - x0)) * 4;
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
@@ -114,8 +117,16 @@ const LEAF_SEASON = [
 ];
 const LEAF_FLECK = [[236, 196, 210], [82, 152, 62], [236, 196, 70], [235, 240, 248]];
 
-// wear: bite damage on packed earth and gates (shows as cracks)
-function matColor(mat, x, y, h, depth, wear) {
+// is this gate pixel at the gate's edge, beside open air? (a bright rim
+// there makes a gate stand out in a dark tunnel)
+function gateRim(x, y) {
+  return T.get(x - 1, y) === M_AIR || T.get(x + 1, y) === M_AIR ||
+    T.get(x, y - 1) === M_AIR || T.get(x, y + 1) === M_AIR;
+}
+
+// wear: bite damage on packed earth and gates (shows as cracks); rim: a
+// gate pixel beside open air
+function matColor(mat, x, y, h, depth, wear, rim) {
   switch (mat) {
     case M_DIRT: {
       const shades = [[122, 76, 44], [107, 66, 38], [94, 57, 32], [113, 72, 41]];
@@ -176,11 +187,13 @@ function matColor(mat, x, y, h, depth, wear) {
       return c;
     }
     case M_GATE: {
-      // woven twig gate: crossed strands with pale knots, light enough to
-      // stand out against a dark tunnel as well as against the earth
+      // woven twig gate: crossed strands with pale knots and a straw-bright
+      // rim where it meets the air, light enough to stand out against a dark
+      // tunnel as well as against the earth
       const weave = (((x + y) >> 1) & 1) ^ (((x - y) >> 1) & 1);
-      let c = weave ? [134, 98, 60] : [96, 66, 40];
-      if (((x + y) & 3) === 0 && ((x - y) & 3) === 0) c = [188, 150, 88];
+      let c = weave ? [168, 124, 72] : [112, 78, 46];
+      if (((x + y) & 3) === 0 && ((x - y) & 3) === 0) c = [226, 190, 112];
+      if (rim) c = (x + y) & 1 ? [240, 208, 128] : [206, 168, 96];
       if (wear && h % 6 < wear * 1.6) c = [26, 16, 10];        // cracks
       return c;
     }

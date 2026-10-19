@@ -124,7 +124,7 @@ const BUILD_R = 2.5, BUILD_CD = 8;
 
 function newPlayer(ant) {
   // buildMat: selected building material; buildWarned: told "load empty"
-  // during this press already; buildFailT: quiet time after a "nothing to
+  // (or "no room") during this press already; buildFailT: quiet time after a "nothing to
   // build on" clank; refuseT: a refused deposit lets the next E (within
   // this many ticks) just put the item down
   // col: the index of the player's colony in G.colonies (0 until versus)
@@ -369,6 +369,15 @@ function restoreColony(col, cd, v) {
   col.expandN = Math.max(0, Math.floor(Number(cd.expandN) || 0));
   col.lastExpandDay = Math.max(0, Math.floor(Number(cd.lastExpandDay) || 0));
   col.digJob = cd.digJob && Array.isArray(cd.digJob.pts) ? cd.digJob : null;
+  // v6: who wounded the queen lately (older saves: nobody yet)
+  col.queenDmg = {};
+  if (cd.queenDmg && typeof cd.queenDmg === 'object') {
+    for (const k in cd.queenDmg) if (G.colonies[k] !== undefined || k === '-1') {
+      const v = Number(cd.queenDmg[k]);
+      if (isFinite(v) && v > 0) col.queenDmg[k] = v;
+    }
+  }
+  col.fullT = 0;
   col.caps = null;
 }
 
@@ -415,6 +424,30 @@ function rallyAllies(soldier, radius, foe) {
     a.target = foe;
     a.nav = null;
     a.rallyT = 600; // courage: don't immediately flee the thing we charge
+    n++;
+  }
+  return n;
+}
+
+// a player soldier's call to arms (Q): it reaches this far, and the soldiers
+// it reaches then keep at the player's side for FOLLOW_T ticks -- an escort
+// to take into the red nest (they fight whatever they meet on the way)
+const RALLY_R = 280;
+const FOLLOW_T = 60 * 45;
+const FOLLOW_MAX = 8;
+
+// the soldiers of the leader's colony near it fall in behind player pIdx.
+// Returns how many answered.
+function rallyFollow(leader, pIdx, radius) {
+  let n = 0;
+  for (const a of G.ants) {
+    if (n >= FOLLOW_MAX) break;
+    if (a === leader || a.hp <= 0 || a.playerIdx >= 0 || a.colony !== leader.colony ||
+        a.caste !== 'soldier' || a.raiding) continue;
+    if (dist2(a.x, a.y, leader.x, leader.y) > radius * radius) continue;
+    a.followIdx = pIdx;
+    a.followT = FOLLOW_T;
+    if (a.state !== 'fight') { a.state = 'follow'; a.target = null; a.nav = null; }
     n++;
   }
   return n;
@@ -609,8 +642,13 @@ function controlPlayer(pIdx) {
         G.sfx('build', a.x, a.y);
       } else if (p.buildFailT <= 0) {
         // no room there (solid, or someone in the way): say so, softly
+        // (and once a press, why)
         p.buildFailT = 40;
         G.sfx('clank', a.x, a.y);
+        if (!p.buildWarned) {
+          p.buildWarned = true;
+          G.msg('m_noRoom', [], '#ff8040', pIdx);
+        }
       }
     }
   }
@@ -630,12 +668,16 @@ function controlPlayer(pIdx) {
       if (a.abilCd > 0) {
         // still catching its breath
       } else {
-        const n = rallyAllies(a, 280);
-        if (n < 0) {
-          G.msg('m_noEnemy', [], null, pIdx);
+        // with a foe in sight everyone near turns on it; either way the
+        // soldiers near fall in behind the player
+        const n = rallyAllies(a, RALLY_R);
+        const f = rallyFollow(a, pIdx, RALLY_R);
+        if (n < 0 && f === 0) {
+          G.msg('m_noRally', [], null, pIdx);
         } else {
           a.abilCd = 600;
-          G.msg(n > 0 ? 'm_rally' : 'm_rallyAlone', [n], '#ff8040', pIdx);
+          if (n >= 0) G.msg(n > 0 ? 'm_rally' : 'm_rallyAlone', [n], '#ff8040', pIdx);
+          else G.msg('m_follow', [f], '#ff8040', pIdx);
           G.sfx('danger', a.x, a.y);
         }
       }
@@ -961,7 +1003,10 @@ function updateYear() {
   // winter: the surface is deadly cold, except within a thatched mound
   if (G.isWinter()) {
     for (const a of G.ants) {
-      if (a.hp > 0 && !sheltered(a)) a.hp -= COLD_DMG;
+      if (a.hp > 0 && !sheltered(a)) {
+        if (a.caste === 'queen' && a.colony) a.colony.woundQueen(-1, Math.min(COLD_DMG, a.hp));
+        a.hp -= COLD_DMG;
+      }
     }
     for (let i = 0; i < G.players.length; i++) {
       const p = G.players[i];
@@ -993,19 +1038,20 @@ function crown(a) {
   a.hw = 3 * CASTE.queen.size; a.hh = 2 * CASTE.queen.size;
   a.maxHp = CASTE.queen.hp * (a.colony.player ? 1 : RED_QUEEN_HP); a.hp = a.maxHp * frac;
   a.state = 'idle'; a.stateT = 60; a.nav = null; a.target = null;
+  a.colony.queenDmg = {};   // (a new queen's wounds are her own)
   a.colony.say('m_newQueen', [], '#ff90e0');
   G.sfx('task');
 }
 
 // the rival's queen is dead with no heir: its colony falls apart. Its ants
-// stop raiding and waste away. Slain by the players' colony (its last
-// wound from one of their ants, not long before), each player colony gets
-// the bonus; dead of anything else (a centipede, hunger), nobody does.
+// stop raiding and waste away. If the players' ants had a real hand in her
+// death (at least SLAIN_SHARE of the wounds she took lately, see
+// Colony.queenDmg, which logs hunger and cold too) each player colony gets
+// the bonus; dead of anything else (a centipede, hunger, a scratch from us at
+// the very end, a bite long faded), nobody does.
 function defeatColony(c) {
   c.defeated = true;
-  const qh = c.queenHit;
-  const killer = qh && G.tick - qh.t < SLAIN_T ? G.colonies[qh.col] : null;
-  c.slain = !!(killer && killer.player);
+  c.slain = playersSlew(c);
   if (c.raid) c.raid.phase = 'retreat';
   for (const a of G.ants) {
     if (a.colony === c && a.raiding && a.state !== 'return') { a.state = 'home'; a.target = null; }
@@ -1020,6 +1066,27 @@ function defeatColony(c) {
   if (c.slain) G.msg('m_rivalSlain', [RIVAL_SCORE, RIVAL_CRYSTALS], '#ffe040');
   else G.msg('m_rivalDied', [], '#e0c080');
   G.sfx('task');
+}
+
+// did the player colonies' ants deal at least SLAIN_SHARE of the damage
+// colony c's queen took lately? (with no ledger -- an old save -- her last
+// wound decides, as it used to)
+function playersSlew(c) {
+  const qd = c.queenDmg || {};
+  let total = 0, ours = 0;
+  for (const k in qd) {
+    total += qd[k];
+    const o = G.colonies[k];
+    if (o && o.player) ours += qd[k];
+  }
+  if (total <= 0) {
+    const qh = c.queenHit;
+    const killer = qh && G.tick - qh.t < SLAIN_T ? G.colonies[qh.col] : null;
+    return !!(killer && killer.player);
+  }
+  // (a bite long ago has faded to nothing: it no longer counts)
+  const full = CASTE.queen.hp * (c.player ? 1 : RED_QUEEN_HP);
+  return ours >= total * SLAIN_SHARE && ours >= full * SLAIN_MIN;
 }
 
 // is colony c ahead of every rival? (each one defeated, or outnumbered)

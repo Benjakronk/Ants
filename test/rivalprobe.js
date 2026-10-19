@@ -73,7 +73,7 @@ check('G.colonies = [black, red], G.colony is the players\'', setup.n === 2 && s
   setup.alias && setup.player.join() === 'true,false' && setup.rivalX > setup.blackX + 1500, setup);
 check('the generated red nest is red\'s chambers (storage, nursery, royal)',
   ['storage', 'nursery', 'royal'].every(t => setup.types.includes(t)) && setup.caps && setup.caps.pop >= 10, setup.types);
-check('the red queen holds the red royal chamber, tough', setup.queenInRoyal && setup.queenHp >= setup.blackQueenHp * 2, setup);
+check('the red queen holds the red royal chamber, tough', setup.queenInRoyal && setup.queenHp >= setup.blackQueenHp * 1.5, setup);
 check('red has workers, soldiers, nurses and brood; no red bugs, no milestones',
   /soldier/.test(setup.castes) && /worker/.test(setup.castes) && /nurse/.test(setup.castes) &&
   setup.redBrood > 0 && setup.bugs === 0 && !setup.objectives, setup.castes);
@@ -174,9 +174,10 @@ check('a contested fruit falls between the nests in summer', site.fell && site.b
 check('contested milestone: black brings N pieces home', site.done && site.n >= site.need && site.got[0] >= site.need &&
   site.got[1] === 1, site);
 const siteRace = J(`(() => {
-  // both colonies' foragers make for it
+  // both colonies' foragers make for it (within a day: with food close
+  // to home a forager only now and then sets out on the long trek)
   const seen = new Set();
-  simN(DAY_LEN / 2, () => { for (const a of G.ants) if (a.target && a.target.far) seen.add(a.colony.idx); return seen.size === 2; });
+  simN(DAY_LEN, () => { for (const a of G.ants) if (a.target && a.target.far) seen.add(a.colony.idx); return seen.size === 2; });
   return { both: seen.size === 2, got: G.contested.got };
 })()`);
 check('both colonies\' foragers go for the contested site', siteRace.both, siteRace);
@@ -198,7 +199,7 @@ const rt = J(`(() => {
     queenHp: Math.round(r2.queen().hp), contested: G.contested && G.contested.got.join(), sites: G.items.filter(i => i.site).length };
   return { ok, v: d.v, before, after, seen: r2.queenSeen, expandN: r2.expandN, player: G.players[0].ant.colony === G.colony };
 })()`);
-check('save v5 round-trips both colonies', rt.ok && rt.v === 5 && JSON.stringify(rt.before) === JSON.stringify(rt.after) &&
+check('save v6 round-trips both colonies', rt.ok && rt.v === 6 && JSON.stringify(rt.before) === JSON.stringify(rt.after) &&
   rt.seen && rt.expandN === 2 && rt.player, rt);
 
 // --- an old v4 save: the red bugs become the red colony ------------------------------
@@ -260,6 +261,46 @@ const died = J(`(() => {
 })()`);
 check('the red queen dead of other causes: defeated, no bonus, a plain message',
   died.defeated && !died.slain && died.died && !died.slainMsg && died.score === 0 && died.crystals === 0, died);
+run('restoreWorld(loadWorldData(4), 1)');
+
+// --- the bonus needs a real hand in her death: the wound ledger -----------------------
+// a centipede wears her down and one of ours only bites at the end: no bonus;
+// ours wear her down and a centipede finishes her: the bonus. The ledger
+// is saved (v6) and fades with time.
+const ledger = J(`(() => {
+  const out = {};
+  for (const plan of ['scratch', 'campaign']) {
+    restoreWorld(loadWorldData(4), 1);
+    const r = G.rival, b = G.colony, q = r.queen();
+    G.brood = G.brood.filter(x => !(x.colony === r && x.royal));
+    G.ants = G.ants.filter(a => !(a.colony === r && a.caste === 'princess'));
+    const ours = b.members().find(a => a.caste === 'soldier' || a.caste === 'worker');
+    const centi = new Bug(q.x + 30, q.y, 'centipede');
+    const first = plan === 'scratch' ? centi : ours, last = plan === 'scratch' ? ours : centi;
+    q.hurt(q.maxHp * 0.9, 0, 0, first);
+    if (plan === 'campaign') {
+      // (saved and loaded mid-fight: the ledger comes along)
+      saveWorld(5); restoreWorld(loadWorldData(5), 1);
+      out.saved = Math.round((G.rival.queenDmg[0] || 0));
+    }
+    G.rival.queen().hurt(1e6, 0, 0, last);
+    simN(3);
+    out[plan] = { defeated: G.rival.defeated, slain: G.rival.slain };
+  }
+  // the ledger fades: an old wound counts for less than a fresh one
+  restoreWorld(loadWorldData(4), 1);
+  const q = G.rival.queen();
+  q.hurt(50, 0, 0, G.colony.members()[0]);
+  const d0 = G.rival.queenDmg[0];
+  simN(600);
+  out.fades = G.rival.queenDmg[0] < d0;
+  return out;
+})()`);
+check('a last scratch from our ants after a centipede wore her down earns no bonus',
+  ledger.scratch.defeated && !ledger.scratch.slain, ledger);
+check('our ants wearing her down earns the bonus even if something else finishes her (ledger saved)',
+  ledger.campaign.defeated && ledger.campaign.slain && ledger.saved > 0, ledger);
+check('the wound ledger fades with time', ledger.fades, ledger);
 run('restoreWorld(loadWorldData(4), 1)');
 
 // --- the red queen slain: red is defeated, the bonus is paid --------------------------

@@ -51,12 +51,13 @@ const STR = {
   ui_gameover1: ['THE COLONY', 'KOLONIEN'],
   ui_gameover2: ['HAS PERISHED', 'HAR GÅTT UNDER'],
   ui_survived: ['SURVIVED {0} DAYS', 'OVERLEVDE {0} DAGER'],
+  ui_survived_1: ['SURVIVED 1 DAY', 'OVERLEVDE 1 DAG'],
   ui_finalScore: ['FINAL SCORE: {0}', 'SLUTTPOENG: {0}'],
   ui_foodGathered: ['FOOD GATHERED: {0}', 'MAT SANKET: {0}'],
   ui_tasksDone: ['TASKS DONE: {0}', 'OPPDRAG UTFØRT: {0}'],
   ui_antsBorn: ['ANTS BORN: {0}', 'MAUR FØDT: {0}'],
   ui_antsLost: ['ANTS LOST: {0}', 'MAUR MISTET: {0}'],
-  ui_predSlain: ['PREDATORS SLAIN: {0}', 'ROVDYR FELT: {0}'],
+  ui_predSlain: ['PREDATORS SLAIN: {0}', 'ROVDYR DREPT: {0}'],
 
   // in-game messages
   m_welcome: ['WELCOME BACK TO THE COLONY', 'VELKOMMEN TILBAKE TIL KOLONIEN'],
@@ -68,14 +69,17 @@ const STR = {
   m_queenDead: ['THE QUEEN IS DEAD!', 'DRONNINGEN ER DØD!'],
   m_antDied: ['AN ANT HAS DIED', 'EN MAUR HAR DØDD'],
   m_larvaDied: ['A LARVA HAS PERISHED', 'EN LARVE HAR OMKOMMET'],
-  m_slain: ['{0} IS SLAIN!', '{0} ER FELT!'],
+  m_slain: ['{0} IS SLAIN!', '{0} ER DREPT!'],
   m_fed: ['FED THE LARVA', 'MATET LARVEN'],
   m_milked: ['MILKED THE APHID! +HONEYDEW', 'MELKET BLADLUSA! +HONNINGDUGG'],
-  m_noEnemy: ['NO ENEMY IN SIGHT', 'INGEN FIENDE I SIKTE'],
   m_rally: ['RALLY! {0} ANTS ANSWER THE CALL', 'TIL KAMP! {0} MAUR SVARER PÅ ROPET'],
+  m_rally_1: ['RALLY! 1 ANT ANSWERS THE CALL', 'TIL KAMP! 1 MAUR SVARER PÅ ROPET'],
+  m_follow: ['TO ME! {0} SOLDIERS FOLLOW YOU', 'TIL MEG! {0} SOLDATER FØLGER DEG'],
+  m_follow_1: ['TO ME! 1 SOLDIER FOLLOWS YOU', 'TIL MEG! 1 SOLDAT FØLGER DEG'],
   m_rallyAlone: ['RALLY! BUT NO ONE IS NEAR', 'TIL KAMP! MEN INGEN ER I NÆRHETEN'],
   m_noFood: ['NOT ENOUGH FOOD TO HEAL', 'IKKE NOK MAT TIL Å HELBREDE'],
   m_healed: ['SOOTHING TOUCH: {0} HEALED', 'LINDRENDE PLEIE: {0} HELBREDET'],
+  m_noRally: ['NO SOLDIERS NEAR ENOUGH TO RALLY', 'INGEN SOLDATER NÆR NOK TIL Å SAMLE'],
   m_noWounded: ['NOBODY IS WOUNDED', 'INGEN ER SÅRET'],
   m_carrying: ['CARRYING {0}', 'BÆRER {0}'],
   m_noSwitch: ['NO OTHER ANTS TO SWITCH TO', 'INGEN ANDRE MAUR Å BYTTE TIL'],
@@ -96,11 +100,12 @@ const STR = {
   m_raid: ['RED RAIDERS ARE MARCHING ON THE NEST!', 'RØDE RØVERE MARSJERER MOT TUA!'],
   m_raidSteal: ['RED RAIDERS ARE STEALING FROM THE STORES!', 'RØDE RØVERE STJELER FRA LAGRENE!'],
   m_raidOver: ['THE RED RAIDERS RETREAT', 'DE RØDE RØVERNE TREKKER SEG TILBAKE'],
+  m_foodStolen: ['FOOD STOLEN! -{0}', 'MAT STJÅLET! -{0}'],
   m_queenFound: ['YOU HAVE FOUND THE RED QUEEN!', 'DU HAR FUNNET DEN RØDE DRONNINGEN!'],
   m_rivalSlain: ['THE RED QUEEN IS SLAIN! +{0} +{1}\x13', 'DEN RØDE DRONNINGEN ER DREPT! +{0} +{1}\x13'],
-  m_rivalDied: ['THE RED QUEEN HAS DIED', 'DEN RØDE DRONNINGEN ER DØD'],
+  m_rivalDied: ['THE RED QUEEN HAS DIED - BUT NOT BY YOUR HAND', 'DEN RØDE DRONNINGEN ER DØD - MEN IKKE FOR DIN HÅND'],
   m_siteFell: ['A FRUIT HAS FALLEN BETWEEN THE NESTS!', 'EN FRUKT HAR FALT MELLOM TUENE!'],
-  ui_siteLabel: ['CONTESTED FRUIT', 'STRIDSFRUKT'],
+  ui_siteLabel: ['CONTESTED FRUIT', 'OMSTRIDT FRUKT'],
 
   // tasks
   t_gather: ['GATHER FOOD', 'SANK MAT'],
@@ -117,6 +122,7 @@ const STR = {
   mat_thatch: ['THATCH', 'STRÅ'],
   m_buildMat: ['BUILDING WITH {0}', 'BYGGER MED {0}'],
   m_noSoil: ['NO SOIL - DIG FIRST', 'INGEN JORD - GRAV FØRST'],
+  m_noRoom: ['NO ROOM THERE - AIM AT AN OPEN SPACE', 'IKKE PLASS DER - SIKT MOT ET ÅPENT ROM'],
   m_noThatch: ['NO THATCH - BITE LEAVES FIRST', 'INGEN STRÅ - BIT AV BLADER FØRST'],
 
   // chambers
@@ -127,6 +133,7 @@ const STR = {
   m_chamberNew: ['NEW CHAMBER: {0}', 'NYTT KAMMER: {0}'],
   m_chamberType: ['MARKED AS {0}', 'MERKET SOM {0}'],
   m_chamberGone: ['CHAMBER MARKER REMOVED', 'KAMMERMERKET ER FJERNET'],
+  m_workersDug: ['THE WORKERS HAVE DUG OUT A NEW {0}', 'ARBEIDERNE HAR GRAVD UT ET NYTT {0}'],
   m_lastRoyal: ["THE QUEEN'S ONLY ROYAL CHAMBER CAN'T CHANGE", 'DRONNINGENS ENESTE KAMMER KAN IKKE ENDRES'],
   m_chamberFixed: ["THE NEST'S FIRST {0} CAN'T CHANGE", 'TUAS FØRSTE {0} KAN IKKE ENDRES'],
   m_markDeep: ['MARK CHAMBERS DEEPER UNDERGROUND', 'MERK KAMRE DYPERE UNDER BAKKEN'],
@@ -201,6 +208,7 @@ const STR = {
   ui_upgrades: ['UPGRADES', 'OPPGRADERINGER'],
   ui_seasonYear: ['{0} - YEAR {1}', '{0} - ÅR {1}'],
   ui_daysLeft: ['{0} DAYS LEFT', '{0} DAGER IGJEN'],
+  ui_daysLeft_1: ['1 DAY LEFT', '1 DAG IGJEN'],
   ui_lastDay: ['LAST DAY', 'SISTE DAG'],
   ui_atEnd: ['JUDGED AS THE SEASON ENDS', 'AVGJØRES NÅR ÅRSTIDEN ER OVER'],
   ui_mound: ['MOUND: {0} THATCH', 'TUE: {0} STRÅ'],
@@ -208,9 +216,10 @@ const STR = {
   ui_open: ['ENTRANCE OPEN', 'INNGANGEN ÅPEN'],
   ui_crystals: ['CRYSTALS: {0}', 'KRYSTALLER: {0}'],
   ui_yearGoal: ['RAISE PRINCESSES FOR SPRING OF YEAR {0}', 'AL OPP PRINSESSER TIL VÅREN I ÅR {0}'],
-  ui_rival: ['RED COLONY: ABOUT {0} ANTS', 'RØD KOLONI: CIRKA {0} MAUR'],
-  ui_rivalSlain: ['RED QUEEN SLAIN', 'RØD DRONNING DREPT'],
-  ui_rivalDied: ['RED QUEEN DEAD', 'RØD DRONNING DØD'],
+  ui_rival: ['RED COLONY: ABOUT {0} ANTS', 'DEN RØDE KOLONIEN: CA. {0} MAUR'],
+  ui_rivalSlain: ['THE RED QUEEN IS SLAIN', 'DEN RØDE DRONNINGEN ER DREPT'],
+  ui_rivalDied: ['THE RED QUEEN IS DEAD', 'DEN RØDE DRONNINGEN ER DØD'],
+  ui_score: ['SCORE: {0}', 'POENG: {0}'],
   ui_rivalQueen: ['QUEEN {0}%', 'DRONNING {0}%'],
   ui_storeCap: ['STORES HOLD {0}: MARK MORE STORAGE (X)', 'LAGRENE RYMMER {0}: MERK MER LAGER (X)'],
   ui_seasonDay: ['{0} D{1}', '{0} D{1}'],
@@ -230,11 +239,58 @@ const STR = {
   r_noFlight: ['NO PRINCESS WAS RAISED IN TIME', 'INGEN PRINSESSE BLE ALT OPP I TIDE'],
   ui_milestones: ['MILESTONES: {0}/12', 'DELMÅL: {0}/12'],
   ui_colonySize: ['COLONY: {0} ANTS', 'KOLONI: {0} MAUR'],
+  ui_colonySize_1: ['COLONY: 1 ANT', 'KOLONI: 1 MAUR'],
   ui_rivalWon: ['RIVAL: BIGGER THAN THE RED COLONY', 'RIVAL: STØRRE ENN DEN RØDE KOLONIEN'],
   ui_rivalLost: ['RIVAL: THE RED COLONY IS BIGGER', 'RIVAL: DEN RØDE KOLONIEN ER STØRRE'],
   ui_rivalDead: ['RIVAL: THE RED QUEEN IS DEAD', 'RIVAL: DEN RØDE DRONNINGEN ER DØD'],
   ui_continue: ['CONTINUE THE COLONY', 'FORTSETT KOLONIEN'],
   ui_toTitle: ['RETURN TO TITLE', 'TILBAKE TIL TITTEL'],
+
+  // the HUD: season and year, day and clock
+  ui_hudSeason: ['{0} Y{1}', '{0}, ÅR {1}'],
+  ui_hudClock: ['DAY {0} {1}', 'DAG {0} {1}'],
+
+  // the guide arrow (G) and the hints (spring of year 1 is the tutorial)
+  ui_hints: ['HINTS: {0}', 'TIPS: {0}'],
+  m_arrow: ['GUIDE ARROW {0} (G)', 'VEIVISERPIL {0} (G)'],
+  m_hintsOff: ['HINTS OFF - TURN THEM BACK ON IN THE MENU', 'TIPS AV - SLÅ DEM PÅ IGJEN I MENYEN'],
+  ui_hintHead: ['HINT {0}/{1}', 'TIPS {0}/{1}'],
+  ui_hintKeys: ['H: SKIP', 'H: HOPP OVER'],
+  h_move: ['WALK WITH WASD OR THE ARROW KEYS.\nHOLD UP AGAINST A WALL TO CLIMB IT.',
+    'GÅ MED WASD ELLER PILTASTENE.\nHOLD W ELLER PIL OPP MOT EN VEGG FOR Å KLATRE.'],
+  h_dig: ['SPACE BITES AND DIGS. THE SOIL YOU\nDIG FILLS YOUR LOAD (THE BROWN BAR).',
+    'MELLOMROM BITER OG GRAVER. JORDA DU\nGRAVER HAVNER I LASTEN (BRUN SØYLE).'],
+  h_food: ['FIND FOOD ON THE FOREST FLOOR. E PICKS\nIT UP, E AT THE STORAGE STORES IT.',
+    'FINN MAT PÅ SKOGBUNNEN. E PLUKKER\nDEN OPP, E VED LAGERET LEGGER DEN INN.'],
+  h_build: ['HOLD F TO BUILD WITH YOUR SOIL WHERE\nYOU AIM. R SWITCHES THE MATERIAL.',
+    'HOLD F FOR Å BYGGE MED JORDA DER DU\nSIKTER. R BYTTER MATERIALE.'],
+  h_mark: ['DIG OUT A HOLLOW DEEP DOWN AND PRESS X\nIN IT TO MARK A CHAMBER. X AGAIN: TYPE.',
+    'GRAV UT ET HULROM DYPT NEDE OG TRYKK X\nDER INNE FOR Å MERKE ET KAMMER. X IGJEN: TYPE.'],
+  h_obj: ["PRESS O FOR THE SEASON'S MILESTONES\nAND THE CRYSTAL UPGRADES.",
+    'TRYKK O FOR ÅRSTIDENS DELMÅL\nOG KRYSTALLOPPGRADERINGENE.'],
+  h_tab: ['TAB SWITCHES TO ANOTHER ANT: A SOLDIER\nFIGHTS AND RALLIES (Q), A NURSE HEALS.',
+    'TAB BYTTER TIL EN ANNEN MAUR: SOLDATEN\nSLÅSS OG SAMLER TROPPER (Q), PLEIEREN LEGER.'],
+  h_done: ['THAT IS THE BASICS. THE ARROW (G) POINTS\nTHE WAY TO YOUR NEXT MILESTONE.',
+    'DET VAR DET VIKTIGSTE. PILEN (G) VISER\nVEIEN TIL NESTE DELMÅL.'],
+
+  // the raid alert
+  ui_raidMarch: ['RAID! RED ANTS MARCH ON THE NEST', 'ANGREP! RØDE MAUR MARSJERER MOT TUA'],
+  ui_raidNest: ['RAID! RED ANTS AT THE NEST', 'ANGREP! RØDE MAUR VED TUA'],
+  ui_raidSteal: ['RAID! THIEVES IN THE STORES', 'ANGREP! TYVER I LAGERET'],
+  ui_raidFlee: ['THIEVES FLEE WITH OUR FOOD!', 'TYVER FLYKTER MED MATEN VÅR!'],
+
+  // the map's legend (short names)
+  lg_storage: ['STORAGE', 'LAGER'],
+  lg_nursery: ['NURSERY', 'YNGEL'],
+  lg_barracks: ['BARRACKS', 'SOLDATER'],
+  lg_royal: ['ROYAL', 'DRONNING'],
+  lg_fungus: ['FUNGUS', 'SOPPHAGE'],
+  lg_shelter: ['APHIDS', 'BLADLUS'],
+  lg_gate: ['ANT GATE', 'MAURPORT'],
+  lg_mound: ['MOUND', 'TUE'],
+  lg_fruit: ['FRUIT', 'FRUKT'],
+  lg_red: ['RED NEST', 'RØD TUE'],
+  ui_ourNest: ['OUR NEST', 'VÅR TUE'],
 };
 
 function L(key) {
@@ -242,6 +298,14 @@ function L(key) {
   let s = e ? e[LANG] : key;
   for (let i = 1; i < arguments.length; i++) s = s.replace('{' + (i - 1) + '}', arguments[i]);
   return s;
+}
+
+// a count in a sentence: `key` with n as {0} (more args follow as {1}...),
+// or its singular `key_1` when n is 1 and the string has one ("SURVIVED 1
+// DAY", "1 PRINSESSE"). Norwegian and English share the rule: 1 is singular.
+function Ln(key, n, ...rest) {
+  const k = Math.round(n) === 1 && STR[key + '_1'] ? key + '_1' : key;
+  return L(k, n, ...rest);
 }
 
 // names (definite forms where English needs "THE ...")
@@ -284,7 +348,11 @@ function msgArg(a) {
   }
   return a;
 }
-function msgText(m) { return L(m.key, ...(m.args || []).map(msgArg)); }
+// (a count of 1 as the first arg picks the singular, as in Ln)
+function msgText(m) {
+  const args = (m.args || []).map(msgArg);
+  return args.length && typeof args[0] === 'number' ? Ln(m.key, ...args) : L(m.key, ...args);
+}
 
 // tasks carry type (+ kind for hunts), not baked text -- translated at draw
 // time so saves stay language-neutral. Older saves' hunt tasks lack kind;
@@ -313,9 +381,12 @@ function introText() {
     'OMRINGET AV TING SOM BITER.',
     '',
     'DU ER EN AV ARBEIDERNE HENNES.',
-    '',
     'GRAV. SANK. MAT YNGELEN.',
     'FORSVAR TUA.',
+    '',
+    'AL OPP PRINSESSER I ÅR: VÅREN',
+    'I ÅR 2 FLYR DE UT PÅ',
+    'BRYLLUPSFLUKTEN.',
     '',
     'KOLONIEN MÅ OVERLEVE.',
   ] : [
@@ -327,9 +398,12 @@ function introText() {
     'BY THINGS THAT BITE.',
     '',
     'YOU ARE ONE OF HER WORKERS.',
-    '',
     'DIG. FORAGE. FEED THE BROOD.',
     'DEFEND THE NEST.',
+    '',
+    'RAISE PRINCESSES THIS YEAR: IN',
+    'THE SPRING OF YEAR 2 THEY TAKE',
+    'WING ON THE NUPTIAL FLIGHT.',
     '',
     'THE COLONY MUST SURVIVE.',
   ];
@@ -341,13 +415,13 @@ function helpText() {
     ['  WASD / PILER .. GÅ / KLATRE', '#c8b890'],
     ['  MELLOMROM ..... BIT / GRAV', '#c8b890'],
     ['  E ............. PLUKK OPP / BRUK', '#c8b890'],
-    ['  Q ............. EVNE', '#c8b890'],
+    ['  Q ............. EVNE (SAMLE / LEGE)', '#c8b890'],
     ['  TAB ........... BYTT MAUR', '#c8b890'],
     ['  F (HOLD INNE) . BYGG', '#c8b890'],
     ['  R ............. JORD / STRÅ / MAURPORT', '#c8b890'],
     ['  X ............. MERK KAMMER / BLADLUSLY', '#c8b890'],
     ['  O ............. MÅL / OPPGRADERINGER', '#c8b890'],
-    ['M: KART  ESC: PAUSE  HOLD OPP FOR Å KLATRE', '#a09070'],
+    ['M: KART  G: PIL  H: HOPP OVER TIPS  ESC: PAUSE', '#a09070'],
     ['BÆR MAT TIL LAGERET. MERK KAMRE FOR Å VOKSE.', '#a8e8a0'],
     ['AL OPP PRINSESSER OM HØSTEN: NESTE VÅR', '#a8e8a0'],
     ['FLYR DE UT. DRONNINGEN MÅ LEVE!', '#a8e8a0'],
@@ -358,13 +432,13 @@ function helpText() {
     ['  WASD / ARROWS . MOVE / CLIMB', '#c8b890'],
     ['  SPACE ......... BITE / DIG', '#c8b890'],
     ['  E ............. PICK UP / USE', '#c8b890'],
-    ['  Q ............. ABILITY', '#c8b890'],
+    ['  Q ............. ABILITY (RALLY / HEAL)', '#c8b890'],
     ['  TAB ........... SWITCH ANT', '#c8b890'],
     ['  F (HOLD) ...... BUILD', '#c8b890'],
     ['  R ............. EARTH / THATCH / ANT GATE', '#c8b890'],
     ['  X ............. MARK CHAMBER / APHID SHELTER', '#c8b890'],
     ['  O ............. OBJECTIVES / UPGRADES', '#c8b890'],
-    ['M: MAP   ESC: PAUSE   HOLD UP AT WALLS TO CLIMB', '#a09070'],
+    ['M: MAP  G: GUIDE ARROW  H: SKIP HINT  ESC: PAUSE', '#a09070'],
     ['BRING FOOD TO STORAGE. MARK CHAMBERS TO GROW.', '#a8e8a0'],
     ['RAISE PRINCESSES IN AUTUMN: THE NEXT', '#a8e8a0'],
     ['SPRING THEY FLY. KEEP THE QUEEN ALIVE!', '#a8e8a0'],

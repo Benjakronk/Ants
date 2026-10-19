@@ -6,25 +6,31 @@ let ENT_ID = 1;
 // digPow: bite strength against packed earth (PACKED_HP 3: workers need 3
 // bites, soldiers 2)
 const CASTE = {
-  worker:  { hp: 30,  dmg: 5,  speed: 0.55, size: 1.0,  color: [168, 76, 42],  digR: 4.5, digCd: 13, digPow: 1 },
-  soldier: { hp: 55,  dmg: 14, speed: 0.50, size: 1.35, color: [120, 46, 24],  digR: 6.5, digCd: 11, digPow: 1.5 },
-  nurse:   { hp: 26,  dmg: 4,  speed: 0.55, size: 0.95, color: [196, 110, 64], digR: 4.2, digCd: 15, digPow: 1 },
-  queen:   { hp: 120, dmg: 12, speed: 0.30, size: 1.9,  color: [142, 42, 54],  digR: 6.5, digCd: 11, digPow: 1.5 },
+  // color: the players' black ants -- charcoal, lit by a pale rim and gloss
+  // (see Ant.draw) so they read in a dark tunnel and never pass for red ones
+  worker:  { hp: 30,  dmg: 5,  speed: 0.55, size: 1.0,  color: [62, 52, 50],   digR: 4.5, digCd: 13, digPow: 1 },
+  soldier: { hp: 55,  dmg: 14, speed: 0.50, size: 1.35, color: [46, 40, 42],   digR: 6.5, digCd: 11, digPow: 1.5 },
+  nurse:   { hp: 26,  dmg: 4,  speed: 0.55, size: 0.95, color: [96, 82, 74],   digR: 4.2, digCd: 15, digPow: 1 },
+  queen:   { hp: 120, dmg: 12, speed: 0.30, size: 1.9,  color: [84, 50, 70],   digR: 6.5, digCd: 11, digPow: 1.5 },
   // a winged future queen: raised in autumn, waits in the royal chamber for
   // the nuptial flight. Barely digs.
-  princess:{ hp: 45,  dmg: 4,  speed: 0.40, size: 1.5,  color: [176, 64, 92],  digR: 2.5, digCd: 30, digPow: 0.5 },
+  princess:{ hp: 45,  dmg: 4,  speed: 0.40, size: 1.5,  color: [112, 66, 92],  digR: 2.5, digCd: 30, digPow: 0.5 },
 };
 // ticks an ant climbs another nest's entrance shaft without getting higher
 // before it walks out another way
 const SHAFT_GIVEUP = 300;
+// nudges a grazing NPC tries before chewing itself free (see shuffleFree)
+const SHUFFLE = [[0, -1], [1, 0], [-1, 0], [0, 1], [1, -1], [-1, -1], [0, -2], [2, 0], [-2, 0], [2, -1], [-2, -1]];
 
 // the rival colony's ants: the same castes in a bright fire-ant scarlet
-// (well clear of the players' rust browns), with a glossy highlight
+// (well clear of the players' charcoal), with a glossy highlight
 const RED_COLOR = {
   worker: [236, 36, 28], soldier: [210, 22, 18], nurse: [246, 78, 56],
   queen: [226, 16, 44], princess: [240, 56, 88],
 };
 const RED_SHINE = '#ffb8a0';
+// the black ants' rim light, gloss and legs
+const BLACK_RIM = '#8e8698', BLACK_SHINE = '#d8d4e4', BLACK_LEG = '#6e645e';
 
 // what a (player) ant can haul in its mandibles for building, in pixels
 const LOAD_CAP = 100;
@@ -163,6 +169,7 @@ const QUEEN_LEASH = 50;   // the queen fights only foes this close to her chambe
 // instead of following the nest's tunnel map
 const MARCH_R = 400, MARCH_STEP = 120;
 const FIGHT_GIVEUP = 480;  // ticks of chasing without a bite before an NPC gives up
+const RALLY_NERVE = 0.4;   // a rallied worker or nurse fights on down to this much health
 const SCAN_EVERY = 3;      // NPCs look around for foes every this many ticks
 
 
@@ -187,6 +194,26 @@ function colonyThreat(col) {
 function underground(e) {
   const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, e.x)));
   return e.y > T.bgSurf[sx] + 4;
+}
+
+// below the surface line (in a shaft, a tunnel, a pit)?
+function nestDeep(e) {
+  return e.y > T.surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, e.x)))] + 12;
+}
+
+// the colony whose nest mound (as the world was generated) this is on or
+// over, if any
+function moundOf(e) {
+  for (const c of G.colonies) if (Math.abs(e.x - c.entrance.x) < MOUND_R + 10) return c;
+  return null;
+}
+function onMound(e) { return !!moundOf(e); }
+
+// the colony whose nest this (underground) thing lies in, if any
+function buriedInNest(e) {
+  if (!nestDeep(e)) return null;
+  for (const c of G.colonies) if (Math.abs(e.x - c.x) < NEST_R) return c;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +259,8 @@ class Ant {
     this.thatch = 0;
     this.raiding = false; // out on a raid against another colony
     this.raidRole = null; // 'fight' or 'steal'
+    this.followIdx = -1;  // a player soldier's rally: the player it escorts...
+    this.followT = 0;     // ...for this many more ticks (see rallyFollow)
   }
 
   get def() { return CASTE[this.caste]; }
@@ -256,23 +285,31 @@ class Ant {
     // armor plates: soldiers shrug off part of every blow
     if (this.caste === 'soldier') dmg *= 1 - UPG_ARMOR * upgLevel('armor', this.colony);
 
+    const dealt = Math.max(0, Math.min(dmg, this.hp));
     this.hp -= dmg;
     // who bit us (a fighter turns on it, see the fight state)
     if (by) { this.hitBy = by; this.hitT = G.tick; }
-    // a queen remembers whose colony last drew blood (the bonus for slaying
-    // the red queen goes to the colony that did it -- see defeatColony)
+    // a queen remembers whose colony drew blood, and how much of it lately
+    // (the bonus for slaying the red queen needs a real hand in her death --
+    // see defeatColony; -1 is anything that isn't an ant)
     if (this.caste === 'queen' && this.colony) {
-      this.colony.queenHit = { col: by && by.colony ? by.colony.idx : -1, t: G.tick };
+      const ci = by && by.colony ? by.colony.idx : -1;
+      this.colony.queenHit = { col: ci, t: G.tick };
+      this.colony.woundQueen(ci, dealt);
     }
     this.flash = 6;
     this.vx += kx || 0; this.vy += (ky || 0) - 0.5;
     G.fx('blood', this.x, this.y, 4);
     G.sfx('hurt', this.x, this.y, 220);
-    // (a raid's thief presses on to the stores until badly hurt)
+    // (a raid's thief presses on to the stores until badly hurt; a rallied
+    // worker or nurse stands its ground until it is, then runs for it --
+    // raid soldiers used to cut whole rallies of workers down)
+    const rallied = this.rallyT > 0 && this.hp > this.maxHp * RALLY_NERVE;
     if (this.playerIdx < 0 && this.caste !== 'soldier' && this.caste !== 'queen' &&
-        this.caste !== 'princess' && this.rallyT <= 0 && this.state !== 'rescue' &&
+        this.caste !== 'princess' && !rallied && this.state !== 'rescue' &&
         !(this.raiding && this.state === 'raid' && this.hp > this.maxHp * RAID_NERVE)) {
       this.state = 'flee'; this.stateT = 120;
+      this.rallyT = 0;
     }
   }
 
@@ -287,11 +324,13 @@ class Ant {
     this.phase += Math.abs(this.vx) * 0.6 + (this.climbing ? 0.4 : 0);
 
     // buried (squeezed through a pinch, loose soil): chew yourself free
-    if (this.digCd <= 0 && T.boxSolid(this.x, this.y, this.hw, this.hh, this.own)) {
+    if (this.digCd <= 0 && T.boxSolid(this.x, this.y, this.hw, this.hh, this.own) && !this.shuffleFree()) {
       // an NPC brushing the players' mound or walls leaves them standing
       // and wriggles off instead (it only chews through if that fails)
       const spare = this.playerIdx < 0 ? SPARE_BUILT : SPARE_NONE;
-      const r0 = Math.max(this.hw, this.hh) + 2.5;
+      // (an NPC chews out just its body: wide bites here, every time a big
+      // soldier rubbed the entrance shaft, ate the nest mound into a crater)
+      const r0 = Math.max(this.hw, this.hh) + (this.playerIdx < 0 ? 1 : 2.5);
       T.dig(this.x, this.y, r0, undefined, this.own, spare);
       this.digCd = this.def.digCd;
       this.biteAnim = 6;
@@ -353,6 +392,20 @@ class Ant {
       this.climbing = false;
       this.vy = -1.3; this.vx = this.dir * 0.7;
     }
+  }
+
+  // an NPC whose box grazes the earth (a big soldier in a narrow shaft, a
+  // sub-pixel overlap after a climb) first tries a pixel or two of shuffle
+  // into open air before it chews anything. Returns true when freed.
+  shuffleFree() {
+    if (this.playerIdx >= 0) return false;
+    for (const o of SHUFFLE) {
+      if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh, this.own)) {
+        this.x += o[0]; this.y += o[1];
+        return true;
+      }
+    }
+    return false;
   }
 
   // walk/climb/dig toward a point. The heart of NPC navigation: no pathfinding,
@@ -836,6 +889,10 @@ class Ant {
       if (it.dead || it.carried) continue;
       if (it.shunT > G.tick) continue;
       if (it.claimUntil > G.tick && it.claimBy !== this.id) continue;
+      // food lying down in a nest (a corpse in a side tunnel, a seed that
+      // rolled down the shaft) is for the ants already down there
+      const nest = buriedInNest(it);
+      if (nest && buriedInNest(this) !== nest) continue;
       const d = dist2(this.x, this.y, it.x, it.y);
       // food stuck up in trees only tempts ants already close to it
       if (d > 150 * 150 &&
@@ -849,6 +906,7 @@ class Ant {
     const col = this.colony;
     this.vx = 0;
     this.gotoFail = false;
+    if (this.followT > 0 && --this.followT <= 0) this.followIdx = -1;
 
     // threat reaction (winter: nothing out in the frost is worth chasing).
     // Soldiers and raiders take on any foe -- a predator or an ant of another
@@ -1027,7 +1085,43 @@ class Ant {
         const it = this.target;
         if (!it || it.carried || it.dead) { this.state = 'forage'; this.target = null; break; }
         it.claimUntil = G.tick + 600; it.claimBy = this.id;
-        const d = this.goto(it.x, it.y, true);
+        // (food lying down in a nest is only fetched from inside it, see
+        // findFood. One that fell down a shaft on its way to surface food
+        // climbs out by the nest's own tunnels, not up through the mound --
+        // that dug the nests' mounds into craters)
+        const nest = buriedInNest(it);
+        const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+        let outOf = !nest && this.y > T.surf[sx] + 2 ? moundOf(this) : null;
+        // (once climbing out, it sees it through: the mouth's edge, where the
+        // surface line dips into the shaft, is no place to dither)
+        if (outOf) this.outT = 60;
+        else if (this.outT > 0 && --this.outT > 0 && !nest) outOf = moundOf(this);
+        let d;
+        if (outOf) {
+          // up the nest's tunnels; near the top, out beside the mouth on the
+          // food's side, not over the hole
+          const e = outOf.entrance, side = Math.sign(it.x - e.x) || 1;
+          if (this.y < e.y + 24 && Math.abs(this.x - e.x) < 18) {
+            const tx = Math.round(Math.max(10, Math.min(WORLD_W - 10, e.x + side * 15)));
+            this.goto(tx, T.surf[tx] - 4, true);
+            if (Math.abs(this.x - tx) < 4) this.outT = 0;
+          } else {
+            this.navTo('entrance', outOf);
+          }
+          this.gotoFail = false;
+          d = Math.hypot(it.x - this.x, it.y - this.y);
+        } else {
+          // on a nest's mound an ant walks and climbs to the food like a
+          // forager does, digging only for food lying in the earth (out in
+          // the forest it still chews through foliage and roots on its way)
+          d = this.goto(it.x, it.y, !!nest || nestDeep(this) || !onMound(this) || T.boxSolid(it.x, it.y, 1, 1));
+          // (food beyond an open shaft mouth: hop it rather than fall in)
+          for (const c of G.colonies) {
+            const ex = c.entrance.x;
+            if (this.onGround && !nest && Math.abs(this.x - ex) < 9 && Math.abs(this.y - c.entrance.y) < 12 &&
+                Math.sign(ex - this.x) === Math.sign(it.x - this.x) && Math.abs(it.x - ex) > 6) this.vy = -1.9;
+          }
+        }
         if (this.gotoFail) {
           this.gotoFail = false;
           it.shunT = G.tick + 1800; // out of reach: leave it be a while
@@ -1209,7 +1303,7 @@ class Ant {
           p = null;
         }
         if (!p) {
-          this.state = this.raiding ? 'raid' : this.caste === 'soldier' ? 'patrol' : 'idle';
+          this.state = this.raiding ? 'raid' : this.followT > 0 ? 'follow' : this.caste === 'soldier' ? 'patrol' : 'idle';
           this.stateT = 200; this.target = null; this.fightT = 0;
           break;
         }
@@ -1237,6 +1331,7 @@ class Ant {
 
       case 'patrol': {
         this.stateT--;
+        if (this.followT > 0) { this.state = 'follow'; break; }
         // anything hunting near the colony is the soldiers' problem
         const threat = colonyThreat(col);
         if (threat) {
@@ -1260,6 +1355,46 @@ class Ant {
         const d = this.navTo(keys[this.patrolI % keys.length]);
         if (d < 18) this.patrolI++;
         if (this.stateT <= 0) { this.state = 'idle'; this.stateT = 150; }
+        break;
+      }
+
+      case 'follow': {
+        // a player soldier's escort: keep at its side, through the forest
+        // and down into nests (fights on the way are the threat scan's)
+        const p = G.players[this.followIdx];
+        const lead = p && p.ant && p.ant.hp > 0 && p.ant.colony === col ? p.ant : null;
+        if (!lead || this.followT <= 0) {
+          this.followT = 0; this.followIdx = -1;
+          this.state = 'patrol'; this.stateT = 300; this.nav = null;
+          break;
+        }
+        // (not out into the winter cold after it)
+        if (outInCold(lead) || outInCold(this)) {
+          if (outInCold(this)) { this.state = 'shelter'; this.followT = 0; this.followIdx = -1; }
+          break;
+        }
+        const d = Math.hypot(lead.x - this.x, lead.y - this.y);
+        // at heel (standing still on purpose: not the freeze detector's
+        // business, which would dig it loose into the mound)
+        if (d < 18) { this.climbing = false; this.freezeT = 0; break; }
+        const leadIn = buriedInNest(lead), myIn = buriedInNest(this);
+        if (d < 120 && leadIn === myIn) {
+          // close: straight to it, a step behind (each escort its own spot);
+          // in the same nest or out in the open, but no digging through a
+          // mound from above (the erosion collect avoids too)
+          this.goto(lead.x - lead.dir * (8 + (this.id % 4) * 4), lead.y, !!myIn || !onMound(this));
+        } else if (leadIn && leadIn !== myIn) {
+          // it went down into a nest: in by that nest's tunnels
+          this.navTo('junction', leadIn);
+        } else if (myIn && myIn !== leadIn) {
+          this.navTo('entrance', myIn);     // out of this one first
+        } else if (leadIn) {
+          this.navTo(dist2(lead.x, lead.y, leadIn.queenCh.x, leadIn.queenCh.y) <
+            dist2(lead.x, lead.y, leadIn.storage.x, leadIn.storage.y) ? 'queen' : 'storage', leadIn);
+        } else {
+          this.march(lead.x);
+        }
+        this.gotoFail = false;
         break;
       }
 
@@ -1371,7 +1506,7 @@ class Ant {
       : `rgb(${rgb[0] * 0.55 | 0},${rgb[1] * 0.55 | 0},${rgb[2] * 0.55 | 0})`;
 
     const legUp = (Math.sin(this.phase) > 0) ? 1 : 0;
-    ctx.fillStyle = dark;
+    ctx.fillStyle = red || this.flash > 0 ? dark : BLACK_LEG;
     // legs, 2-frame gait
     ctx.fillRect(-3 + legUp, 1, 1, 2);
     ctx.fillRect(0 - legUp, 1, 1, 2);
@@ -1396,10 +1531,18 @@ class Ant {
       ctx.fillRect(-7, -5, 7, 2);
       ctx.fillRect(-5, -6, 4, 1);
     }
-    // the red ants' gloss on gaster and head: they read as foes in the dark
+    // the red ants' gloss on gaster and head: they read as foes in the dark;
+    // the black ants' cool rim light and gloss keep them from vanishing in it
     if (red && this.flash <= 0) {
       ctx.fillStyle = RED_SHINE;
       ctx.fillRect(-6, -2, 2, 1);
+      ctx.fillRect(2, -2, 1, 1);
+    } else if (this.flash <= 0) {
+      ctx.fillStyle = BLACK_RIM;
+      ctx.fillRect(-6, -2, 4, 1);
+      ctx.fillRect(1, -2, 3, 1);
+      ctx.fillStyle = BLACK_SHINE;
+      ctx.fillRect(-5, -2, 1, 1);
       ctx.fillRect(2, -2, 1, 1);
     }
     // mandibles
@@ -1415,11 +1558,14 @@ class Ant {
     // carried item rides on the back
     if (this.carry) drawItem(ctx, this.carry, camx, camy, true);
 
-    // player marker
+    // player marker: a bobbing chevron, dark-rimmed (so it reads apart from
+    // the seeds and honeydew on other ants' backs)
     if (this.playerIdx >= 0) {
+      const ty = ey - Math.round(this.hh) - 6 - (G.tick >> 4) % 2;   // the tip
+      ctx.fillStyle = '#100804';
+      for (let i = 0; i < 4; i++) ctx.fillRect(ex - i - 1, ty - i - 1, 2 * i + 3, 2);
       ctx.fillStyle = this.playerIdx === 0 ? '#ffe080' : '#80d0ff';
-      ctx.fillRect(ex - 1, ey - 9 - (G.tick >> 4) % 2, 3, 1);
-      ctx.fillRect(ex, ey - 10 - (G.tick >> 4) % 2, 1, 2);
+      for (let i = 0; i < 3; i++) ctx.fillRect(ex - i, ty - i, 2 * i + 1, 1);
     }
   }
 }
@@ -1575,6 +1721,7 @@ class Bug {
   hurt(dmg, kx, ky) {
     if (this.kind === 'pillbug' && this.curl > 0) dmg *= 0.35;
     this.hp -= dmg;
+    this.hitT = G.tick;   // (the client shows a bitten bug's health a while)
     this.flash = 6;
     this.vx += kx || 0; this.vy += (ky || 0) - 0.4;
     G.fx('blood', this.x, this.y, 4);

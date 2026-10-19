@@ -37,6 +37,7 @@ const MOUND_WARM = 60;       // px of thatch before it keeps the cold off
 const MOUND_BOOST_PER = 600; // px per +100% brood growth...
 const MOUND_BOOST_MAX = 0.5; // ...capped at +50%
 const COLD_DMG = 0.01;       // hp per tick for an ant out on the winter surface
+const WINTER_EAT = 0.5;      // what an overwintering colony eats, against the rest of the year
 
 // the entrance seal check (flood fill box around the shaft)
 const SEAL_BOX = 70;
@@ -58,6 +59,7 @@ const FUNGUS_STOCK = 0.1;    // units a garden holds per px of area
 // princesses: laid in autumn, once a royal chamber is roomy enough
 const PRINCESS_ROYAL = 1800; // area the largest royal chamber needs
 const PRINCESS_AREA = 900;   // royal area per princess (the cap)
+const PRINCESS_FOOD = 150;   // stores that are always plenty for a princess egg
 const WINTER_LAY = 0.25;     // the queen's laying pace in winter
 
 // crystal upgrades: cost per level (3 levels), colony-wide, NPCs included
@@ -86,9 +88,14 @@ const AI_EXPAND_MAX = 3;     // chambers it adds in all
 const AI_EXPAND_DAYS = 2;    // days between them
 const AI_EXPAND_STEP = 40;   // ticks per bite of the dig
 const AI_CHAMBER_TYPES = ['storage', 'nursery', 'barracks'];
+// an idle players' colony grows slowly too: once its nest has been full for
+// half a day its own workers dig out a nursery, at most once a season and
+// never in spring (a player who digs and marks chambers grows far faster)
+const SELF_DIG_FULL = DAY_LEN / 2;
 // an AI queen keeps a winter reserve: from autumn on she lays only while
 // the stores hold this much food per ant
 const AI_RESERVE = 3;
+const PLAYER_RESERVE = 2;    // ...and the players' queen this much
 
 // raids: soldiers and workers march from the AI nest on its enemy's, fight,
 // steal from the stores and carry it home. At most one a day, never in
@@ -115,9 +122,12 @@ const RAID_STATES = ['raid', 'fight', 'flee', 'idle', 'home', 'return'];
 
 // the red queen slain: the rival colony is defeated
 const RIVAL_SCORE = 1000, RIVAL_CRYSTALS = 5;
-const SLAIN_T = 1200;        // ticks a queen's last wound counts toward who slew her
+const SLAIN_T = 1200;        // ticks a queen's last wound counts toward who slew her (old saves)
+const SLAIN_SHARE = 0.25;    // the players' share of her recent wounds that makes her slain by them
+const SLAIN_MIN = 0.05;      // ...and their recent wounds must come to this much of her full health
+const QDMG_FADE = 0.994;     // the wound ledger fades by this a second (half-life ~2 minutes)
 const LEADERLESS_DMG = 0.003; // hp per tick the queenless ants waste away
-const RED_QUEEN_HP = 2;      // the red queen's health (times a queen's)
+const RED_QUEEN_HP = 1.5;    // the red queen's health (times a queen's): tough, but an escort can take her
 
 // the contested food site: a fallen fruit between the nests each summer,
 // whose pieces both colonies' foragers race for
@@ -227,6 +237,8 @@ class Colony {
     this.defeated = false;  // its queen died with no heir (an AI colony)
     this.slain = false;     // ...killed by a player colony (the bonus was paid)
     this.queenHit = null;   // { col, t }: whose colony last wounded its queen
+    this.queenDmg = {};     // { colony index (or -1): recent damage } dealt to its queen
+    this.fullT = 0;         // ticks the nest has been full (adults + brood at the cap)
     this.raid = null;       // a raid under way { phase, t, target, n0, stolen, warned, home }
     this.queenSeen = false; // a player has found its queen (the map marks her)
     this.expandN = 0;       // chambers the AI dug out
@@ -251,6 +263,14 @@ class Colony {
   }
   // a message for this colony's players (an AI colony keeps quiet)
   say(key, args, color) { if (this.player) G.msg(key, args, color); }
+
+  // log a wound to this colony's queen in the ledger (ci: the colony that
+  // dealt it, -1 for hunger, cold, bugs -- anything that isn't an ant)
+  woundQueen(ci, dmg) {
+    if (!(dmg > 0)) return;
+    const qd = this.queenDmg || (this.queenDmg = {});
+    qd[ci] = (qd[ci] || 0) + dmg;
+  }
   // the colony this one fights: the nearest other one still standing
   enemy() {
     let best = null;
@@ -575,7 +595,9 @@ class Colony {
   // than the royal chambers have room for
   wantPrincess() {
     if (G.season !== AUTUMN || !this.caps.princess) return false;
-    if (this.food < Math.max(60, this.caps.food * 0.6)) return false;
+    // (well stocked: 60% of the stores, though never more than PRINCESS_FOOD
+    // -- marking more storage mustn't put princesses further off)
+    if (this.food < Math.max(60, Math.min(PRINCESS_FOOD, this.caps.food * 0.6))) return false;
     const have = G.ants.filter(a => a.caste === 'princess' && a.hp > 0 && a.colony === this).length +
       G.brood.filter(b => b.royal && !b.dead && b.colony === this).length;
     return have < this.caps.princess;
@@ -689,12 +711,17 @@ class Colony {
       for (const k in this.paths) settlePath(T.m, this.paths[k]);
     }
 
-    // everyone eats
-    this.food = Math.max(0, this.food - pop * 0.00006);
+    // everyone eats (in winter, huddled below, about half as much)
+    this.food = Math.max(0, this.food - pop * 0.00006 * (G.isWinter() ? WINTER_EAT : 1));
 
-    // starvation
+    // starvation (the last morsels go to the queen and the princesses: a
+    // famine thins out the workers long before it takes the crown)
     if (this.food <= 0 && pop > 0) {
-      for (const a of ants) a.hp -= 0.006;
+      for (const a of ants) {
+        const d = a.caste === 'queen' || a.caste === 'princess' ? 0.0015 : 0.006;
+        if (a.caste === 'queen') this.woundQueen(-1, Math.min(d, Math.max(0, a.hp)));
+        a.hp -= d;
+      }
       if (this.starveMsgT <= 0) {
         this.say('m_starving', [], '#ff6040');
         if (this.player) G.sfx('starve');
@@ -717,8 +744,11 @@ class Colony {
       this.eggT -= G.isWinter() ? WINTER_LAY : 1;
       const broodCount = this.broodCount();
       const caps = this.caps;
-      // (an AI colony keeps its winter stores: no eggs into the hungry months)
-      const need = !this.player && G.season >= AUTUMN ? Math.max(30, pop * AI_RESERVE) : 30;
+      // (from autumn on a queen keeps the winter stores: no eggs into the
+      // hungry months unless they hold a reserve per ant -- the AI's queen
+      // a bigger one; a players' colony that grew big in summer otherwise
+      // laid its stores away and starved in autumn or winter)
+      const need = G.season >= AUTUMN ? Math.max(30, pop * (this.player ? PLAYER_RESERVE : AI_RESERVE)) : 30;
       if (this.eggT <= 0 && this.food >= need && broodCount < caps.brood && pop + broodCount < caps.pop) {
         this.food -= 10;
         const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg', this);
@@ -746,6 +776,10 @@ class Colony {
     }
 
     if (this.nestFullT > 0) this.nestFullT -= 1;
+    // full to the brim (the queen can't lay): how long for
+    this.fullT = queen && pop + this.broodCount() >= this.caps.pop ? this.fullT + 1 : 0;
+    // old wounds fade from the queen's ledger
+    if (G.tick % 60 === 0) for (const k in this.queenDmg) this.queenDmg[k] *= QDMG_FADE;
 
     // the special structures
     this.updateShelters();
@@ -753,6 +787,7 @@ class Colony {
 
     if (this.player) {
       if (G.tick % 60 === 0) updateObjectives(this);
+      if (!this.defeated) this.updateExpansion(pop);
       // tasks
       this.taskT--;
       if (this.taskT <= 0) {
@@ -800,11 +835,18 @@ class Colony {
       this.lastExpandDay = G.day;
       this.addChamber(job.type, job.x, job.y, false);
       this.recalcChambers();
+      this.say('m_workersDug', [{ key: 'ch_' + job.type }], '#80ff80');
       return;
     }
-    if (G.isWinter() || this.expandN >= AI_EXPAND_MAX || (G.tick + this.idx * 97) % 600 !== 0) return;
-    if (G.day < this.lastExpandDay + AI_EXPAND_DAYS || !this.caps) return;
-    if (pop + this.broodCount() < this.caps.pop - 2) return;
+    if (G.isWinter() || (G.tick + this.idx * 97) % 600 !== 0 || !this.caps) return;
+    if (this.player) {
+      // (the players' colony: slowly, and only once full for a while)
+      if (G.season === SPRING || this.fullT < SELF_DIG_FULL) return;
+      if (Math.floor(this.lastExpandDay / SEASON_DAYS) === Math.floor(G.day / SEASON_DAYS) && this.expandN > 0) return;
+    } else {
+      if (this.expandN >= AI_EXPAND_MAX || G.day < this.lastExpandDay + AI_EXPAND_DAYS) return;
+      if (pop + this.broodCount() < this.caps.pop - 2) return;
+    }
     // where: a few tries around the junction for a spot clear of the other
     // chambers, deep enough, with no rock at its middle
     const j = this.junction;
@@ -819,10 +861,12 @@ class Colony {
       const pts = [];
       const n = Math.ceil(Math.hypot(x - j.x, y - j.y) / 5);
       for (let i = 1; i <= n; i++) pts.push({ x: j.x + (x - j.x) * i / n, y: j.y + (y - j.y) * i / n, r: 4 });
-      for (let dy = -6; dy <= 6; dy += 6) {
-        for (let dx = -16; dx <= 16; dx += 8) pts.push({ x: x + dx, y: y + dy, r: 6 });
+      // (the players' own workers dig a modest one: room for ~7 more)
+      const hw = this.player ? 8 : 16, hh = this.player ? 4 : 6;
+      for (let dy = -hh; dy <= hh; dy += hh) {
+        for (let dx = -hw; dx <= hw; dx += 8) pts.push({ x: x + dx, y: y + dy, r: 6 });
       }
-      this.digJob = { pts, i: 0, x, y, type: AI_CHAMBER_TYPES[this.expandN % AI_CHAMBER_TYPES.length] };
+      this.digJob = { pts, i: 0, x, y, type: this.player ? 'nursery' : AI_CHAMBER_TYPES[this.expandN % AI_CHAMBER_TYPES.length] };
       return;
     }
   }
@@ -937,6 +981,7 @@ class Colony {
       if (!this.raid.stolen) enemy.say('m_raidSteal', [], '#ff5040');
       this.raid.stolen += v;
     }
+    enemy.say('m_foodStolen', [v], '#ff7050');
     G.sfx('pickup', a.x, a.y, 200);
     return true;
   }

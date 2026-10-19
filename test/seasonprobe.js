@@ -330,7 +330,7 @@ const path = require('path');
       princess: G.ants.filter(a => a.caste === 'princess').length,
       ages: G.items.filter(i => i.kind === 'seed' && i.age >= 4990).length };
   });
-  check('save is version 5', saved.ok && saved.v === 5);
+  check('save is version 6', saved.ok && saved.v === 6);
   check('calendar round-trips (via the tick)', loaded.ok && loaded.season === saved.season && loaded.year === saved.year);
   check('crystals and upgrades round-trip', loaded.crystals === 7 && loaded.upg.mandibles === 2 &&
     loaded.upg.digging === 1 && loaded.upg.carry === 3, loaded.upg);

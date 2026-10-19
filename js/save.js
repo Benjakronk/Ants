@@ -106,7 +106,15 @@ function serializeColony(c) {
     objectives: c.objectives,
     defeated: c.defeated, slain: c.slain, queenSeen: c.queenSeen,
     raid: c.raid, expandN: c.expandN, lastExpandDay: c.lastExpandDay, digJob: c.digJob,
+    queenDmg: roundAll(c.queenDmg),
   };
+}
+
+// a { key: number } table with its numbers rounded to a tenth
+function roundAll(t) {
+  const o = {};
+  for (const k in t || {}) o[k] = Math.round(t[k] * 10) / 10;
+  return o;
 }
 
 function saveWorld(slot) {
@@ -116,10 +124,12 @@ function saveWorld(slot) {
   // upgrades, aphid shelters, fungus garden stock, royal brood, the last
   // nuptial flight. v5: every colony (G.colonies: the players' and the
   // red rival, each with its milestones, raid and growth), each ant's and
-  // brood's colony, the contested food site.
-  // restoreWorld still loads v2-v4 saves (missing fields get defaults).
+  // brood's colony, the contested food site. v6: each colony's ledger of
+  // who wounded its queen lately (the red-queen bonus needs a real hand in
+  // her death).
+  // restoreWorld still loads v2-v5 saves (missing fields get defaults).
   const data = {
-    v: 5,
+    v: 6,
     w: WORLD_W, h: WORLD_H,
     seed: G.seed,
     tick: G.tick,
