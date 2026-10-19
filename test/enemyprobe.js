@@ -27,17 +27,23 @@ const path = require('path');
     // spawn the new trio near the mound
     G.bugs.push(new Bug(cx - 200, T.surf[cx - 200] - 70, 'wasp'));
     G.bugs.push(new Bug(cx + 250, T.surf[cx + 250] - 8, 'beetle'));
+    // and a red raiding party (the rival's own soldiers, see Colony.startRaid)
+    const reds = [];
     for (let i = 0; i < 4; i++) {
-      G.bugs.push(new Bug(cx - 320 - i * 8, T.surf[cx - 320] - 8, 'redant'));
+      const a = new Ant(cx - 320 - i * 8, T.surf[cx - 320] - 8, 'soldier', G.rival);
+      a.raiding = true; a.raidRole = 'fight'; a.state = 'raid';
+      G.ants.push(a); reds.push(a);
     }
+    G.rival.raid = { phase: 'march', t: 0, siege: 0, target: 0, n0: 4, stolen: 0, warned: false, home: 0 };
     const snap = () => {
       const o = {};
       for (const b of G.bugs) {
-        if (!['wasp', 'beetle', 'redant'].includes(b.kind)) continue;
+        if (!['wasp', 'beetle'].includes(b.kind)) continue;
         const k = b.kind;
         (o[k] = o[k] || []).push((b.x | 0) + ',' + (b.y | 0) +
           (b.dead ? ' DEAD' : b.fleeing ? ' flee' : '') + ' hp' + Math.ceil(b.hp));
       }
+      o.red = reds.map(a => (a.x | 0) + ',' + (a.y | 0) + (a.hp <= 0 ? ' DEAD' : ' ' + a.state) + ' hp' + Math.ceil(a.hp));
       return JSON.stringify(o);
     };
     for (let s = 0; s < 8; s++) {

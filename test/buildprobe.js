@@ -363,7 +363,7 @@ const path = require('path');
       caps: G.colony.caps, surfHash: surfSum(),
     };
   });
-  check('save is version 4', saved.ok && saved.v === 4, saved.v);
+  check('save is version 5', saved.ok && saved.v === 5, saved.v);
   check('chambers round-trip', loaded.ok && loaded.chambers.join() === saved.chambers.join(), loaded.chambers);
   check('loads round-trip', loaded.soil === 37 && loaded.thatch === 12 && loaded.mat);
   check('packed earth and its wear round-trip', loaded.packed === saved.packed && loaded.packed > 0 &&
@@ -374,7 +374,9 @@ const path = require('path');
   // --- an old v2 save (no chambers, loads or wear) still loads ---
   const v2 = await page.evaluate(() => {
     const d = JSON.parse(localStorage.getItem('maur_world_1'));
-    d.v = 2;
+    // (an old save had one colony: the players')
+    d.v = 2; d.colony = d.colonies[0]; delete d.colonies;
+    d.ants = d.ants.filter(s => !s.col); d.brood = d.brood.filter(s => !s.col);
     delete d.colony.chambers; delete d.colony.nextChamberId;
     delete d.wear; delete d.buildMats; delete d.surf;
     for (const s of d.ants) { delete s.soil; delete s.thatch; }

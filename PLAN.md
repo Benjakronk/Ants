@@ -109,7 +109,26 @@ that march out from their own nest. This is also the foundation for versus.
      year, princesses stay out of fights. Moved on: a contested food site milestone and the rival
      status in the stars go to 2b with the real rival; the objective arrow
      and HUD rework stay in 3; legacy points / persistent-world years in 4.
-   - **2b:** the real rival `Colony` (`G.colonies`), red queen, raids.
+   - **2b done:** `G.colonies` = [black, red] (`G.colony`/`G.rival` aliases),
+     faction-agnostic `Colony` and friend-or-foe by `ant.colony`; the
+     generated red nest is red's chambers; red queen (2x hp), brood, its own
+     forage zone, AI chamber digging, a winter reserve; real raids (soldiers +
+     thieves march over, steal from storage, carry it home; spare the queen);
+     red queen slain = defeat + 1000 score / 5 crystals; stars: the third is
+     the rival (red queen slain, or more ants than red at the flight); the
+     summer contested-fruit milestone (replaces "store 2 crystals"); red on
+     the map and the O screen; save v5 + v4 migration (red bugs become red
+     soldiers). No far-AI throttling was needed (~1.0-1.3 ms/tick with both
+     colonies). After review: raids muster out of sight and go in together
+     (thieves just behind the soldiers, not stopping for guards), give up
+     when stalled, drop wedged raiders and stragglers, and are bigger;
+     raiders no longer get stuck in their own crater-eroded nest (nestIn
+     hysteresis, shaft-climb watchdog); fighters bite back at whoever bites
+     them; the red queen pays her bonus only when the players' colony slew
+     her; health bars on her and on bitten enemies, her health on the O
+     screen; brighter red ants; a contested-fruit label; nodesim is seeded.
+     To Phase 3: raid/rival balance against active players, red
+     princesses and a red nuptial flight, raid warnings in the HUD/arrow.
 3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing.
 4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus.
 5. **Deploy to the VPS.**

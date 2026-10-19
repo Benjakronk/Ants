@@ -1,14 +1,26 @@
 // Headless simulation in plain Node -- no browser, no DOM. Proves the sim can
-// run on a server, and measures what one world costs per tick.
-//   node test/nodesim.js [days]
+// run on a server, and measures what one world (both colonies: the players'
+// and the red rival) costs per tick.
+//   node test/nodesim.js [days] [randomSeed]
+// Math.random is seeded (default 1) so a pass or fail can be repeated.
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+// mulberry32, as in forageseeds.js
+let rs = Number(process.argv[3]) || 1;
+const M = Object.create(Math);
+M.random = () => {
+  rs = (rs + 0x6D2B79F5) | 0;
+  let t = Math.imul(rs ^ (rs >>> 15), 1 | rs);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
 // the browser loads these as plain scripts sharing one global scope; a vm
 // context does the same. Nothing client-side (canvas, audio, lang) is loaded.
 const SIM_FILES = ['worldgen.js', 'terrain.js', 'entities.js', 'colony.js', 'game.js'];
-const ctx = vm.createContext({ console, Math });
+const ctx = vm.createContext({ console, Math: M });
 for (const f of SIM_FILES) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), ctx, { filename: f });
 }
@@ -102,8 +114,10 @@ for (let i = 0; i < ticks; i++) {
   if (run('G.over')) { console.log('colony extinct on day', run('G.day')); break; }
   if (i % run('DAY_LEN') === 0 && i) {
     console.log(JSON.stringify(run(`({ day: G.day, food: Math.round(G.colony.food),
-      ants: G.ants.length, brood: G.brood.length, bugs: G.bugs.length, items: G.items.length,
-      born: G.colony.stats.antsBorn, died: G.colony.stats.antsDied })`)));
+      ants: G.colony.members().length, brood: G.colony.broodCount(), bugs: G.bugs.length, items: G.items.length,
+      born: G.colony.stats.antsBorn, died: G.colony.stats.antsDied,
+      red: { ants: G.rival.members().length, brood: G.rival.broodCount(), food: Math.round(G.rival.food),
+        born: G.rival.stats.antsBorn, chambers: G.rival.chambers.length, raids: G.rival.stats.raids } })`)));
   }
 }
 const ms = Date.now() - t0;
@@ -129,9 +143,13 @@ if (!process.argv.includes('--no-year')) {
       stepSim();
       G.events.length = 0;
       if (G.season !== s) {
-        log.push({ season: SEASON_KEYS[s], foodAtEnd: Math.round(food), ants: G.ants.length, brood: G.brood.length,
-          born: G.colony.stats.antsBorn, died: G.colony.stats.antsDied, milestones: done,
-          nan: !isFinite(G.colony.food) });
+        const r = G.rival;
+        log.push({ season: SEASON_KEYS[s], foodAtEnd: Math.round(food), ants: G.colony.members().length,
+          brood: G.colony.broodCount(), born: G.colony.stats.antsBorn, died: G.colony.stats.antsDied, milestones: done,
+          stolen: Math.round(G.colony.stats.foodStolen || 0),
+          red: { ants: r.members().length, food: Math.round(r.food), born: r.stats.antsBorn, died: r.stats.antsDied,
+            raids: r.stats.raids, chambers: r.chambers.length, defeated: r.defeated },
+          nan: !isFinite(G.colony.food) || !isFinite(r.food) });
       }
       if (G.over) {
         log.push({ over: G.over.reason, win: G.over.win, stars: G.over.stars, canContinue: G.over.canContinue });
@@ -148,6 +166,13 @@ if (!process.argv.includes('--no-year')) {
   check('a year ends on the first day of spring in year 2', year.some(r => r.over && r.canContinue) &&
     run('G.year') === 2 && run('G.season') === 0);
   check('no NaN all year', year.every(r => !r.nan) && isFinite(run('G.colony.food')));
+  const reds = year.filter(r => r.red).map(r => r.red);
+  check('the red rival lives the year, grows, raids, and stays a sane size',
+    reds.every(r => r.ants > 0 && r.ants <= 80) && reds[reds.length - 1].born > 5 &&
+    reds[reds.length - 1].raids >= 1, JSON.stringify(reds[reds.length - 1]));
+  // the raids are a threat: an idle colony loses food to them (and lives)
+  const stolen = Math.max(0, ...year.filter(r => r.stolen !== undefined).map(r => r.stolen));
+  check('red raids steal from the idle colony, and it survives', stolen > 0 && !lost, 'stolen ' + stolen);
 }
 
 // the colony's own ants leave a thatched mound over the entrance standing:

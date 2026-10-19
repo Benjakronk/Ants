@@ -54,7 +54,8 @@ mound. Foragers stay home, so the colony lives off what it stored.
 
 Each season has three **milestones** (press **`O`**): spring — mark a second
 storage chamber, raise 5 new ants, store 100 food; summer — thatch a mound
-over the entrance, grow to 25 ants, store 2 crystals; autumn — have 150 food
+over the entrance, grow to 25 ants, bring home 8 pieces of the **contested
+fruit**; autumn — have 150 food
 stored as winter comes, dig a roomy royal chamber, raise a princess; winter —
 keep the queen alive, keep the entrance sealed or gated, kill 3 centipedes.
 Each gives score and crystals; missing one never ends the game, it only costs
@@ -64,8 +65,10 @@ mound and royal chamber). The random tasks in the corner remain as side jobs.
 In autumn, with a roomy royal chamber and full stores, the queen lays
 **princess** eggs. On the first day of spring in year 2 every princess flies
 out of the entrance in the **nuptial flight**, and the year is rated 1–3
-stars: one for a princess flown, one for 3 princesses or a colony of 30, one
-for 8 of the 12 milestones. Then you may carry on into the next year.
+stars (none without a princess flown): one for a princess flown, one for 3
+princesses or 8 of the 12 milestones, and one for the **rival status** —
+the red queen slain, or more ants than the red colony on the day of the
+flight. Then you may carry on into the next year.
 **You can't play the queen** — and if she dies with no princess (grown or
 growing) to take her place, the colony is lost.
 
@@ -118,14 +121,45 @@ If your ant dies, you continue as any other ant in the colony — worker,
 soldier or nurse. When the last ant falls, or the queen dies without an heir,
 the colony is gone.
 
+### The red colony
+
+A **rival red-ant colony** holds the right quarter of the map, and it is as
+alive as yours: a red queen (twice as tough as yours) lays in her royal
+chamber, red nurses raise the brood, red workers forage their own side of
+the forest and red soldiers patrol the nest. It lives by the same rules —
+capacity from its chambers, the seasons, winter stores — and digs itself a
+few new chambers as it grows over the year.
+
+When it is strong enough (enough ants and food; never in winter, at most
+once a day, bolder and bigger as the year goes on) red sends a **raid**:
+soldiers and thieves march across the forest, gather just out of sight of
+your nest (you are warned when they arrive), then go in together — the
+soldiers first, the thieves close behind to slip past the fight to your
+storage and carry off food. They spare your queen; the raid ends when the
+thieves are laden, too many raiders fall, they have spent long enough at
+your gates or stop getting anywhere, and the survivors go home. Red ants
+are a bright scarlet with a glossy highlight; a bitten enemy shows a small
+health bar for a few seconds.
+
+Each summer a **fruit falls between the nests** (the orange dot on the `M`
+map, labelled *contested fruit* when you are near it): both colonies'
+foragers race for its pieces. Deliver 8 of them for the summer milestone.
+
+The bonus: fight into the red nest and **kill the red queen**. With no
+princess to succeed her, the red colony falls apart — its ants stop
+raiding and slowly waste away — and the rival star at the flight is yours.
+If your colony dealt her last wound you also get 1000 points and 5
+crystals (dead of anything else, she pays nothing). Once a player has
+found her, the map marks her, she carries a health bar, and the `O`
+screen shows her health next to a rough count of the red colony.
+
 ### Worlds
 
 Three save slots, each a procedurally generated world: rolling forest floor,
 trees with aphid herds in the canopy, rock seams and natural caves below,
 and the colony mound with its chambers dug beneath. Your nest sits in the
-left quarter of the map; a **rival red-ant colony** holds the right quarter,
-its mound garrisoned by defenders, with a long stretch of open forest beyond
-each nest to explore. Worlds save automatically
+left quarter of the map, the red colony's in the right quarter, with a long
+stretch of open forest beyond each nest to explore. Worlds save automatically
 (and on quit) — sink hours into one and come back later. Online co-op is on
 the way (see `PLAN.md`).
 
@@ -140,7 +174,7 @@ the way (see `PLAN.md`).
 | Centipede | Deep predator; follows you down tunnels |
 | Wasp | Day-flying striker; dives on ants in the open |
 | Beetle | Rare armored bruiser; bulldozes toward the mound |
-| Red ants | Rival colony on the far side; defenders garrison their mound, raiders march on yours |
+| Red ants | The rival colony on the far side: foragers, nest soldiers, raids on your stores |
 
 ## Development
 
@@ -158,13 +192,16 @@ simulation (runs in the browser or headless in Node)
 js/worldgen.js     seeded procedural generation (terrain, nest, trees)
 js/terrain.js      per-pixel destructible terrain, digging, building, wear
 js/entities.js     ants (player + AI), brood, bugs, items, physics
-js/colony.js       colony simulation: food, brood cycle, chambers and
-                   capacity, mound/shelters/fungus gardens, crystal
-                   upgrades, tasks, spawning, the year's milestones
-js/game.js         world state G, setup/restore, player actions (bite,
-                   build, mark, buy), the calendar and its year (winter
-                   cold, the queen's succession, the nuptial flight),
-                   stepSim()
+js/colony.js       colony simulation (one Colony per faction in
+                   G.colonies: the players' black, the red rival): food,
+                   brood cycle, chambers and capacity, mound/shelters/
+                   fungus gardens, crystal upgrades, tasks, spawning, the
+                   AI colony's growth and raids, the contested fruit,
+                   the year's milestones
+js/game.js         world state G, setup/restore (and save migration),
+                   player actions (bite, build, mark, buy), the calendar
+                   and its year (winter cold, each queen's succession, the
+                   rival's defeat, the nuptial flight), stepSim()
 
 client
 js/terrainview.js  terrain canvases, repainted from edit rects
@@ -181,15 +218,18 @@ node test/smoke.js        # boot, play, dig, climb, save/load, switch, takeover
 node test/longsim.js      # fast-forward 3 in-game days of colony simulation
 node test/nodesim.js      # the sim alone in plain Node (no browser): build +
                           # mark through the input struct, timings, then a
-                          # whole year (--no-year skips it)
+                          # whole year of both colonies (--no-year skips it)
 node test/seasonprobe.js  # seasons, cold, milestones, O screen, queen rules,
-                          # princesses, flight + end screens, upgrades, gates,
-                          # shelters, fungus gardens, v4 saves + old v3
-node test/forageseeds.js  # several seeds headless in parallel: foraging and
-                          # food per day (or per season: forageseeds.js 13)
+                          # princesses, flight + stars + end screens, upgrades,
+                          # gates, shelters, fungus gardens, saves + old v3
+node test/forageseeds.js  # several seeds headless in parallel: foraging, food,
+                          # the red colony's size and raids per day (or per
+                          # season for a whole idle year: forageseeds.js 13)
 node test/featureprobe.js # caste abilities, switching, brood carrying
 node test/langprobe.js    # Norwegian strings, font coverage
-node test/rivalprobe.js   # rival nest and garrison
+node test/rivalprobe.js   # the red colony: queen, brood, foraging, raids and
+                          # theft, the contested fruit, the red queen slain,
+                          # v5 saves + v4 migration; map and O screen
 node test/buildprobe.js   # soil loads, building, chambers, capacity, saves
 ```
 

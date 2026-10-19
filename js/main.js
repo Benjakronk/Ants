@@ -453,12 +453,25 @@ function drawObjScreen() {
     drawText(ctx, L('ui_mound', col.mound.size), 20, y, '#d8b860');
     const seal = col.sealed ? L('ui_sealed') : L('ui_open');
     drawText(ctx, seal, 300 - textWidth(seal), y, col.sealed ? '#80ff80' : '#ff9040');
-    drawText(ctx, L('ui_crystals', col.crystals), 20, y + 12, '#80e0ff');
+    drawText(ctx, L('ui_crystals', col.crystals), 20, y + 10, '#80e0ff');
     const ms = L('ui_milestones', G.objectives.yearDone);
-    drawText(ctx, ms, 300 - textWidth(ms), y + 12, '#ffe040');
+    drawText(ctx, ms, 300 - textWidth(ms), y + 10, '#ffe040');
+    // the rival: a rough head count (nobody counts red ants one by one)
+    const r = G.rival;
+    if (r) {
+      const rs = r.defeated ? L(r.slain ? 'ui_rivalSlain' : 'ui_rivalDied')
+        : L('ui_rival', Math.max(5, Math.round(r.members().length / 5) * 5));
+      drawText(ctx, rs, 20, y + 20, r.defeated ? '#80ff80' : '#ff7060');
+      // once found, how her health stands (the bonus is a long campaign)
+      const q = !r.defeated && r.queenSeen ? r.queen() : null;
+      if (q) {
+        const qs = L('ui_rivalQueen', Math.max(1, Math.round(q.hp / q.maxHp * 100)));
+        drawText(ctx, qs, 300 - textWidth(qs), y + 20, '#ff9080');
+      }
+    }
     // the next flight: this spring's if it hasn't flown yet, else next year's
     const flightYear = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year ? G.year : G.year + 1;
-    drawTextC(ctx, L('ui_yearGoal', flightYear), VIEW_W / 2, y + 28, '#ff90e0');
+    drawTextC(ctx, L('ui_yearGoal', flightYear), VIEW_W / 2, y + 31, '#ff90e0');
     drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 162, '#a09070');
   } else {
     drawText(ctx, '\x13 ' + L('ui_crystals', col.crystals), 20, 40, '#80e0ff');
@@ -486,6 +499,9 @@ function drawObjScreen() {
   const m = G.msgs[G.msgs.length - 1];
   if (m) {
     ctx.globalAlpha = Math.min(1, m.t / 60);
+    const w = textWidth(m.text) + 8;
+    ctx.fillStyle = '#241a10';
+    ctx.fillRect(Math.round((VIEW_W - w) / 2), 148, w, 11);
     drawTextC(ctx, m.text, VIEW_W / 2, 150, m.color);
     ctx.globalAlpha = 1;
   }
@@ -663,16 +679,19 @@ function drawViewport(vx, vy, vw, vh) {
   if (G.season === WINTER) drawSnow(camx, camy, vw, vh);
   drawStructures(camx, camy, vw, vh);
 
-  // the food cache, piled by prosperity
-  const col = G.colony;
-  const pile = Math.min(24, Math.floor(col.food / 6));
+  // each colony's food cache, piled by prosperity
   ctx.fillStyle = '#d8b878';
-  for (let i = 0; i < pile; i++) {
-    const h = pxHash(i * 17, 3);
-    const px2 = col.storage.x - 10 + (h % 21);
-    const py2 = col.storage.y + 8 - (Math.floor(h / 64) % 5) - Math.floor(Math.abs(px2 - col.storage.x) / 4);
-    ctx.fillRect(Math.round(px2 - camx), Math.round(py2 - camy), 2, 1);
+  for (const c of G.colonies) {
+    if (Math.abs(c.storage.x - camx - vw / 2) > vw) continue;
+    const pile = Math.min(24, Math.floor(c.food / 6));
+    for (let i = 0; i < pile; i++) {
+      const h = pxHash(i * 17, 3);
+      const px2 = c.storage.x - 10 + (h % 21);
+      const py2 = c.storage.y + 8 - (Math.floor(h / 64) % 5) - Math.floor(Math.abs(px2 - c.storage.x) / 4);
+      ctx.fillRect(Math.round(px2 - camx), Math.round(py2 - camy), 2, 1);
+    }
   }
+  const col = G.colony;
 
   // the marker X would act on (in sight and in reach) gets a blinking frame
   const markCh = me ? col.markTarget(me.x, me.y) : null;
@@ -694,6 +713,8 @@ function drawViewport(vx, vy, vw, vh) {
   for (const b of G.bugs) b.draw(ctx, camx, camy);
   for (const a of G.ants) if (a.playerIdx < 0) a.draw(ctx, camx, camy);
   for (const pp of G.players) if (pp.ant) pp.ant.draw(ctx, camx, camy);
+  drawFoeBars(camx, camy, vw, vh);
+  drawSiteLabel(camx, camy, me);
 
   Particles.draw(ctx, camx, camy);
   if (G.flyers.length) drawFlyers(camx, camy);
@@ -748,6 +769,8 @@ function drawViewport(vx, vy, vw, vh) {
 // ---------------------------------------------------------------------------
 // chamber markers: a little signpost on the chamber floor
 // ---------------------------------------------------------------------------
+const FOE_BAR_T = 240;   // ticks a bitten enemy shows its health bar
+
 const CH_LOOK = {
   storage:  { icon: '\x03', color: '#d8b878' },
   nursery:  { icon: '\x0E', color: '#efe9d8' },
@@ -755,6 +778,30 @@ const CH_LOOK = {
   royal:    { icon: '\x11', color: '#ff90e0' },
   fungus:   { icon: '\x14', color: '#a8d4b2' },
 };
+
+// a small health bar over the enemy queen once she's been found, and over
+// any enemy ant bitten in the last few seconds: a fight shows its progress
+function drawFoeBars(camx, camy, vw, vh) {
+  for (const a of G.ants) {
+    if (a.hp <= 0 || a.colony === G.colony || a.hp >= a.maxHp) continue;
+    const queen = a.caste === 'queen' && a.colony.queenSeen;
+    if (!queen && !(G.tick - (a.hitT || -1e9) < FOE_BAR_T)) continue;
+    const w = queen ? 16 : 8;
+    const ex = Math.round(a.x - camx) - w / 2, ey = Math.round(a.y - camy) - (queen ? 12 : 9);
+    if (ex < -w || ex > vw || ey < -4 || ey > vh) continue;
+    ctx.fillStyle = '#1a1008';
+    ctx.fillRect(ex, ey, w, 3);
+    ctx.fillStyle = queen ? '#ff4060' : '#e08040';
+    ctx.fillRect(ex + 1, ey + 1, Math.max(1, Math.round((w - 2) * a.hp / a.maxHp)), 1);
+  }
+}
+
+// this summer's fallen fruit: named when the player's ant is near it
+function drawSiteLabel(camx, camy, me) {
+  const cs = G.contested;
+  if (!me || !cs || !cs.active || Math.abs(cs.x - me.x) > 120 || Math.abs(cs.y - me.y) > 60) return;
+  drawTextCS(ctx, L('ui_siteLabel'), Math.round(cs.x - camx), Math.round(cs.y - camy) - 22, '#ffb0c0');
+}
 
 // the floor under a marker (markers sit at a chamber's middle)
 function chamberFloor(ch) {
@@ -879,8 +926,8 @@ function drawHud() {
   }
 
   // colony: ants and brood against capacity, food against the stores
-  const ants = G.ants.filter(a => a.hp > 0).length;
-  const brood = G.brood.length;
+  const ants = col.members().length;
+  const brood = col.broodCount();
   const food = Math.floor(col.food);
   // the queen stops laying once adults + brood fill the room: warn on that
   drawText(ctx, '\x02' + ants + '/' + caps.pop, 116, y + 4,
@@ -918,7 +965,8 @@ function drawTaskAndMsgs() {
     drawTextS(ctx, str, 4, ty, '#ffd890');
   }
 
-  // messages
+  // messages (not over the O panel: its status line shows the newest)
+  if (G.objScreen) return;
   let my = 24;
   for (const m of G.msgs) {
     ctx.globalAlpha = Math.min(1, m.t / 60);
@@ -953,12 +1001,50 @@ function drawMinimap() {
     ctx.fillStyle = '#8cc85a';
     ctx.fillRect(cx - 1, cy - 1, 2, 2);
   }
+  // the rival nests: a red flag over each entrance (grey once its queen fell)
+  for (const c of G.colonies) {
+    if (c === G.colony) continue;
+    const fx = Math.round(mx + c.entrance.x * sx), fy = Math.round(my + c.entrance.y * sy);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(fx - 1, fy - 9, 7, 6);
+    ctx.fillRect(fx - 1, fy - 9, 3, 10);
+    ctx.fillStyle = '#c8b890';
+    ctx.fillRect(fx, fy - 8, 1, 8);
+    ctx.fillStyle = c.defeated ? '#706050' : '#e03828';
+    ctx.fillRect(fx + 1, fy - 8, 4, 4);
+  }
+  // this summer's fallen fruit between the nests
+  const cs = G.contested;
+  if (cs && cs.active) {
+    const fx = Math.round(mx + cs.x * sx), fy = Math.round(my + cs.y * sy);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(fx - 2, fy - 2, 5, 5);
+    ctx.fillStyle = (G.frame >> 4) % 2 ? '#ffb040' : '#c8304a';
+    ctx.fillRect(fx - 1, fy - 1, 3, 3);
+  }
   for (const a of G.ants) {
     if (a.hp <= 0) continue;
+    const red = a.colony !== G.colony;
+    // a rival queen shows only once a player has found her
+    if (red && a.caste === 'queen' && a.colony.queenSeen) continue;
+    if (red) {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(mx + a.x * sx - 1, my + a.y * sy, 2, 2);
+    }
     ctx.fillStyle = a.playerIdx === 0 ? '#ffff40' : a.playerIdx === 1 ? '#40d0ff'
-      : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
+      : red ? '#ff6050' : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
     const sz = a.playerIdx >= 0 && (G.tick >> 3) % 2 ? 3 : 2;
     ctx.fillRect(mx + a.x * sx - 1, my + a.y * sy - 1, sz, sz);
+  }
+  // a found rival queen: a blinking crown-red marker
+  for (const c of G.colonies) {
+    const q = c !== G.colony && c.queenSeen ? c.queen() : null;
+    if (!q) continue;
+    const qx = Math.round(mx + q.x * sx), qy = Math.round(my + q.y * sy);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(qx - 2, qy - 2, 5, 5);
+    ctx.fillStyle = (G.frame >> 3) % 2 ? '#ff4060' : '#ffe040';
+    ctx.fillRect(qx - 1, qy - 1, 3, 3);
   }
   ctx.fillStyle = '#ff3020';
   for (const b of G.bugs) {
@@ -1156,7 +1242,7 @@ function drawHelp() {
   let y = 32;
   for (const [line, color] of helpText()) {
     if (line) drawText(ctx, line, 24, y, color);
-    y += 10;
+    y += 9;
   }
   drawTextC(ctx, L('ui_escBack'), VIEW_W / 2, 186, '#706050');
 }
@@ -1268,9 +1354,9 @@ function drawGameOver() {
       [L(s.reason, s.flown), s.win ? '#ffd0f0' : '#c8b890'],
       [L('ui_milestones', s.milestones), '#ffe040'],
       [L('ui_colonySize', s.pop || 0), '#c8b890'],
+      [L(s.rivalDead ? 'ui_rivalDead' : s.rival ? 'ui_rivalWon' : 'ui_rivalLost'), s.rival ? '#80ff80' : '#ff7060'],
       [L('ui_finalScore', s.score), '#ffe040'],
       [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],
-      [L('ui_antsBorn', s.stats.antsBorn), '#a09070'],
     ];
     let y = 78;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 11; }

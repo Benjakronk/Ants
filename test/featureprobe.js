@@ -107,7 +107,7 @@ const path = require('path');
   await page.evaluate(() => {
     const a = G.players[0].ant;
     // one no NPC nurse has on its back right now (or a fresh egg)
-    let b = G.brood.find(b => !b.dead && !b.carried);
+    let b = G.brood.find(b => !b.dead && !b.carried && b.colony === G.colony);
     if (!b) { b = new Brood(a.x, a.y, 'egg'); G.brood.push(b); }
     b.x = a.x + 2; b.y = a.y;
   });

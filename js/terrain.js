@@ -51,9 +51,22 @@ const T = {
   boxSolid(x, y, hw, hh, own) {
     const x0 = Math.floor(x - hw), x1 = Math.ceil(x + hw);
     const y0 = Math.floor(y - hh), y1 = Math.ceil(y + hh);
+    if (x0 < 0 || y0 < 0 || x1 >= WORLD_W || y1 >= WORLD_H) {
+      // at the world's edge: the careful way (outside counts as rock)
+      for (let py = y0; py <= y1; py++) {
+        for (let px = x0; px <= x1; px++) {
+          if (this.solid(px, py, own)) return true;
+        }
+      }
+      return false;
+    }
+    // (the hot path of all physics: straight off the byte array)
+    const m = this.m;
     for (let py = y0; py <= y1; py++) {
-      for (let px = x0; px <= x1; px++) {
-        if (this.solid(px, py, own)) return true;
+      let i = py * WORLD_W + x0;
+      for (let px = x0; px <= x1; px++, i++) {
+        const v = m[i];
+        if (v !== M_AIR && (v !== M_GATE || !own)) return true;
       }
     }
     return false;

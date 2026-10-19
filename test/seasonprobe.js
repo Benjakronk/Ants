@@ -289,11 +289,12 @@ const path = require('path');
   // --- the queen dies with a princess alive: she is crowned ---
   const succ = await page.evaluate(() => {
     msgKeys.length = 0;
-    const q = G.ants.find(a => a.caste === 'queen');
+    const q = G.colony.queen();
     q.hp = 0;
     simN(2);
-    return { queens: G.ants.filter(a => a.caste === 'queen' && a.hp > 0).length,
-      princesses: G.ants.filter(a => a.caste === 'princess').length,
+    const mine = a => a.colony === G.colony && a.hp > 0;
+    return { queens: G.ants.filter(a => a.caste === 'queen' && mine(a)).length,
+      princesses: G.ants.filter(a => a.caste === 'princess' && mine(a)).length,
       over: G.over, msg: msgKeys.includes('m_newQueen') };
   });
   check('queen dies with a princess: succession', succ.queens === 1 && succ.princesses === 0 &&
@@ -329,7 +330,7 @@ const path = require('path');
       princess: G.ants.filter(a => a.caste === 'princess').length,
       ages: G.items.filter(i => i.kind === 'seed' && i.age >= 4990).length };
   });
-  check('save is version 4', saved.ok && saved.v === 4);
+  check('save is version 5', saved.ok && saved.v === 5);
   check('calendar round-trips (via the tick)', loaded.ok && loaded.season === saved.season && loaded.year === saved.year);
   check('crystals and upgrades round-trip', loaded.crystals === 7 && loaded.upg.mandibles === 2 &&
     loaded.upg.digging === 1 && loaded.upg.carry === 3, loaded.upg);
@@ -341,7 +342,8 @@ const path = require('path');
   // --- an old v3 save loads: spring of year 1, nothing of the new yet ---
   const v3 = await page.evaluate(() => {
     const d = JSON.parse(localStorage.getItem('maur_world_1'));
-    d.v = 3;
+    d.v = 3; d.colony = d.colonies[0]; delete d.colonies;
+    d.ants = d.ants.filter(s => !s.col); d.brood = d.brood.filter(s => !s.col);
     d.tick = 5 * DAY_LEN + 1234; d.day = 5;
     delete d.objectives; delete d.lastFlightYear; delete d.flight;
     delete d.colony.crystals; delete d.colony.upg; delete d.colony.shelters;
@@ -381,13 +383,12 @@ const path = require('path');
     G.bugs.push(bug);
     let maxX = -Infinity;
     for (let i = 0; i < 240; i++) { bug.dir = 1; bug.curl = 0; simN(1); maxX = Math.max(maxX, bug.x); }
-    const red = new Bug(gx + 14, ROOM.y + 6, 'redant');
-    red.resident = true; red.homeX = gx - 200;
-    G.bugs.push(red);
+    // a red ant walking at the gate (physics alone: the gate's `own` test)
+    const red = new Ant(gx + 14, ROOM.y + 6, 'soldier', G.rival);
     let minX = Infinity;
-    for (let i = 0; i < 240; i++) { simN(1); minX = Math.min(minX, red.x); }
+    for (let i = 0; i < 240; i++) { red.vx = -0.5; red.dir = -1; physStep(red); minX = Math.min(minX, red.x); }
     const intact = (() => { let n = 0; for (let y = ROOM.y - 12; y <= ROOM.y + 12; y++) for (let x = gx; x < gx + 4; x++) if (T.get(x, y) === M_GATE) n++; return n; })();
-    bug.hp = 0; red.hp = 0;
+    bug.hp = 0;
     simN(2);
     return { gx, antX, maxX, minX, intact, solidBug: T.solid(gx + 1, ROOM.y), solidAnt: T.solid(gx + 1, ROOM.y, true) };
   });
@@ -485,6 +486,7 @@ const path = require('path');
     G.lastFlightYear = 0;
     G.tick = YEAR_DAYS * DAY_LEN - 3;
     G.objectives = newObjectives(1, 3, 9);
+    G.rival.defeated = true;   // (the rival star: the red queen slain)
     G.state = 'play';
     for (let i = 0; i < 60; i++) updatePlay();
     return { flight: !!G.flight, flyers: G.flyers.length,
@@ -524,16 +526,25 @@ const path = require('path');
   }));
   check('one princess reads in the singular', await page.evaluate(() =>
     !L('r_flight1').includes('{0}') && !L('m_flight1').includes('PRINCESSES')));
-  check('stars: 1 for a princess, +1 for 3 or 30 ants, +1 for 8 milestones', await page.evaluate(() => {
-    const t = (n, pop, ms) => {
-      G.ants = G.ants.filter(a => a.caste !== 'princess');
+  check('stars: 1 for a princess, +1 for 3 princesses or 8 milestones, +1 for the rival', await page.evaluate(() => {
+    // rival: 'dead' (red queen slain), 'big' (red outnumbers us), 'small' (we outnumber red)
+    const reds = G.ants.filter(a => a.colony === G.rival);
+    const t = (n, ms, rival) => {
+      G.ants = G.ants.filter(a => a.caste !== 'princess' && a.colony !== G.rival);
       for (let i = 0; i < n; i++) G.ants.push(new Ant(G.colony.queenCh.x, G.colony.queenCh.y, 'princess'));
+      G.rival.defeated = rival === 'dead';
+      const many = rival === 'big' ? G.colony.members().length + 5 : 2;
+      for (let i = 0; i < many; i++) G.ants.push(new Ant(G.rival.junction.x, G.rival.junction.y, 'worker', G.rival));
       G.lastFlightYear = 0;
       startFlight(ms);
       const s = G.flight.stars; G.flight = null;
       return s;
     };
-    return t(1, 0, 0) === 1 && t(3, 0, 0) === 2 && t(1, 0, 8) === 2 && t(0, 0, 12) === 0 && t(3, 0, 8) === 3;
+    const ok = t(1, 0, 'big') === 1 && t(3, 0, 'big') === 2 && t(1, 8, 'big') === 2 && t(0, 12, 'dead') === 0 &&
+      t(3, 8, 'big') === 2 && t(1, 0, 'small') === 2 && t(1, 0, 'dead') === 2 && t(3, 8, 'small') === 3;
+    G.ants = G.ants.filter(a => a.colony !== G.rival).concat(reds);
+    G.rival.defeated = false;
+    return ok;
   }));
 
   // --- the queen dies with no heir: the loss screen ---

@@ -69,7 +69,62 @@ const UPGRADES = {
 };
 const UPGRADE_IDS = ['mandibles', 'digging', 'armor', 'carry'];
 const UPG_DMG = 0.25, UPG_DIGR = 0.12, UPG_DIGCD = 0.12, UPG_ARMOR = 0.2, UPG_CARRY = 0.12;
-function upgLevel(id) { return G.colony && G.colony.upg ? G.colony.upg[id] || 0 : 0; }
+// a colony's upgrade level (default: the players' colony)
+function upgLevel(id, col) {
+  col = col || G.colony;
+  return col && col.upg ? col.upg[id] || 0 : 0;
+}
+
+// the colonies: index 0 is the players' (black), index 1 the rival red one.
+// Every colony runs the same sim; `player` colonies get tasks, milestones and
+// the messages, AI colonies get the expansion and raid rules below.
+const FACTIONS = ['black', 'red'];
+const NEST_R = 250;          // an ant within this of a nest's x, underground, is in that nest
+
+// the rival's growth: a cramped AI colony digs out a new chamber now and then
+const AI_EXPAND_MAX = 3;     // chambers it adds in all
+const AI_EXPAND_DAYS = 2;    // days between them
+const AI_EXPAND_STEP = 40;   // ticks per bite of the dig
+const AI_CHAMBER_TYPES = ['storage', 'nursery', 'barracks'];
+// an AI queen keeps a winter reserve: from autumn on she lays only while
+// the stores hold this much food per ant
+const AI_RESERVE = 3;
+
+// raids: soldiers and workers march from the AI nest on its enemy's, fight,
+// steal from the stores and carry it home. At most one a day, never in
+// winter, bolder as the year goes on.
+const RAID_POP = 14;         // the raiding colony needs this many ants...
+const RAID_FOOD = 40;        // ...and this much food in store
+const RAID_CHANCE = 1 / (DAY_LEN * 0.4);  // per tick once ready (scaled by boldness)
+const RAID_BOLD = [0.5, 1, 1.5, 0];       // by season
+const RAID_T = 20000;        // ticks before the raiders give up and go home...
+const RAID_SIEGE = 2400;     // ...or this long at the enemy's nest
+const RAID_MAX = 10;         // raiders at most
+const RAID_STEAL = 8;        // food a raider carries off from the stores
+const RAID_NERVE = 0.2;      // a thief bitten on its way in only runs below this much health
+const RAID_MUSTER = 520;     // the party gathers this far short of the enemy's nest (out of its soldiers' sight)...
+const RAID_MUSTER_T = 1200;  // ...waiting at most this long for stragglers, then goes in together
+const RAID_LOSS = 0.34;      // the raid breaks off once fewer than this share of it is left
+const RAID_THIEF_LAG = 360;  // ticks the thieves hold back once the fighters go in
+const RAID_STALL = 1800;     // ticks with no raider getting closer (and none at the gates): give up
+const RAID_ANT_STALL = 1500; // ticks one raider may go without getting closer before it drops out
+const RAID_HOME_T = 9000;    // ticks the retreat may take before stragglers drop the raid (the walk home is ~6000)
+// what a raider may be busy with; any other state (a forage errand, a
+// rescue) means it lost the thread and is no longer one
+const RAID_STATES = ['raid', 'fight', 'flee', 'idle', 'home', 'return'];
+
+// the red queen slain: the rival colony is defeated
+const RIVAL_SCORE = 1000, RIVAL_CRYSTALS = 5;
+const SLAIN_T = 1200;        // ticks a queen's last wound counts toward who slew her
+const LEADERLESS_DMG = 0.003; // hp per tick the queenless ants waste away
+const RED_QUEEN_HP = 2;      // the red queen's health (times a queen's)
+
+// the contested food site: a fallen fruit between the nests each summer,
+// whose pieces both colonies' foragers race for
+const SITE_PIECES = 14;      // pieces when it falls...
+const SITE_MAX = 40;         // ...and at most this many over the summer
+const SITE_REFILL = 1200;    // ticks between top-ups (while few lie there)
+const SITE_GO = 0.3;         // a forager's chance to head for it
 
 // scratch grids for roomyGrid(): a square around a marker, wide enough for
 // the opening to see every pixel of the disk
@@ -125,10 +180,21 @@ function roomyGrid(cx, cy) {
   return A;
 }
 
+// out of the winter cold: below ground, or within any colony's thatched mound
+function sheltered(e) {
+  if (underground(e)) return true;
+  for (const c of G.colonies) if (c.inMound(e)) return true;
+  return false;
+}
+
 class Colony {
-  constructor(info) {
-    // info: { x, entrance, junction, queenCh, storage, nursery }
+  constructor(info, idx) {
+    // info: { x, entrance, junction, queenCh, storage, nursery, paths }
     Object.assign(this, info);
+    this.idx = idx || 0;                    // its index in G.colonies
+    this.faction = FACTIONS[this.idx] || 'red';
+    this.player = this.idx === 0;           // played (tasks, milestones, messages)
+    this.gates = this.player;               // its ants pass ant gates (the players' build)
     // the generated nest's chambers become the first markers; the NPC
     // anchors above (storage, nursery, queenCh) stay the navigation targets.
     // `anchor` markers keep their type and are never removed.
@@ -157,11 +223,42 @@ class Colony {
     this.tasks = [];
     this.lastDigTaskDay = 0;
     this.lastRaidDay = 0;
+    this.objectives = null; // this season's milestones (player colonies)
+    this.defeated = false;  // its queen died with no heir (an AI colony)
+    this.slain = false;     // ...killed by a player colony (the bonus was paid)
+    this.queenHit = null;   // { col, t }: whose colony last wounded its queen
+    this.raid = null;       // a raid under way { phase, t, target, n0, stolen, warned, home }
+    this.queenSeen = false; // a player has found its queen (the map marks her)
+    this.expandN = 0;       // chambers the AI dug out
+    this.lastExpandDay = 0;
+    this.digJob = null;     // the AI's chamber dig in progress { pts, i, type }
     this.stats = {
       foodGathered: 0, tasksDone: 0, antsBorn: 0,
       antsDied: 0, predatorsSlain: 0,
       milestones: 0, princesses: 0, flown: 0, crystalsFound: 0,
+      eggsLaid: 0, raids: 0, foodStolen: 0, rivalsSlain: 0, rivalDefeated: 0,
     };
+  }
+
+  // ---- members -----------------------------------------------------------------
+  // the living ants of this colony
+  members() { return G.ants.filter(a => a.hp > 0 && a.colony === this); }
+  queen() { return G.ants.find(a => a.caste === 'queen' && a.hp > 0 && a.colony === this) || null; }
+  broodCount() {
+    let n = 0;
+    for (const b of G.brood) if (!b.dead && b.colony === this) n++;
+    return n;
+  }
+  // a message for this colony's players (an AI colony keeps quiet)
+  say(key, args, color) { if (this.player) G.msg(key, args, color); }
+  // the colony this one fights: the nearest other one still standing
+  enemy() {
+    let best = null;
+    for (const c of G.colonies) {
+      if (c === this || c.defeated) continue;
+      if (!best || Math.abs(c.x - this.x) < Math.abs(best.x - this.x)) best = c;
+    }
+    return best;
   }
 
   // ---- chambers and capacity ----------------------------------------------
@@ -264,8 +361,8 @@ class Colony {
 
   // out of the cold: below ground, or on the surface within a mound that's
   // big enough (beside or under it, not perched on top)
-  sheltered(a) {
-    if (underground(a)) return true;
+  sheltered(a) { return sheltered(a); }
+  inMound(a) {
     const m = this.mound;
     return m.size >= MOUND_WARM && a.x >= m.x0 - 4 && a.x <= m.x1 + 4 && a.y >= m.top - 4;
   }
@@ -334,7 +431,7 @@ class Colony {
       sh.t = SHELTER_T;
       if (this.thatchNear(sh.x, sh.y, SHELTER_R) < SHELTER_THATCH / 2) {
         sh.gone = gone = true;
-        G.msg('m_shelterGone', [], '#ff8040');
+        this.say('m_shelterGone', [], '#ff8040');
         continue;
       }
       if (G.isWinter()) continue;
@@ -479,8 +576,8 @@ class Colony {
   wantPrincess() {
     if (G.season !== AUTUMN || !this.caps.princess) return false;
     if (this.food < Math.max(60, this.caps.food * 0.6)) return false;
-    const have = G.ants.filter(a => a.caste === 'princess' && a.hp > 0).length +
-      G.brood.filter(b => b.royal && !b.dead).length;
+    const have = G.ants.filter(a => a.caste === 'princess' && a.hp > 0 && a.colony === this).length +
+      G.brood.filter(b => b.royal && !b.dead && b.colony === this).length;
     return have < this.caps.princess;
   }
 
@@ -494,11 +591,16 @@ class Colony {
       if (who && who.playerIdx >= 0) {
         G.msg('m_storageFull', [], '#ff8040', who.playerIdx);
         G.sfx('drop', who.x, who.y);
-      } else if (this.fullMsgT <= 0 && G.nearPlayer(this.storage.x, this.storage.y) < 400) {
+      } else if (this.player && this.fullMsgT <= 0 && G.nearPlayer(this.storage.x, this.storage.y) < 400) {
         G.msg('m_storageFullNpc', [], '#ff8040');
         this.fullMsgT = 3600;
       }
       return false;
+    }
+    // a piece of the contested site's fruit counts for whoever brings it in
+    if (item.site && G.contested) {
+      G.contested.got[this.idx] = (G.contested.got[this.idx] || 0) + 1;
+      objEvent('contested', 1, this);
     }
     if (item.kind === 'crystal') {
       // treasure, not food: the colony's currency for upgrades (and a
@@ -507,9 +609,9 @@ class Colony {
       this.stats.crystalsFound++;
       this.score += 20;
       this.progress('crystal', 1);
-      objEvent('crystals', 1);
-      G.msg('m_crystal', [this.crystals], '#80e0ff');
-      G.sfx('task');
+      objEvent('crystals', 1, this);
+      this.say('m_crystal', [this.crystals], '#80e0ff');
+      if (this.player) G.sfx('task');
     } else if (item.kind === 'leaf' && who && who.playerIdx < 0 &&
                this.gardenNear(this.storage.x, this.storage.y, 1e5)) {
       // the colony passes a forager's leaf on to the fungus garden
@@ -535,7 +637,7 @@ class Colony {
   // needs pick it
   spawnAdult(x, y, caste) {
     if (!caste) {
-      const ants = G.ants.filter(a => a.hp > 0);
+      const ants = this.members();
       const soldiers = ants.filter(a => a.caste === 'soldier').length;
       const nurses = ants.filter(a => a.caste === 'nurse').length;
       caste = 'worker';
@@ -543,31 +645,34 @@ class Colony {
       if (soldiers < ants.length * this.caps.soldiers && Math.random() < 0.4) caste = 'soldier';
       else if (nurses < ants.length * 0.15 && Math.random() < 0.35) caste = 'nurse';
     }
-    const a = new Ant(x, y, caste);
+    const a = new Ant(x, y, caste, this);
     G.ants.push(a);
     this.stats.antsBorn++;
     if (caste === 'princess') {
       this.stats.princesses++;
-      objEvent('princess', 1);
-      G.msg('m_princess', [], '#ff90e0');
-      G.sfx('task');
+      objEvent('princess', 1, this);
+      this.say('m_princess', [], '#ff90e0');
+      if (this.player) G.sfx('task');
     } else {
-      objEvent('raise', 1);
-      G.msg('m_emerged', [{ caste }]);
+      objEvent('raise', 1, this);
+      this.say('m_emerged', [{ caste }]);
     }
     G.sfx('hatch', x, y, 300);
+    return a;
   }
 
   update() {
     if (!isFinite(this.food)) { console.error('colony.food was NaN'); this.food = 0; }
-    const pop = G.ants.filter(a => a.hp > 0).length;
+    const ants = this.members();
+    const pop = ants.length;
     if (this.fullMsgT > 0) this.fullMsgT--;
 
     // digging (and building) reshapes the chambers: recount now and then
-    if (!this.caps || G.tick % CH_RECALC === 0) {
+    // (the colonies take turns, half a recount apart)
+    if (!this.caps || (G.tick + this.idx * (CH_RECALC >> 1)) % CH_RECALC === 0) {
       this.recalcChambers();
       // the winter milestone counts the recounts that found the nest shut
-      if (G.isWinter() && this.sealed) objEvent('sealed', 1);
+      if (G.isWinter() && this.sealed) objEvent('sealed', 1, this);
     }
 
     // digging erodes the nest: keep the colony's mental map (chamber anchors,
@@ -575,7 +680,7 @@ class Colony {
     // the entrance: it is the shaft's mouth, and "settling" it slid it down
     // the open shaft, 30 px a time, until foragers heading out "arrived" at
     // the bottom of the shaft and never surfaced again.
-    if (G.tick % 600 === 0) {
+    if ((G.tick + this.idx * 300) % 600 === 0) {
       for (const key of ['junction', 'queenCh', 'storage', 'nursery']) {
         const p = this[key];
         let n = 0;
@@ -589,40 +694,50 @@ class Colony {
 
     // starvation
     if (this.food <= 0 && pop > 0) {
-      for (const a of G.ants) if (a.hp > 0) a.hp -= 0.006;
+      for (const a of ants) a.hp -= 0.006;
       if (this.starveMsgT <= 0) {
-        G.msg('m_starving', [], '#ff6040');
-        G.sfx('starve');
+        this.say('m_starving', [], '#ff6040');
+        if (this.player) G.sfx('starve');
         this.starveMsgT = 1800;
       }
     }
     if (this.starveMsgT > 0) this.starveMsgT--;
 
+    // a defeated colony has no queen to hold it together: its ants waste
+    // away, and its brood with them
+    if (this.defeated) {
+      for (const a of ants) a.hp -= LEADERLESS_DMG;
+      for (const b of G.brood) if (b.colony === this) b.hp -= LEADERLESS_DMG;
+    }
+
     // the queen lays
-    const queen = G.ants.find(a => a.caste === 'queen' && a.hp > 0);
+    const queen = this.queen();
     if (queen) {
       // winter: she lays at a fraction of her pace
       this.eggT -= G.isWinter() ? WINTER_LAY : 1;
-      const broodCount = G.brood.filter(b => !b.dead).length;
+      const broodCount = this.broodCount();
       const caps = this.caps;
-      if (this.eggT <= 0 && this.food >= 30 && broodCount < caps.brood && pop + broodCount < caps.pop) {
+      // (an AI colony keeps its winter stores: no eggs into the hungry months)
+      const need = !this.player && G.season >= AUTUMN ? Math.max(30, pop * AI_RESERVE) : 30;
+      if (this.eggT <= 0 && this.food >= need && broodCount < caps.brood && pop + broodCount < caps.pop) {
         this.food -= 10;
-        const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg');
+        const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg', this);
         // autumn, a roomy royal chamber and full stores: a princess egg
         if (this.wantPrincess()) {
           e.royal = true;
-          G.msg('m_royalEgg', [], '#ff90e0');
+          this.say('m_royalEgg', [], '#ff90e0');
         } else {
-          G.msg('m_eggLaid');
+          this.say('m_eggLaid');
         }
         G.brood.push(e);
+        this.stats.eggsLaid++;
         this.eggT = caps.eggT;
         G.sfx('lay', queen.x, queen.y, 300);
       }
       if (this.eggT <= 0) {
         this.eggT = 600; // re-check soon
         // held back only by the room: tell the players (once a day at most)
-        if (this.food >= 30 && broodCount < caps.brood && pop + broodCount >= caps.pop &&
+        if (this.player && this.food >= 30 && broodCount < caps.brood && pop + broodCount >= caps.pop &&
             this.nestFullT <= 0) {
           this.nestFullT = DAY_LEN;
           G.msg('m_nestFull', [], '#ff9040');
@@ -635,19 +750,195 @@ class Colony {
     // the special structures
     this.updateShelters();
     this.updateGardens();
-    if (G.tick % 60 === 0) updateObjectives();
 
-    // tasks
-    this.taskT--;
-    if (this.taskT <= 0) {
-      this.taskT = 180;
-      this.generateTasks();
+    if (this.player) {
+      if (G.tick % 60 === 0) updateObjectives(this);
+      // tasks
+      this.taskT--;
+      if (this.taskT <= 0) {
+        this.taskT = 180;
+        this.generateTasks();
+      }
+      this.checkTasks();
+      for (const t of this.tasks) if (t.done && t.doneT > 0) t.doneT--;
+      this.tasks = this.tasks.filter(t => !t.done || t.doneT > 0);
+    } else if (!this.defeated) {
+      this.updateAI(pop, queen);
     }
-    this.checkTasks();
-    for (const t of this.tasks) if (t.done && t.doneT > 0) t.doneT--;
-    this.tasks = this.tasks.filter(t => !t.done || t.doneT > 0);
 
-    this.ambientSpawns();
+    this.forageSpawns();
+  }
+
+  // ---- the AI colony: growth, raids, its queen found -------------------------
+  updateAI(pop, queen) {
+    // a player who gets close to the queen finds her: the map marks her
+    if (queen && !this.queenSeen && G.tick % 30 === 0) {
+      for (const p of G.players) {
+        if (p.ant && p.ant.hp > 0 && dist2(p.ant.x, p.ant.y, queen.x, queen.y) < 140 * 140) {
+          this.queenSeen = true;
+          G.msg('m_queenFound', [], '#ff6050');
+          G.sfx('danger');
+          break;
+        }
+      }
+    }
+    this.updateExpansion(pop);
+    this.updateRaid(pop);
+  }
+
+  // cramped and not too lately grown: dig out a new chamber off the
+  // junction, a bite at a time, and mark it once it's hollow
+  updateExpansion(pop) {
+    const job = this.digJob;
+    if (job) {
+      if (G.tick % AI_EXPAND_STEP !== 0) return;
+      const p = job.pts[job.i++];
+      T.dig(p.x, p.y, p.r, 1, false, SPARE_BUILT);
+      if (job.i < job.pts.length) return;
+      this.digJob = null;
+      this.expandN++;
+      this.lastExpandDay = G.day;
+      this.addChamber(job.type, job.x, job.y, false);
+      this.recalcChambers();
+      return;
+    }
+    if (G.isWinter() || this.expandN >= AI_EXPAND_MAX || (G.tick + this.idx * 97) % 600 !== 0) return;
+    if (G.day < this.lastExpandDay + AI_EXPAND_DAYS || !this.caps) return;
+    if (pop + this.broodCount() < this.caps.pop - 2) return;
+    // where: a few tries around the junction for a spot clear of the other
+    // chambers, deep enough, with no rock at its middle
+    const j = this.junction;
+    for (let k = 0; k < 8; k++) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const x = Math.round(j.x + side * (100 + Math.random() * 110));
+      const y = Math.round(j.y + 30 + Math.random() * 110);
+      if (x < 60 || x > WORLD_W - 60 || y > WORLD_H - 60) continue;
+      if (this.chamberNear(x, y, CH_SPACING * 1.6)) continue;
+      if (T.digHitsHard(x, y, 14)) continue;
+      // a tunnel from the junction, then the hollow itself
+      const pts = [];
+      const n = Math.ceil(Math.hypot(x - j.x, y - j.y) / 5);
+      for (let i = 1; i <= n; i++) pts.push({ x: j.x + (x - j.x) * i / n, y: j.y + (y - j.y) * i / n, r: 4 });
+      for (let dy = -6; dy <= 6; dy += 6) {
+        for (let dx = -16; dx <= 16; dx += 8) pts.push({ x: x + dx, y: y + dy, r: 6 });
+      }
+      this.digJob = { pts, i: 0, x, y, type: AI_CHAMBER_TYPES[this.expandN % AI_CHAMBER_TYPES.length] };
+      return;
+    }
+  }
+
+  // raids: start one when strong enough, then watch it play out
+  updateRaid(pop) {
+    const r = this.raid;
+    if (r) {
+      r.t++;
+      const target = G.colonies[r.target];
+      const raiders = [];
+      let near = Infinity;
+      for (const a of G.ants) {
+        if (!a.raiding || a.colony !== this || a.hp <= 0) continue;
+        if (!RAID_STATES.includes(a.state)) { a.raiding = false; a.raidRole = null; continue; }
+        raiders.push(a);
+        near = Math.min(near, Math.abs(a.x - target.x));
+      }
+      // the siege clock runs once the raiders are at the enemy's gates
+      if (near < 200) r.siege = (r.siege || 0) + 1;
+      if (near < 600) r.nearT = r.t;
+      if (r.phase === 'march') {
+        // the march's progress: the closest any raider has come. Stuck at
+        // home, lost, or the last ones near the nest killed: it's over.
+        if (r.best === undefined || near < r.best - 4 || near < 200) {
+          r.best = Math.min(r.best === undefined ? Infinity : r.best, near);
+          r.stall = 0;
+        } else r.stall = (r.stall || 0) + 1;
+        // the party masses short of the nest: in together, not one by one
+        if (!r.massed) {
+          let at = 0;
+          for (const a of raiders) if (Math.abs(a.x - target.x) < RAID_MUSTER + 40) at++;
+          if (at) r.musterT = (r.musterT || 0) + 1;
+          if (raiders.length && (at === raiders.length || r.musterT > RAID_MUSTER_T)) { r.massed = true; r.massedT = r.t; }
+        }
+        // the raiders draw near: the target colony is warned
+        if (!r.warned && near < 600) {
+          r.warned = true;
+          target.say('m_raid', [], '#ff5040');
+          if (target.player) G.sfx('danger');
+        }
+        // the thieves all laden: what the raid came for is won
+        const thieves = raiders.filter(a => a.raidRole === 'steal');
+        const looted = r.stolen > 0 && !thieves.some(a => !a.carry);
+        // out of time, stalled, too many lost, loot won, or winter: back home
+        if (r.t > RAID_T || r.siege > RAID_SIEGE || r.stall > RAID_STALL ||
+            raiders.length < Math.max(1, r.n0 * RAID_LOSS) || looted || G.isWinter() || target.defeated) {
+          r.phase = 'retreat';
+          r.rt = 0;
+          for (const a of raiders) {
+            if (a.state === 'raid' || a.state === 'fight' || a.state === 'idle') { a.state = 'home'; a.target = null; }
+          }
+          // (only news if raiders were actually seen at the nest lately)
+          if (r.warned && raiders.length && r.t - (r.nearT || 0) < 1200) target.say('m_raidOver', [], '#e0c080');
+        }
+      } else if (!raiders.length) {
+        this.raid = null;
+      } else if ((r.rt = (r.rt || 0) + 1) > RAID_HOME_T) {
+        // stragglers that can't find their way home: just ants again
+        for (const a of raiders) {
+          a.raiding = false; a.raidRole = null;
+          if (a.state === 'home') { a.state = 'idle'; a.stateT = 60; a.nav = null; }
+        }
+        this.raid = null;
+      }
+      return;
+    }
+    if (G.isWinter() || G.day < 2 || G.day <= this.lastRaidDay) return;
+    if (pop < RAID_POP || this.food < RAID_FOOD) return;
+    const yearDay = G.day % YEAR_DAYS;
+    const bold = RAID_BOLD[G.season] * (G.year >= 2 ? 1.5 : 1);
+    if (Math.random() >= RAID_CHANCE * bold) return;
+    const enemy = this.enemy();
+    if (enemy) this.startRaid(enemy, 4 + Math.floor(yearDay / 2) + (G.year >= 2 ? 2 : 0), pop);
+  }
+
+  // send out up to n raiders (soldiers first, one kept home; half of them
+  // workers to carry off the loot). Returns the number sent.
+  startRaid(enemy, n, pop) {
+    if (pop === undefined) pop = this.members().length;
+    n = Math.max(3, Math.min(RAID_MAX, n, Math.floor(pop * 0.4)));
+    const fit = a => a.colony === this && a.hp > a.maxHp * 0.6 && a.playerIdx < 0 && !a.raiding && !a.carry;
+    const soldiers = G.ants.filter(a => fit(a) && a.caste === 'soldier');
+    const workers = G.ants.filter(a => fit(a) && a.caste === 'worker');
+    const nWork = Math.min(workers.length, Math.max(1, Math.round(n / 2)));
+    const nSold = Math.min(Math.max(0, soldiers.length - 1), n - nWork);
+    const team = soldiers.slice(0, nSold).concat(workers.slice(0, n - nSold));
+    if (team.length < 3) return 0;
+    for (const a of team) {
+      a.raiding = true;
+      a.raidRole = a.caste === 'worker' ? 'steal' : 'fight';
+      a.state = 'raid'; a.target = null; a.nav = null; a.stateT = 0;
+      a.raidBest = undefined; a.raidStallT = 0;
+    }
+    this.raid = { phase: 'march', t: 0, siege: 0, target: enemy.idx, n0: team.length, stolen: 0, warned: false, home: 0 };
+
+    this.lastRaidDay = G.day;
+    this.stats.raids++;
+    return team.length;
+  }
+
+  // a raider at the enemy's stores takes what it can carry
+  steal(a, enemy) {
+    const v = Math.min(RAID_STEAL, Math.floor(enemy.food));
+    if (v < 2) return false;
+    enemy.food -= v;
+    enemy.stats.foodStolen = (enemy.stats.foodStolen || 0) + v;
+    const loot = G.makeItem('morsel', a.x, a.y, v);
+    loot.carried = a; a.carry = loot;
+    G.items.push(loot);
+    if (this.raid) {
+      if (!this.raid.stolen) enemy.say('m_raidSteal', [], '#ff5040');
+      this.raid.stolen += v;
+    }
+    G.sfx('pickup', a.x, a.y, 200);
+    return true;
   }
 
   // ---- tasks ---------------------------------------------------------------
@@ -661,7 +952,7 @@ class Colony {
       tasks.push({ type: 'gather', n: 0, need: 5, reward: 50 });
       G.msg('m_newTask', [{ key: 't_gather' }], '#80ff80');
     }
-    const hungry = G.brood.filter(b => b.kind === 'larva' && b.hungry && !b.dead).length;
+    const hungry = G.brood.filter(b => b.kind === 'larva' && b.hungry && !b.dead && b.colony === this).length;
     if (hungry > 0 && !this.active('feed')) {
       tasks.push({ type: 'feed', n: 0, need: Math.min(2, hungry), reward: 40 });
       G.msg('m_newTask', [{ key: 't_feed' }], '#80ff80');
@@ -720,29 +1011,24 @@ class Colony {
     }
   }
 
-  // ---- ambient world spawning ------------------------------------------------
-  ambientSpawns() {
-    const items = G.items.filter(i => !i.dead && !i.carried);
-    const bugs = G.bugs.filter(b => !b.dead);
-    const rnd = Math.random();
-
+  // ---- food within the foragers' reach -----------------------------------------
+  forageSpawns() {
     // seeds drift down from the canopy, or ripen in the grass. What counts
     // is the food within the foragers' reach: seeds lying across the map
     // feed nobody, so they neither fill the caps nor hold back the harvest.
     // Scarce times bring a better one (and keep the sim survivable); the
     // season sets the bounty, and winter brings none at all.
     const mul = SEASON_FOOD[G.season];
-    const inReach = i => Math.abs(i.x - this.x) < FORAGE_R;
-    let foodNear = 0, seedsNear = 0, seedsFar = 0, leaves = 0;
-    for (const i of items) {
-      if (i.kind === 'leaf') leaves++;
+    let foodNear = 0, seedsNear = 0, leavesNear = 0;
+    for (const i of G.items) {
+      if (i.dead || i.carried || Math.abs(i.x - this.x) >= FORAGE_R) continue;
+      if (i.kind === 'leaf') leavesNear++;
       if (!ITEM_DEF[i.kind] || !ITEM_DEF[i.kind].food) continue;
-      const near = inReach(i);
-      if (near) foodNear++;
-      if (i.kind === 'seed') { if (near) seedsNear++; else seedsFar++; }
+      foodNear++;
+      if (i.kind === 'seed') seedsNear++;
     }
     const seedChance = (foodNear < 8 ? SEED_RATE_LEAN : SEED_RATE) * mul;
-    if (seedsNear < SEED_CAP && rnd < seedChance) {
+    if (seedsNear < SEED_CAP && Math.random() < seedChance) {
       const trees = G.trees.filter(t => Math.abs(t.x - this.x) < FORAGE_R);
       let sx;
       if (trees.length && Math.random() < 0.5) {
@@ -756,105 +1042,139 @@ class Colony {
       sx = Math.max(20, Math.min(WORLD_W - 20, sx));
       G.items.push(G.makeItem('seed', sx, T.surf[sx] - 8));
     }
-    // and a sprinkling across the wider forest, for those who roam
-    if (seedsFar < 12 && Math.random() < 0.002 * mul) {
-      const x = 40 + Math.random() * (WORLD_W - 80);
-      G.items.push(G.makeItem('seed', x, T.surf[Math.floor(x)] - 8));
-    }
     // leaf scraps on the floor (autumn's leaf fall brings plenty)
     const leafMul = G.season === 2 ? 4 : mul > 0 ? 1 : 0;
-    if (leaves < 8 * Math.max(1, leafMul / 2) && Math.random() < 0.002 * leafMul) {
-      const x = Math.random() < 0.6 ? this.x + (Math.random() - 0.5) * 2 * FORAGE_R
-        : 40 + Math.random() * (WORLD_W - 80);
-      const lx = Math.max(20, Math.min(WORLD_W - 20, Math.round(x)));
+    if (leavesNear < 5 * Math.max(1, leafMul / 2) && Math.random() < 0.0012 * leafMul) {
+      const lx = Math.max(20, Math.min(WORLD_W - 20, Math.round(this.x + (Math.random() - 0.5) * 2 * FORAGE_R)));
       G.items.push(G.makeItem('leaf', lx, T.surf[lx] - 6));
-    }
-
-    const count = k => bugs.filter(b => b.kind === k).length;
-
-    // the rival nest slowly regarrisons after the player thins its defenders
-    if (G.rival) {
-      const defenders = bugs.filter(b => b.kind === 'redant' && b.resident).length;
-      if (defenders < 4 && Math.random() < 0.0015) {
-        const rx = Math.max(20, Math.min(WORLD_W - 20,
-          G.rival.entrance.x + (Math.random() - 0.5) * 90));
-        const def = new Bug(rx, T.surf[Math.floor(rx)] - 8, 'redant');
-        def.resident = true; def.homeX = G.rival.entrance.x;
-        G.bugs.push(def);
-      }
-    }
-
-    if (count('pillbug') < 4 && Math.random() < 0.0011) {
-      const x = Math.random() < 0.5 ? 30 + Math.random() * 200 : WORLD_W - 30 - Math.random() * 200;
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
-    }
-    if (count('aphid') < 8 && Math.random() < 0.0008 && G.trees.length) {
-      // aphid herds graze the lower trunk, within an ant's easy climb
-      const t = G.trees[Math.floor(Math.random() * G.trees.length)];
-      const side = Math.random() < 0.5 ? -1 : 1;
-      G.bugs.push(new Bug(t.x + side * (4 + Math.random() * 3),
-        T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
-    }
-    if (count('worm') < 6 && Math.random() < 0.0009) {
-      const x = 60 + Math.random() * (WORLD_W - 120);
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 150 + Math.random() * 700, 'worm'));
-    }
-
-    // predators: not on day 0, escalating with the days, likelier at night
-    const night = G.isNight();
-    const day = G.day;
-    const spiderCap = Math.min(3, 1 + Math.floor(day / 3));
-    if (count('spider') < spiderCap && day >= 1 && Math.random() < (night ? 0.0014 : 0.00025)) {
-      const x = Math.random() < 0.5 ? 25 : WORLD_W - 25;
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'spider'));
-      G.msg('m_spider', [], '#ff8040');
-      G.sfx('danger');
-    }
-    const winter = G.isWinter();
-    const centiCap = Math.min(2, 1 + Math.floor(day / 4)) + (winter ? 1 : 0);
-    if (count('centipede') < centiCap && day >= 2 && Math.random() < (winter ? 0.0015 : 0.0004)) {
-      const x = 100 + Math.random() * (WORLD_W - 200);
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 300 + Math.random() * 400, 'centipede'));
-      G.msg('m_centi', [], '#ff8040');
-      G.sfx('danger');
-    }
-    // wasps hunt by day
-    const waspCap = Math.min(3, 1 + Math.floor(day / 3));
-    if (count('wasp') < waspCap && day >= 1 && !night && !winter && Math.random() < 0.0005) {
-      const x = Math.random() < 0.5 ? 60 : WORLD_W - 60;
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 80, 'wasp'));
-      G.msg('m_wasp', [], '#ff8040');
-      G.sfx('danger');
-    }
-    // a rare armored heavyweight, once the colony is established
-    if (count('beetle') < 1 && day >= 3 && Math.random() < 0.00018) {
-      const x = Math.random() < 0.5 ? 30 : WORLD_W - 30;
-      G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'beetle'));
-      G.msg('m_beetle', [], '#ff8040');
-      G.sfx('danger');
-    }
-    // rival-colony raids: at most one per day, growing bolder over time.
-    // The raiders advance from the direction of the rival nest, emerging from
-    // the undergrowth a few screens out (a full crossing would be too slow).
-    if (day >= 2 && day > this.lastRaidDay && Math.random() < 0.0001) {
-      this.lastRaidDay = day;
-      const side = G.rival ? (Math.sign(G.rival.x - this.x) || 1)
-                           : (Math.random() < 0.5 ? -1 : 1);
-      const baseX = Math.max(30, Math.min(WORLD_W - 30,
-        this.x + side * (350 + Math.random() * 200)));
-      const n = 3 + Math.min(3, Math.floor(day / 2));
-      for (let i = 0; i < n; i++) {
-        const x = Math.max(20, Math.min(WORLD_W - 20, baseX + (Math.random() - 0.5) * 40));
-        G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'redant'));
-      }
-      G.msg('m_raid', [], '#ff5040');
-      G.sfx('danger');
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// the year's milestones: three a season, kept in G.objectives (saved).
+// the wider world: seeds and leaves for those who roam, fauna and predators
+// ---------------------------------------------------------------------------
+function worldSpawns() {
+  const col = G.colony;   // the predators come for the players' nest
+  const mul = SEASON_FOOD[G.season];
+  let seedsFar = 0, leavesFar = 0;
+  for (const i of G.items) {
+    if (i.dead || i.carried) continue;
+    if (G.colonies.some(c => Math.abs(i.x - c.x) < FORAGE_R)) continue;
+    if (i.kind === 'seed') seedsFar++;
+    else if (i.kind === 'leaf') leavesFar++;
+  }
+  // a sprinkling of seeds across the wider forest
+  if (seedsFar < 12 && Math.random() < 0.002 * mul) {
+    const x = 40 + Math.random() * (WORLD_W - 80);
+    G.items.push(G.makeItem('seed', x, T.surf[Math.floor(x)] - 8));
+  }
+  const leafMul = G.season === 2 ? 4 : mul > 0 ? 1 : 0;
+  if (leavesFar < 4 * Math.max(1, leafMul / 2) && Math.random() < 0.0008 * leafMul) {
+    const lx = Math.round(40 + Math.random() * (WORLD_W - 80));
+    G.items.push(G.makeItem('leaf', lx, T.surf[lx] - 6));
+  }
+
+  const counts = {};
+  for (const b of G.bugs) if (!b.dead) counts[b.kind] = (counts[b.kind] || 0) + 1;
+  const count = k => counts[k] || 0;
+
+  if (count('pillbug') < 4 && Math.random() < 0.0011) {
+    const x = Math.random() < 0.5 ? 30 + Math.random() * 200 : WORLD_W - 30 - Math.random() * 200;
+    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
+  }
+  if (count('aphid') < 8 && Math.random() < 0.0008 && G.trees.length) {
+    // aphid herds graze the lower trunk, within an ant's easy climb
+    const t = G.trees[Math.floor(Math.random() * G.trees.length)];
+    const side = Math.random() < 0.5 ? -1 : 1;
+    G.bugs.push(new Bug(t.x + side * (4 + Math.random() * 3),
+      T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
+  }
+  if (count('worm') < 6 && Math.random() < 0.0009) {
+    const x = 60 + Math.random() * (WORLD_W - 120);
+    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 150 + Math.random() * 700, 'worm'));
+  }
+
+  // predators: not on day 0, escalating with the days, likelier at night
+  const night = G.isNight();
+  const day = G.day;
+  const spiderCap = Math.min(3, 1 + Math.floor(day / 3));
+  if (count('spider') < spiderCap && day >= 1 && Math.random() < (night ? 0.0014 : 0.00025)) {
+    const x = Math.random() < 0.5 ? 25 : WORLD_W - 25;
+    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'spider'));
+    G.msg('m_spider', [], '#ff8040');
+    G.sfx('danger');
+  }
+  const winter = G.isWinter();
+  const centiCap = Math.min(2, 1 + Math.floor(day / 4)) + (winter ? 1 : 0);
+  if (count('centipede') < centiCap && day >= 2 && Math.random() < (winter ? 0.0015 : 0.0004)) {
+    const x = 100 + Math.random() * (WORLD_W - 200);
+    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 300 + Math.random() * 400, 'centipede'));
+    G.msg('m_centi', [], '#ff8040');
+    G.sfx('danger');
+  }
+  // wasps hunt by day
+  const waspCap = Math.min(3, 1 + Math.floor(day / 3));
+  if (count('wasp') < waspCap && day >= 1 && !night && !winter && Math.random() < 0.0005) {
+    const x = Math.random() < 0.5 ? 60 : WORLD_W - 60;
+    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 80, 'wasp'));
+    G.msg('m_wasp', [], '#ff8040');
+    G.sfx('danger');
+  }
+  // a rare armored heavyweight, once the colony is established
+  if (count('beetle') < 1 && day >= 3 && col && Math.random() < 0.00018) {
+    const x = Math.random() < 0.5 ? 30 : WORLD_W - 30;
+    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'beetle'));
+    G.msg('m_beetle', [], '#ff8040');
+    G.sfx('danger');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the contested food site: each summer a fruit falls between the two nests.
+// Its pieces (items flagged `site`) are good food, they keep all summer, and
+// both colonies' foragers go for them. G.contested = { x, y, year, spawned,
+// active, got: [pieces delivered by colony index] }
+// ---------------------------------------------------------------------------
+function updateContested() {
+  const cs = G.contested;
+  if (G.season === SUMMER) {
+    if (!cs || cs.year !== G.year) {
+      // the fruit falls somewhere in the no-man's-land between the nests
+      const a = G.colonies[0], b = G.colonies[1];
+      const mid = b ? (a.x + b.x) / 2 : a.x + 1200;
+      const x = Math.round(Math.max(60, Math.min(WORLD_W - 60, mid + (Math.random() - 0.5) * 500)));
+      G.contested = { x, y: T.surf[x] - 6, year: G.year, spawned: 0, active: true, got: [] };
+      dropSitePieces(SITE_PIECES);
+      G.msg('m_siteFell', [], '#ffb040');
+      G.sfx('task');
+    } else if (cs.active && G.tick % SITE_REFILL === 0 && cs.spawned < SITE_MAX) {
+      const left = G.items.filter(i => i.site && !i.dead && !i.carried &&
+        Math.abs(i.x - cs.x) < 40).length;
+      if (left < 5) dropSitePieces(3);
+    }
+  } else if (cs && cs.active) {
+    // summer's over: what's left of the fruit withers away
+    cs.active = false;
+    for (const i of G.items) if (i.site && !i.carried) i.dead = true;
+  }
+}
+
+function dropSitePieces(n) {
+  const cs = G.contested;
+  for (let k = 0; k < n && cs.spawned < SITE_MAX; k++) {
+    const x = Math.max(20, Math.min(WORLD_W - 20, Math.round(cs.x + (Math.random() - 0.5) * 24)));
+    const it = G.makeItem('berry', x, T.surf[x] - 6 - Math.random() * 4);
+    it.site = true;
+    G.items.push(it);
+    cs.spawned++;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the year's milestones: three a season, kept in each player colony's
+// `objectives` (saved; G.objectives is the players' colony's). An AI colony
+// has none, and every function here leaves it be.
 // kind 'level': a value the colony reaches (checked once a second);
 // 'count': events counted during the season; 'end': judged as the season
 // ends (meanwhile the progress shows the current value). Missing one never
@@ -867,9 +1187,9 @@ const OBJECTIVES = [
   // spring: establish the nest
   [{ id: 'storage2', kind: 'level', need: 2, grow: 1 }, { id: 'raise', kind: 'count', need: 5 },
     { id: 'food100', kind: 'level', need: 100, grow: 50 }],
-  // summer: expand
+  // summer: expand, and contest the fallen fruit with the rival
   [{ id: 'mound', kind: 'level', need: 250, grow: 150 }, { id: 'pop25', kind: 'level', need: 25, grow: 10 },
-    { id: 'crystals', kind: 'count', need: 2 }],
+    { id: 'contested', kind: 'count', need: 8, grow: 4 }],
   // autumn: prepare for winter and the next generation
   [{ id: 'stockpile', kind: 'end', need: 150, grow: 50 },
     { id: 'royal', kind: 'level', need: PRINCESS_ROYAL, grow: 600 },
@@ -895,61 +1215,65 @@ function objDef(id) {
   return null;
 }
 
-// something countable happened (an ant raised, a crystal stored, ...)
-function objEvent(id, n) {
-  const ob = G.objectives;
+// something countable happened for colony c (default: the players'): an
+// ant raised, a crystal stored, ...
+function objEvent(id, n, c) {
+  c = c || G.colony;
+  const ob = c && c.objectives;
   if (!ob) return;
   const o = ob.list.find(o => o.id === id);
   if (!o || o.done) return;
   o.n += n;
-  if (o.n >= o.need) completeObjective(o);
+  if (o.n >= o.need) completeObjective(o, c);
 }
 
 // the current value behind a 'level' or 'end' milestone
-function objLevel(id) {
-  const c = G.colony;
+function objLevel(id, c) {
+  c = c || G.colony;
   switch (id) {
     case 'storage2': return c.chambers.filter(ch => ch.type === 'storage' && ch.area >= CH_MIN_AREA).length;
     case 'food100': case 'stockpile': return Math.floor(c.food);
     case 'mound': return c.mound.size;
-    case 'pop25': return G.ants.filter(a => a.hp > 0).length;
+    case 'pop25': return c.members().length;
     case 'royal': return c.caps ? c.caps.royalMax : 0;
-    case 'queen': return G.ants.some(a => a.caste === 'queen' && a.hp > 0) ? 1 : 0;
+    case 'queen': return c.queen() ? 1 : 0;
   }
   return 0;
 }
 
-function updateObjectives() {
-  const ob = G.objectives;
+function updateObjectives(c) {
+  c = c || G.colony;
+  const ob = c.objectives;
   if (!ob) return;
   for (const o of ob.list) {
     if (o.done) continue;
     const def = objDef(o.id);
     if (!def || def.kind === 'count') continue;
-    o.n = objLevel(o.id);
-    if (def.kind === 'level' && o.n >= o.need) completeObjective(o);
+    o.n = objLevel(o.id, c);
+    if (def.kind === 'level' && o.n >= o.need) completeObjective(o, c);
   }
 }
 
-function completeObjective(o) {
+function completeObjective(o, c) {
+  c = c || G.colony;
   o.done = true;
-  G.objectives.yearDone++;
-  const c = G.colony;
+  c.objectives.yearDone++;
   c.stats.milestones = (c.stats.milestones || 0) + 1;
   c.score += OBJ_SCORE;
   c.crystals += OBJ_CRYSTALS;
-  G.msg('m_milestone', [{ key: 'o_' + o.id, args: [o.need] }, OBJ_CRYSTALS], '#ffe040');
+  c.say('m_milestone', [{ key: 'o_' + o.id, args: [o.need] }, OBJ_CRYSTALS], '#ffe040');
   G.sfx('task');
 }
 
 // the season is over: judge its end-of-season milestones
-function closeObjectives() {
-  const ob = G.objectives;
+function closeObjectives(c) {
+  c = c || G.colony;
+  const ob = c.objectives;
   for (const o of ob.list) {
     const def = objDef(o.id);
     if (o.done || !def || def.kind !== 'end') continue;
-    o.n = objLevel(o.id);
-    if (o.n >= o.need) completeObjective(o);
+    o.n = objLevel(o.id, c);
+    if (o.n >= o.need) completeObjective(o, c);
   }
-  G.msg('m_seasonDone', [ob.list.filter(o => o.done).length], '#e0c080');
+  c.say('m_seasonDone', [ob.list.filter(o => o.done).length], '#e0c080');
 }

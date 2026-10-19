@@ -14,6 +14,17 @@ const CASTE = {
   // the nuptial flight. Barely digs.
   princess:{ hp: 45,  dmg: 4,  speed: 0.40, size: 1.5,  color: [176, 64, 92],  digR: 2.5, digCd: 30, digPow: 0.5 },
 };
+// ticks an ant climbs another nest's entrance shaft without getting higher
+// before it walks out another way
+const SHAFT_GIVEUP = 300;
+
+// the rival colony's ants: the same castes in a bright fire-ant scarlet
+// (well clear of the players' rust browns), with a glossy highlight
+const RED_COLOR = {
+  worker: [236, 36, 28], soldier: [210, 22, 18], nurse: [246, 78, 56],
+  queen: [226, 16, 44], princess: [240, 56, 88],
+};
+const RED_SHINE = '#ffb8a0';
 
 // what a (player) ant can haul in its mandibles for building, in pixels
 const LOAD_CAP = 100;
@@ -26,6 +37,7 @@ const ITEM_DEF = {
   bigcorpse:{ value: 15, food: true },
   morsel:   { value: 2,  food: true },
   fungus:   { value: 12, food: true },   // dug from cave mushroom clumps
+  berry:    { value: 5,  food: true },   // a piece of the contested site's fallen fruit
   crystal:  { value: 0,  food: false },  // deep treasure: deposits as score
 };
 
@@ -36,6 +48,12 @@ const GRAV = 0.13, MAXFALL = 3.0;
 
 function physStep(e) {
   const own = e.own;   // our ants walk through ant gates
+  // at rest on the ground: still standing on something? Then nothing moves
+  // (the full step below would come to the same, at three times the cost)
+  if (e.vx === 0 && e.vy === 0 && e.onGround && !e.climbing && !e.ceiling) {
+    e.blocked = false;
+    if (T.boxSolid(e.x, e.y + 1, e.hw, e.hh, own)) return;
+  }
   // horizontal
   e.blocked = false;
   if (e.vx !== 0) {
@@ -121,15 +139,47 @@ function ceilAbove(e, reach) {
 
 function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
 
+// earth overhead (within 60 px)? Under open sky an ant is outside, even down
+// a shaft or in a pit dug into the mound
+function roofed(e) {
+  const x = Math.round(e.x);
+  for (let y = Math.floor(e.y - e.hh - 1), y1 = Math.max(0, y - 60); y > y1; y--) {
+    if (T.solid(x, y)) return true;
+  }
+  return false;
+}
+
+
 // winter: is this out in the deadly cold? NPC ants won't chase anything
 // there (they'd freeze on the way); the frost will see to it
 function outInCold(e) {
-  return G.isWinter() && !G.colony.sheltered(e);
+  return G.isWinter() && !sheltered(e);
 }
 
 // NPC ants give up on a foe farther away than this
 const FIGHT_LEASH = 420;
 const QUEEN_LEASH = 50;   // the queen fights only foes this close to her chamber
+// farther than this from a nest, an ant on the surface walks there (march)
+// instead of following the nest's tunnel map
+const MARCH_R = 400, MARCH_STEP = 120;
+const FIGHT_GIVEUP = 480;  // ticks of chasing without a bite before an NPC gives up
+const SCAN_EVERY = 3;      // NPCs look around for foes every this many ticks
+
+
+// anything hunting near a colony's nest (a predator, or an ant of another
+// colony) that its soldiers should see off
+function colonyThreat(col) {
+  const near = e => Math.abs(e.x - col.x) < 450 && Math.abs(e.y - col.entrance.y) < 350 && !outInCold(e);
+  for (const b of G.bugs) if (b.predator && !b.dead && !b.fleeing && near(b)) return b;
+  // (an armed enemy ant before a thief)
+  let thief = null;
+  for (const a of G.ants) {
+    if (a.hp <= 0 || a.colony === col || !near(a)) continue;
+    if (a.armed()) return a;
+    thief = thief || a;
+  }
+  return thief;
+}
 
 // below the original ground line? Down here every passage was chewed out of
 // the earth, so a climbing ant always has tunnel wall in front of and behind
@@ -143,15 +193,18 @@ function underground(e) {
 // Ant
 // ---------------------------------------------------------------------------
 class Ant {
-  constructor(x, y, caste) {
+  constructor(x, y, caste, colony) {
     this.id = ENT_ID++;
     this.kind = 'ant';
     this.caste = caste;
+    this.colony = colony || G.colony;   // its colony (friend or foe is by colony)
     const c = CASTE[caste];
     this.x = x; this.y = y;
     this.vx = 0; this.vy = 0;
     this.hw = 3 * c.size; this.hh = 2 * c.size;
     this.hp = c.hp; this.maxHp = c.hp;
+    // the rival's queen is a tough old matriarch
+    if (caste === 'queen' && this.colony && !this.colony.player) this.hp = this.maxHp = c.hp * RED_QUEEN_HP;
     this.dir = Math.random() < 0.5 ? -1 : 1;
     this.phase = Math.random() * 10;
     this.carry = null;
@@ -177,29 +230,48 @@ class Ant {
     this.buildCd = 0;  // building cooldown
     this.soil = 0;     // building loads (pixels), collected by player digging
     this.thatch = 0;
-    this.own = true;   // one of ours: ant gates let it through
+    this.raiding = false; // out on a raid against another colony
+    this.raidRole = null; // 'fight' or 'steal'
   }
 
   get def() { return CASTE[this.caste]; }
-
-  // caste stats with the colony's crystal upgrades applied (see UPGRADES)
-  dmgNow() { return this.def.dmg * (1 + UPG_DMG * upgLevel('mandibles')); }
-  digRNow() { return this.def.digR * (1 + UPG_DIGR * upgLevel('digging')); }
-  digCdNow() { return Math.max(4, Math.round(this.def.digCd * (1 - UPG_DIGCD * upgLevel('digging')))); }
-  speedNow() {
-    return this.def.speed * (this.carry ? 1 + UPG_CARRY * upgLevel('carry') : 1);
+  // ant gates let its colony's ants through (they're the players' build)
+  get own() { return this.colony ? this.colony.gates : true; }
+  // a threat to an enemy forager: something it runs from (workers on their
+  // errands mostly ignore each other, and a raid's thieves are no fighters)
+  armed() {
+    return this.caste === 'soldier' || this.caste === 'queen' || (this.raiding && this.raidRole === 'fight') ||
+      this.playerIdx >= 0 || this.state === 'fight';
   }
 
-  hurt(dmg, kx, ky) {
+  // caste stats with the colony's crystal upgrades applied (see UPGRADES)
+  dmgNow() { return this.def.dmg * (1 + UPG_DMG * upgLevel('mandibles', this.colony)); }
+  digRNow() { return this.def.digR * (1 + UPG_DIGR * upgLevel('digging', this.colony)); }
+  digCdNow() { return Math.max(4, Math.round(this.def.digCd * (1 - UPG_DIGCD * upgLevel('digging', this.colony)))); }
+  speedNow() {
+    return this.def.speed * (this.carry ? 1 + UPG_CARRY * upgLevel('carry', this.colony) : 1);
+  }
+
+  hurt(dmg, kx, ky, by) {
     // armor plates: soldiers shrug off part of every blow
-    if (this.caste === 'soldier') dmg *= 1 - UPG_ARMOR * upgLevel('armor');
+    if (this.caste === 'soldier') dmg *= 1 - UPG_ARMOR * upgLevel('armor', this.colony);
+
     this.hp -= dmg;
+    // who bit us (a fighter turns on it, see the fight state)
+    if (by) { this.hitBy = by; this.hitT = G.tick; }
+    // a queen remembers whose colony last drew blood (the bonus for slaying
+    // the red queen goes to the colony that did it -- see defeatColony)
+    if (this.caste === 'queen' && this.colony) {
+      this.colony.queenHit = { col: by && by.colony ? by.colony.idx : -1, t: G.tick };
+    }
     this.flash = 6;
     this.vx += kx || 0; this.vy += (ky || 0) - 0.5;
     G.fx('blood', this.x, this.y, 4);
     G.sfx('hurt', this.x, this.y, 220);
+    // (a raid's thief presses on to the stores until badly hurt)
     if (this.playerIdx < 0 && this.caste !== 'soldier' && this.caste !== 'queen' &&
-        this.caste !== 'princess' && this.rallyT <= 0 && this.state !== 'rescue') {
+        this.caste !== 'princess' && this.rallyT <= 0 && this.state !== 'rescue' &&
+        !(this.raiding && this.state === 'raid' && this.hp > this.maxHp * RAID_NERVE)) {
       this.state = 'flee'; this.stateT = 120;
     }
   }
@@ -215,30 +287,30 @@ class Ant {
     this.phase += Math.abs(this.vx) * 0.6 + (this.climbing ? 0.4 : 0);
 
     // buried (squeezed through a pinch, loose soil): chew yourself free
-    if (this.digCd <= 0 && T.boxSolid(this.x, this.y, this.hw, this.hh, true)) {
+    if (this.digCd <= 0 && T.boxSolid(this.x, this.y, this.hw, this.hh, this.own)) {
       // an NPC brushing the players' mound or walls leaves them standing
       // and wriggles off instead (it only chews through if that fails)
       const spare = this.playerIdx < 0 ? SPARE_BUILT : SPARE_NONE;
       const r0 = Math.max(this.hw, this.hh) + 2.5;
-      T.dig(this.x, this.y, r0, undefined, true, spare);
+      T.dig(this.x, this.y, r0, undefined, this.own, spare);
       this.digCd = this.def.digCd;
       this.biteAnim = 6;
       G.fx('dirt', this.x, this.y, 2);
       // wood or rock against the body: chewing won't free us, and a
       // sub-pixel overlap pins every walking move -- wriggle out instead
       if (T.boxHard(this.x, this.y, this.hw, this.hh) ||
-          (spare && T.boxSolid(this.x, this.y, this.hw, this.hh, true))) {
+          (spare && T.boxSolid(this.x, this.y, this.hw, this.hh, this.own))) {
         let freed = false;
         outer: for (let r = 1; r <= (spare ? 8 : 4); r++) {
           for (const o of [[r, 0], [-r, 0], [0, -r], [0, r], [r, -r], [-r, -r]]) {
-            if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh, true)) {
+            if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh, this.own)) {
               this.x += o[0]; this.y += o[1];
               freed = true;
               break outer;
             }
           }
         }
-        if (!freed && spare) T.dig(this.x, this.y, r0, undefined, true);
+        if (!freed && spare) T.dig(this.x, this.y, r0, undefined, this.own);
       }
     }
 
@@ -261,10 +333,10 @@ class Ant {
         this.freezeT = 0;
         this.climbing = false; this.ceiling = false; this.crotchT = 0;
         this.state = 'idle'; this.stateT = 60; this.target = null; this.nav = null;
-        T.dig(this.x, this.y + 4, Math.max(this.hw, this.hh) + 2, undefined, true, SPARE_THATCH);
+        T.dig(this.x, this.y + 4, Math.max(this.hw, this.hh) + 2, undefined, this.own, SPARE_THATCH);
         outer: for (let r = 4; r <= 16; r += 4) {
           for (const o of [[0, r], [r, 0], [-r, 0], [r, r], [-r, r], [0, -r]]) {
-            if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh, true)) {
+            if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh, this.own)) {
               this.x += o[0]; this.y += o[1];
               break outer;
             }
@@ -420,11 +492,11 @@ class Ant {
         let hit = null;
         for (let t = this.hw + 2; t <= this.hw + 15 && !hit; t += 3) {
           const bx = this.x + ux * t, by = this.y + uy * t;
-          if (T.digHasTarget(bx, by, digR, true, SPARE_BUILT)) hit = { bx, by };
+          if (T.digHasTarget(bx, by, digR, this.own, SPARE_BUILT)) hit = { bx, by };
         }
         if (hit) {
-          T.dig(hit.bx, hit.by, digR, c.digPow, true, SPARE_BUILT);
-          T.dig(this.x + ux * 2, this.y + uy * 2, digR * 0.8, 0, true, SPARE_BUILT); // clear around the body too
+          T.dig(hit.bx, hit.by, digR, c.digPow, this.own, SPARE_BUILT);
+          T.dig(this.x + ux * 2, this.y + uy * 2, digR * 0.8, 0, this.own, SPARE_BUILT); // clear around the body too
           G.fx('dirt', hit.bx, hit.by, 3);
           G.sfx('dig', hit.bx, hit.by, 200);
           this.digCd = this.digCdNow() + 6;
@@ -473,7 +545,7 @@ class Ant {
     else this.noProgT++;
     // only squeeze while gripping terrain -- a free-floating ant must fall,
     // not levitate across open chambers
-    if (canDig && this.noProgT > 240 && T.boxSolid(this.x, this.y, this.hw + 2, this.hh + 2, true)) {
+    if (canDig && this.noProgT > 240 && T.boxSolid(this.x, this.y, this.hw + 2, this.hh + 2, this.own)) {
       this.squeezeN = (this.squeezeN || 0) + 1;
       if (this.squeezeN > 40) {
         // 40 squeezes with no net progress: this spot is unreachable
@@ -484,9 +556,9 @@ class Ant {
       const ux = dx / (dNow || 1), uy = dy / (dNow || 1);
       // (a sealed wall of packed earth does give way here, slowly: the
       // colony is never walled in for good -- but the thatch stays)
-      T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, true, SPARE_THATCH);
+      T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, this.own, SPARE_THATCH);
       const nx = this.x + ux * 2, ny = this.y + uy * 2;
-      if (!T.boxSolid(nx, ny, 1.5, 1.5, true) && !T.boxHard(nx, ny, this.hw, this.hh)) {
+      if (!T.boxSolid(nx, ny, 1.5, 1.5, this.own) && !T.boxHard(nx, ny, this.hw, this.hh)) {
         this.x = nx; this.y = ny;
         this.vy = 0; // grip the soil: no falling back between squeezes
         this.noProgT = 235;
@@ -509,8 +581,10 @@ class Ant {
   }
 
   // --- nest navigation: follow the remembered tunnel centerlines ------------
-  navDest(key) {
-    const col = G.colony;
+  // (`col`: whose nest -- the ant's own by default. Raiders find their way
+  // into the enemy's by its tunnels just the same.)
+  navDest(key, col) {
+    col = col || this.colony;
     return key === 'entrance' ? col.entrance
       : key === 'storage' ? col.storage
       : key === 'nursery' ? col.nursery
@@ -518,8 +592,29 @@ class Ant {
       : col.junction;
   }
 
-  planNav(key) {
-    const P = G.colony.paths;
+  // the nest this ant is down in, if any: under a roof of earth, near one of
+  // its chambers or tunnels (its mental map). Under open sky (a dug-out
+  // crater over the stores) only the nest it's already finding its way
+  // through still counts: a roof that comes and goes with every pixel
+  // stepped must not throw its route away each tick.
+  nestIn() {
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+    if (this.y < T.surf[sx] + 12) return null;
+    const roof = roofed(this);
+    for (const c of G.colonies) {
+      if (Math.abs(this.x - c.x) >= NEST_R) continue;
+      if (!roof && !(this.nav && this.nav.col === c)) continue;
+      if (c.chamberNear(this.x, this.y, CH_R + 12)) return c;
+      for (const k in c.paths) {
+        for (const p of c.paths[k]) if (dist2(this.x, this.y, p.x, p.y) < 900) return c;
+      }
+    }
+    return null;
+  }
+
+  planNav(key, col) {
+    col = col || this.colony;
+    const P = col.paths;
     const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
     const onSurface = this.y < T.surf[sx] + 12;
     let srcKey = 'entrance', srcIdx = P.entrance.length - 1, best = Infinity;
@@ -536,24 +631,127 @@ class Ant {
     let pts;
     if (srcKey === key) pts = destPath.slice(srcIdx);
     else pts = P[srcKey].slice(0, srcIdx + 1).reverse().concat(destPath);
-    this.nav = { key, pts, i: 0, t: 0, best: Infinity };
+    this.nav = { key, col, pts, i: 0, t: 0, best: Infinity };
   }
 
-  navTo(key) {
-    const dest = this.navDest(key);
+  // a long walk over the surface toward x: from waypoint to waypoint along
+  // the ground, climbing what's in the way but never digging. A waypoint
+  // it can't reach (up a trunk, past a boulder) is passed by.
+  march(tx, dig) {
+    const dir = Math.sign(tx - this.x) || 1;
+    const clampX = x => Math.round(Math.max(10, Math.min(WORLD_W - 10, x)));
+    // a tree in the way: its wood won't yield and its crown is a maze, so
+    // dig under the roots instead (down, along, and up past the trunk)
+    const t = G.trees.find(t => Math.abs(t.x - this.x) < 60 && (t.x - this.x) * dir > -30);
+    if (t) {
+      const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+      if (this.y < T.surf[sx] - 18) {
+        // up in the tree already: let go and drop off the limb
+        this.climbing = false; this.ceiling = false;
+        this.crotchT = 0; this.climbT = 0;
+        this.vx = (this.id % 2 ? dir : -dir) * this.def.speed;
+        this.dir = this.vx > 0 ? 1 : -1;
+        return;
+      }
+      const ahead = (t.x - this.x) * dir > 0, deep = T.bgSurf[t.x] + 16;
+      if (ahead && this.y < deep - 6) this.goto(clampX(t.x - dir * 12), deep, true);  // down
+      else if (ahead) this.goto(clampX(t.x + dir * 14), deep, true);                  // under
+      else this.goto(clampX(t.x + dir * 36), T.surf[clampX(t.x + dir * 36)] - 4, true); // up
+      this.gotoFail = false;
+      this.marchWp = null;
+      return;
+    }
+    // below ground (out of some side tunnel): up and onward, digging. (An
+    // ant under open sky -- in a shaft, a pit -- just walks and climbs out,
+    // unless it's deep down in a crater: walking waypoints on the surface
+    // line far overhead gets it nowhere, so it digs its way up too.)
+    const msx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+    if (dig || roofed(this) || this.y > T.surf[msx] + 30) {
+      const ux = clampX(this.x + dir * 16);
+      this.goto(ux, T.surf[ux] - 4, true);
+      this.gotoFail = false;
+      this.marchWp = null;
+      return;
+    }
+    let wp = this.marchWp;
+    if (wp == null || Math.abs(wp - this.x) < 8 || Math.sign(wp - this.x) !== dir ||
+        Math.abs(wp - this.x) > MARCH_STEP * 2) {
+      wp = this.marchWp = clampX(this.x + dir * Math.min(MARCH_STEP, Math.abs(tx - this.x)));
+    }
+    this.goto(wp, T.surf[wp] - 4, false);
+    if (this.gotoFail) {
+      this.gotoFail = false;
+      this.marchWp = clampX(wp + dir * MARCH_STEP / 2);
+    }
+  }
+
+  // leaving nest c by its entrance: near the top, but getting no higher for
+  // SHAFT_GIVEUP ticks? Then try another way out for a while (see navTo)
+  shaftWatch(c) {
+    if (Math.abs(this.x - c.entrance.x) > 60 || this.y > c.entrance.y + 80) return;
+    if (!(this.y < this.shaftBest - 2) && G.tick - (this.shaftT || 0) < 60) {
+      if (++this.shaftN > SHAFT_GIVEUP) { this.shaftSkip = G.tick + SHAFT_GIVEUP * 2; this.shaftN = 0; }
+    } else { this.shaftBest = this.y; this.shaftN = 0; }
+    this.shaftT = G.tick;
+  }
+
+  navTo(key, col) {
+    col = col || this.colony;
+    const dest = this.navDest(key, col);
     const dd = Math.hypot(dest.x - this.x, dest.y - this.y);
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
+    // climbing out of another nest by its entrance and getting no higher for
+    // a while (the middle of a crater dug out over the nest has nothing to
+    // climb): march straight out across it instead, digging up its side
+    if (this.shaftSkip > G.tick && this.y > T.surf[sx] + 12) {
+      this.nav = null;
+      this.march(col.entrance.x, true);
+      return dd;
+    }
+    // down in a different nest than the one we're making for: out by its
+    // own tunnels first (a raider going home, or setting out)
+    const inNest = this.nestIn();
+    if (inNest && inNest !== col) {
+      this.shaftWatch(inNest);
+      this.navTo('entrance', inNest);
+      return dd;
+    }
+    // out on the forest floor: walk the surface to the entrance (the tunnel
+    // map's chain would dig into the first trunk in the way, and its
+    // watchdog burrow straight across the map); from far below ground in
+    // some side tunnel, dig up to the surface first
+    if (!inNest) {
+      // down another nest's open entrance shaft: climb out the way it goes
+      if (this.y > T.surf[sx] + 12) {
+        for (const c of G.colonies) {
+          if (c !== col && Math.abs(this.x - c.entrance.x) < 40 && this.y < c.junction.y) {
+            this.shaftWatch(c);
+            if (!this.nav || this.nav.col !== c || this.nav.key !== 'entrance') this.planNav('entrance', c);
+            this.goto(c.entrance.x, c.entrance.y - 8, true);
+            return dd;
+          }
+        }
+      }
+      const far = Math.abs(col.entrance.x - this.x);
+      if (far > MARCH_R || (far > 24 && this.y < T.surf[sx] + 12)) {
+        this.nav = null;
+        this.march(col.entrance.x);
+        return dd;
+      }
+    }
     if (dd < 24) {
       this.nav = null; this.navBest = 1e9; this.navRescueN = 0;
       this.goto(dest.x, dest.y - 3, true);
       return dd;
     }
-    if (!this.nav || this.nav.key !== key) this.planNav(key);
+    if (!this.nav || this.nav.key !== key || this.nav.col !== col) this.planNav(key, col);
 
     // journey watchdog: if the whole trip stalls (waypoint ping-pong, bad
     // geometry), burrow bodily along the waypoint chain for a burst.
     // Rescues escalate: a loop the short burst keeps dropping us back into
     // earns a full burrow all the way to the destination -- loops must die.
-    if (this.navBestKey !== key) { this.navBestKey = key; this.navBest = dd; this.navStuck = 0; this.navRescueN = 0; }
+    const nk = col.idx + key;
+    if (this.navBestKey !== nk) { this.navBestKey = nk; this.navBest = dd; this.navStuck = 0; this.navRescueN = 0; }
     if (dd < this.navBest - 1) { this.navBest = dd; this.navStuck = 0; }
     else this.navStuck = (this.navStuck || 0) + 1;
     if (this.navStuck > 360) {
@@ -588,13 +786,13 @@ class Ant {
         const ca = Math.cos(ang), sa = Math.sin(ang);
         const ux = ux0 * ca - uy0 * sa, uy = ux0 * sa + uy0 * ca;
         const nx = this.x + ux * 2, ny = this.y + uy * 2;
-        if (T.boxSolid(nx, ny, 1.5, 1.5, true)) {
+        if (T.boxSolid(nx, ny, 1.5, 1.5, this.own)) {
           // chew only what's actually in the way (don't erode the nest)
-          T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, true, SPARE_BUILT);
+          T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, this.own, SPARE_BUILT);
           this.biteAnim = 6;
           if ((G.tick & 7) === 0) G.fx('dirt', this.x, this.y, 2);
         }
-        if (!T.boxSolid(nx, ny, 1.5, 1.5, true) && !T.boxHard(nx, ny, this.hw, this.hh)) {
+        if (!T.boxSolid(nx, ny, 1.5, 1.5, this.own) && !T.boxHard(nx, ny, this.hw, this.hh)) {
           this.x = nx; this.y = ny;
           moved = true;
           break;
@@ -608,8 +806,8 @@ class Ant {
       // we started. A full-rescue burrow never lets go early.
       if (!this.burrowFull && this.burrowT < 130 &&
           dist2(this.x, this.y, this.burrowSX, this.burrowSY) > 400 &&
-          !T.boxSolid(this.x, this.y, this.hw, this.hh, true) &&
-          (T.boxSolid(this.x, this.y + 2, this.hw, this.hh, true) ||
+          !T.boxSolid(this.x, this.y, this.hw, this.hh, this.own) &&
+          (T.boxSolid(this.x, this.y + 2, this.hw, this.hh, this.own) ||
            sideWall(this, 1) || sideWall(this, -1))) {
         this.burrowT = 0;
       }
@@ -620,13 +818,14 @@ class Ant {
     // the destination leg, replan a fresh chain from where we stand
     if (this.gotoFail) {
       this.gotoFail = false;
-      if (final) this.planNav(key);
+      if (final) this.planNav(key, col);
       else { nav.i++; nav.best = Infinity; nav.t = 0; }
       return dd;
     }
     nav.t++;
     if (d < nav.best - 1) { nav.best = d; nav.t = 0; }
-    if (nav.t > 300) this.planNav(key); // hopelessly lost: take a fresh look
+    if (nav.t > 300) this.planNav(key, col); // hopelessly lost: take a fresh look
+
     return dd;
   }
 
@@ -647,15 +846,29 @@ class Ant {
   }
 
   npcThink() {
-    const col = G.colony;
+    const col = this.colony;
     this.vx = 0;
     this.gotoFail = false;
 
-    // threat reaction (winter: nothing out in the frost is worth chasing)
-    let pred = G.nearestPredator(this.x, this.y, this.caste === 'soldier' ? 130 : 70);
-    if (pred && outInCold(pred)) pred = null;
+    // threat reaction (winter: nothing out in the frost is worth chasing).
+    // Soldiers and raiders take on any foe -- a predator or an ant of another
+    // colony; the rest only notice armed ones (two rival foragers pass each
+    // other by). A raider hauling its loot home runs instead.
+    // (raiders on their way home only defend themselves)
+    // (a look around every few ticks, staggered: it scans every ant and bug)
+    const homeward = this.state === 'home';
+    // (a raid's thieves slip past fights to the stores, like any forager)
+    const bold = (this.caste === 'soldier' || (this.raiding && this.raidRole === 'fight' && !this.carry)) && !homeward;
+    let pred = (G.tick + this.id) % SCAN_EVERY ? null : G.nearestFoe(this.x, this.y, bold ? 130 : 70, col, !bold, this.raiding);
+    if (pred && (outInCold(pred) || (pred.id === this.shunId && G.tick < this.shunUntil))) pred = null;
+    // locked in a fight already, mandibles on the foe: no turning to look
+    // at whoever else walks by (see the fight state for who bites back)
+    if (pred && this.state === 'fight' && this.target && this.target.hp > 0 && !this.target.dead &&
+        dist2(this.x, this.y, this.target.x, this.target.y) < 24 * 24) pred = null;
+    // a thief on its way in doesn't stop for the guards: it makes for the stores
+    if (pred && this.raiding && this.state === 'raid' && !bold) pred = null;
     if (pred) {
-      if (this.caste === 'soldier' || (this.caste === 'queen' &&
+      if (bold || (this.caste === 'queen' &&
           dist2(pred.x, pred.y, col.queenCh.x, col.queenCh.y) <= QUEEN_LEASH * QUEEN_LEASH)) {
         this.state = 'fight'; this.target = pred;
       } else if (this.caste === 'queen') {
@@ -664,7 +877,7 @@ class Ant {
         // a princess neither fights nor runs off: she keeps to the royal
         // chamber (the idle state walks her back there)
         if (this.state !== 'idle') { this.state = 'idle'; this.stateT = 60; this.target = null; this.nav = null; }
-      } else if (this.caste === 'nurse' && this.state !== 'rescue' && G.brood.length &&
+      } else if (this.caste === 'nurse' && this.state !== 'rescue' && G.brood.some(b => b.colony === col) &&
                  underground(pred) &&
                  dist2(pred.x, pred.y, col.nursery.x, col.nursery.y) < 220 * 220) {
         // something is in the tunnels near the nursery: the brood outranks
@@ -687,12 +900,12 @@ class Ant {
     }
 
     // nurses mend wounds wherever they stand (slow, costs a little food)
-    if (this.caste === 'nurse' && (G.tick + this.id) % 40 === 0 && G.colony.food > 2) {
+    if (this.caste === 'nurse' && (G.tick + this.id) % 40 === 0 && col.food > 2) {
       for (const o of G.ants) {
-        if (o !== this && o.hp > 0 && o.hp < o.maxHp - 1 &&
+        if (o !== this && o.hp > 0 && o.colony === col && o.hp < o.maxHp - 1 &&
             dist2(this.x, this.y, o.x, o.y) < 576) {
           o.hp = Math.min(o.maxHp, o.hp + 1.5);
-          G.colony.food -= 0.05;
+          col.food -= 0.05;
           G.fx('sparkle', o.x, o.y - 3, 1);
           break;
         }
@@ -702,6 +915,11 @@ class Ant {
     switch (this.state) {
       case 'idle': {
         this.stateT--;
+        // a raider between fights: back to the raid (or home, if it's over)
+        if (this.raiding) {
+          this.state = col.raid && col.raid.phase === 'march' ? 'raid' : 'home';
+          break;
+        }
         // a princess waits out her time in the royal chamber
         if (this.caste === 'princess' &&
             dist2(this.x, this.y, col.queenCh.x, col.queenCh.y) > 26 * 26) {
@@ -734,7 +952,7 @@ class Ant {
           this.vx = (Math.random() < 0.5 ? -1 : 1) * this.def.speed * 0.6;
         }
         // hungry colony: no loitering (unless it's winter: nothing out there)
-        if (G.colony.food < 25 && this.caste === 'worker' && !G.isWinter()) this.stateT = 0;
+        if (col.food < 25 && this.caste === 'worker' && !G.isWinter()) this.stateT = 0;
         if (this.stateT <= 0) {
           if (this.caste === 'worker') {
             if (G.isWinter()) {
@@ -764,12 +982,19 @@ class Ant {
           this.navTo('entrance');
         } else {
           if (!this.target || this.target.gotoSurface || Math.abs(this.x - this.target.x) < 10) {
-            this.target = {
-              x: Math.max(20, Math.min(WORLD_W - 20, col.x + (Math.random() - 0.5) * 1800)),
-              y: 0
-            };
+            const cs = G.contested;
+            if (cs && cs.active && Math.random() < SITE_GO) {
+              // the fallen fruit out between the nests: a long trek, but rich
+              this.target = { x: cs.x + (Math.random() - 0.5) * 30, y: 0, far: true };
+            } else {
+              this.target = {
+                x: Math.max(20, Math.min(WORLD_W - 20, col.x + (Math.random() - 0.5) * 1800)),
+                y: 0
+              };
+            }
           }
-          this.goto(this.target.x, T.surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.target.x)))] - 4, false);
+          if (this.target.far) this.march(this.target.x);
+          else this.goto(this.target.x, T.surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.target.x)))] - 4, false);
           if (this.gotoFail) { this.gotoFail = false; this.target = null; break; }
           // smell food?
           const it = this.findFood(600);
@@ -791,8 +1016,8 @@ class Ant {
             }
             if (this.state !== 'forage') break;
           }
-          // homesick after a while
-          if (Math.random() < 0.0008) { this.state = 'return'; }
+          // homesick after a while (not on the long trek to the fruit)
+          if (!this.target.far && Math.random() < 0.0008) { this.state = 'return'; }
         }
         break;
       }
@@ -847,16 +1072,70 @@ class Ant {
       case 'return': {
         const d = this.navTo('storage');
         if (d < 26) {
-          if (this.carry && !G.colony.deposit(this.carry, this)) {
+          if (this.carry && !col.deposit(this.carry, this)) {
             // stores are full: hold on to the load and wait for room
             this.state = 'idle'; this.stateT = 400 + Math.random() * 400;
             break;
           }
           this.carry = null;
+          // a raider home with its loot: its raid is done
+          if (this.raiding) this.endRaid();
           // short, staggered breather so returners don't pool at the cache
           this.state = 'idle'; this.stateT = 60 + Math.random() * 180;
         }
         // drop pheromone handled in main loop (carrying ants)
+        break;
+      }
+
+      case 'raid': {
+        // out against another colony (see Colony.startRaid)
+        const r = col.raid;
+        const enemy = r ? G.colonies[r.target] : null;
+        if (!enemy || r.phase !== 'march') { this.state = 'home'; break; }
+        // the party gathers short of their nest, then goes in together
+        // (the thieves a little behind the fighters: in while the guards
+        // are busy with them)
+        const ex = Math.abs(this.x - enemy.x);
+        const wait = !r.massed || (this.raidRole === 'steal' && r.t - (r.massedT || 0) < RAID_THIEF_LAG);
+        if (wait && !this.carry && ex < RAID_MUSTER && ex > RAID_MUSTER / 2) {
+          this.climbing = false;
+          break;
+        }
+        // on the way: a raider that stops getting any closer (wedged, lost
+        // in a crater) drops out of the raid and is just an ant again
+        if (ex > 200 && !this.carry) {
+          if (this.raidBest === undefined || ex < this.raidBest - 4) { this.raidBest = ex; this.raidStallT = 0; }
+          else if (++this.raidStallT > RAID_ANT_STALL) {
+            this.raiding = false; this.raidRole = null;
+            this.state = 'idle'; this.stateT = 60; this.nav = null; this.target = null;
+            break;
+          }
+        }
+        if (this.raidRole === 'steal') {
+          // into their stores, and away with what we can carry
+          if (this.carry) { this.state = 'return'; break; }
+          const d = this.navTo('storage', enemy);
+          if (d < 26) {
+            if (col.steal(this, enemy)) this.state = 'return';
+            else this.raidRole = 'fight';   // the stores are bare: fight instead
+          }
+        } else {
+          // take the fight into their nest: down to the junction, then
+          // prowl between it and the stores
+          const d = this.navTo(this.patrolI % 2 ? 'storage' : 'junction', enemy);
+          if (d < 20) this.patrolI++;
+        }
+        break;
+      }
+
+      case 'home': {
+        // the raid is over: back down into our own nest
+        if (this.carry && ITEM_DEF[this.carry.kind]) { this.state = 'return'; break; }
+        const d = this.navTo('junction');
+        if (d < 24) {
+          this.endRaid();
+          this.state = 'idle'; this.stateT = 120;
+        }
         break;
       }
 
@@ -872,7 +1151,7 @@ class Ant {
         this.stateT--;
         // (fleeing across the winter surface: make for the nest instead)
         if (outInCold(this)) { this.state = 'shelter'; break; }
-        const p = G.nearestPredator(this.x, this.y, 160);
+        const p = G.nearestFoe(this.x, this.y, 160, col, true);
         if (p) {
           // run away from threat, generally toward home
           const away = Math.sign(this.x - p.x) || 1;
@@ -887,8 +1166,29 @@ class Ant {
       }
 
       case 'fight': {
-        let p = (this.target && this.target.hp > 0 && !this.target.dead) ? this.target
-              : G.nearestPredator(this.x, this.y, 200);
+        // a princess never fights: back to the royal chamber
+        if (this.caste === 'princess') { this.state = 'idle'; this.stateT = 60; this.target = null; break; }
+        let p =(this.target && this.target.hp > 0 && !this.target.dead) ? this.target
+              : G.nearestFoe(this.x, this.y, 200, col, false, this.raiding);
+        // bitten while chasing someone else: turn on whoever is biting, or
+        // on an armed foe right at our side -- never chase a fleeing thief
+        // while a soldier chews on us from behind
+        if (p && this.chooseT !== G.tick >> 3) {
+          this.chooseT = G.tick >> 3;
+          const pd = dist2(p.x, p.y, this.x, this.y);
+          const h = this.hitBy;
+          if (h && h !== p && G.tick - this.hitT < 90 && !(h.hp <= 0 || h.dead) &&
+              h.colony !== col && !(this.raiding && h.caste === 'queen') &&
+              dist2(h.x, h.y, this.x, this.y) < Math.min(pd, 24 * 24)) {
+            p = h;
+          } else if (pd > 15 * 15) {
+            const near = G.nearestFoe(this.x, this.y, 15, col, true, this.raiding);
+            if (near) p = near;
+          }
+        }
+        // a raider leaves the enemy's queen be (she's the players' to defend,
+        // and an idle colony shouldn't fall to one raid)
+        if (p && this.raiding && p.caste === 'queen') p = null;
         // a foe that got far away (fled, or wandered across the map) isn't
         // worth a march: without this leash rallied ants chased a centipede
         // a thousand pixels off and wedged themselves in a tree on the way
@@ -902,21 +1202,32 @@ class Ant {
           p = null;
           if (outInCold(this)) { this.state = 'shelter'; this.target = null; this.rallyT = 0; break; }
         }
+        // a foe it can't get its mandibles on for long (up a tree, behind
+        // rock): leave it be for a while
+        if (p && p === this.target && ++this.fightT > FIGHT_GIVEUP) {
+          this.shunId = p.id; this.shunUntil = G.tick + 900;
+          p = null;
+        }
         if (!p) {
-          this.state = this.caste === 'soldier' ? 'patrol' : 'idle';
-          this.stateT = 200;
+          this.state = this.raiding ? 'raid' : this.caste === 'soldier' ? 'patrol' : 'idle';
+          this.stateT = 200; this.target = null; this.fightT = 0;
           break;
         }
+        if (p !== this.target) this.fightT = 0;
         this.target = p;
         // deep in the nest with a faraway target: take the tunnels out first
         const fsx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
         if (this.y > T.surf[fsx] + 40 && dist2(this.x, this.y, p.x, p.y) > 10000) {
-          this.navTo('entrance');
+          this.navTo('entrance', this.nestIn() || col);
           break;
         }
-        const d = this.goto(p.x, p.y, true);
+        // a tree trunk between us: round it the marching way (under the roots)
+        const lo = Math.min(this.x, p.x) + 2, hi = Math.max(this.x, p.x) - 2;
+        const trunk = G.trees.find(t => t.x > lo && t.x < hi && Math.abs(t.x - this.x) < 60);
+        const d = trunk ? (this.march(p.x), Math.hypot(p.x - this.x, p.y - this.y)) : this.goto(p.x, p.y, true);
         if (d < 11 && this.biteCd <= 0) {
-          p.hurt(this.dmgNow(), Math.sign(p.x - this.x) * 0.8, -0.3);
+          p.hurt(this.dmgNow(), Math.sign(p.x - this.x) * 0.8, -0.3, this);
+          this.fightT = 0;
           this.biteCd = 40;
           this.biteAnim = 8;
           G.sfx('bite', this.x, this.y, 220);
@@ -927,8 +1238,7 @@ class Ant {
       case 'patrol': {
         this.stateT--;
         // anything hunting near the colony is the soldiers' problem
-        const threat = G.bugs.find(b => b.predator && !b.dead && !b.fleeing &&
-          Math.abs(b.x - col.x) < 450 && Math.abs(b.y - col.entrance.y) < 350 && !outInCold(b));
+        const threat = colonyThreat(col);
         if (threat) {
           this.state = 'fight'; this.target = threat;
           // sound the alarm: nearby ants rally to the soldier's side
@@ -936,7 +1246,7 @@ class Ant {
             const n = rallyAllies(this, 150, threat);
             if (n > 0) {
               this.abilCd = 900;
-              if (G.nearPlayer(this.x, this.y) < 260) {
+              if (col.player && G.nearPlayer(this.x, this.y) < 260) {
                 G.msg('m_alarm', [], '#ff8040');
                 G.sfx('danger');
               }
@@ -959,16 +1269,16 @@ class Ant {
         if (this.carry && (this.carry.kind === 'egg' || this.carry.kind === 'larva')) {
           this.state = 'rescue'; break;
         }
-        const tendDanger = G.nearestPredator(col.nursery.x, col.nursery.y, 180);
-        if (G.brood.length && tendDanger && underground(tendDanger)) {
+        const tendDanger = G.nearestFoe(col.nursery.x, col.nursery.y, 180, col, true);
+        if (tendDanger && underground(tendDanger) && G.brood.some(b => b.colony === col)) {
           this.state = 'rescue'; break;
         }
         // find a hungry larva, fetch a morsel from stores, feed it
-        const larva = G.brood.find(b => b.kind === 'larva' && b.hungry && !b.claimed);
-        if (larva && !this.carry && G.colony.food >= 3) {
+        const larva = G.brood.find(b => b.kind === 'larva' && b.hungry && !b.claimed && b.colony === col);
+        if (larva && !this.carry && col.food >= 3) {
           const d = this.navTo('storage');
           if (d < 24) {
-            G.colony.food -= 2;
+            col.food -= 2;
             this.carry = G.makeItem('morsel', this.x, this.y);
             this.carry.carried = this;
             G.items.push(this.carry);
@@ -976,10 +1286,10 @@ class Ant {
           }
         } else if (this.carry) {
           const l = G.brood.find(b => b.kind === 'larva' && b.claimed === this.id) ||
-                    G.brood.find(b => b.kind === 'larva' && b.hungry);
+                    G.brood.find(b => b.kind === 'larva' && b.hungry && b.colony === col);
           if (!l) { // nobody hungry: put it back
             const d = this.navTo('storage');
-            if (d < 24) { G.colony.food += 2; this.carry.dead = true; this.carry = null; }
+            if (d < 24) { col.food += 2; this.carry.dead = true; this.carry = null; }
           } else if (dist2(this.x, this.y, l.x, l.y) < 3600) {
             const d = this.goto(l.x, l.y, true);
             if (d < 9) {
@@ -1005,7 +1315,7 @@ class Ant {
 
       case 'rescue': {
         // ferry eggs and larvae out of a threatened nursery, deep to the queen
-        let danger = G.nearestPredator(col.nursery.x, col.nursery.y, 220);
+        let danger = G.nearestFoe(col.nursery.x, col.nursery.y, 220, col, true);
         if (danger && !underground(danger)) danger = null;
         if (this.carry && (this.carry.kind === 'egg' || this.carry.kind === 'larva')) {
           const d = this.navTo('queen');
@@ -1016,7 +1326,7 @@ class Ant {
             b.safeT = G.tick + 3600; // delivered: don't ferry it again for a while
           }
         } else if (danger) {
-          const b = G.brood.find(b => !b.dead && !b.carried &&
+          const b = G.brood.find(b => !b.dead && !b.carried && b.colony === col &&
             !(b.safeT > G.tick) &&
             dist2(b.x, b.y, col.queenCh.x, col.queenCh.y) > 70 * 70 &&
             dist2(b.x, b.y, col.nursery.x, col.nursery.y) < 150 * 150);
@@ -1036,6 +1346,13 @@ class Ant {
     }
   }
 
+  // back from a raid (home, or with the loot delivered)
+  endRaid() {
+    this.raiding = false;
+    this.raidRole = null;
+    if (this.colony.raid) this.colony.raid.home++;
+  }
+
   draw(ctx, camx, camy) {
     const c = this.def;
     const ex = Math.round(this.x - camx), ey = Math.round(this.y - camy);
@@ -1046,10 +1363,12 @@ class Ant {
     if (this.climbing) ctx.rotate(-this.dir * Math.PI / 2 * 0.85);
     ctx.scale(this.dir * s, this.ceiling ? -s : s); // upside-down on ceilings
 
+    const red = this.colony && this.colony.faction === 'red';
+    const rgb = red ? RED_COLOR[this.caste] : c.color;
     const col = this.flash > 0 ? '#ffffff'
-      : `rgb(${c.color[0]},${c.color[1]},${c.color[2]})`;
+      : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
     const dark = this.flash > 0 ? '#ffffff'
-      : `rgb(${c.color[0] * 0.55 | 0},${c.color[1] * 0.55 | 0},${c.color[2] * 0.55 | 0})`;
+      : `rgb(${rgb[0] * 0.55 | 0},${rgb[1] * 0.55 | 0},${rgb[2] * 0.55 | 0})`;
 
     const legUp = (Math.sin(this.phase) > 0) ? 1 : 0;
     ctx.fillStyle = dark;
@@ -1077,6 +1396,12 @@ class Ant {
       ctx.fillRect(-7, -5, 7, 2);
       ctx.fillRect(-5, -6, 4, 1);
     }
+    // the red ants' gloss on gaster and head: they read as foes in the dark
+    if (red && this.flash <= 0) {
+      ctx.fillStyle = RED_SHINE;
+      ctx.fillRect(-6, -2, 2, 1);
+      ctx.fillRect(2, -2, 1, 1);
+    }
     // mandibles
     ctx.fillStyle = dark;
     const mo = this.biteAnim > 3 ? 1 : 0;
@@ -1103,9 +1428,10 @@ class Ant {
 // Brood: eggs and larvae
 // ---------------------------------------------------------------------------
 class Brood {
-  constructor(x, y, kind) {
+  constructor(x, y, kind, colony) {
     this.id = ENT_ID++;
     this.kind = kind; // 'egg' | 'larva'
+    this.colony = colony || G.colony;
     this.x = x; this.y = y;
     this.vx = 0; this.vy = 0;
     this.hw = 2; this.hh = 1.5;
@@ -1135,7 +1461,7 @@ class Brood {
 
   update() {
     // a warm thatched mound speeds every egg and larva along
-    this.age += G.colony ? G.colony.broodBoost : 1;
+    this.age += this.colony ? this.colony.broodBoost : 1;
     this.phase += 0.05;
     if (this.carried) {
       // ride on the carrier's back
@@ -1166,7 +1492,7 @@ class Brood {
           if (this.carried.carry === this) this.carried.carry = null;
           this.carried = null;
         }
-        G.colony.spawnAdult(this.x, this.y, this.royal ? 'princess' : null);
+        this.colony.spawnAdult(this.x, this.y, this.royal ? 'princess' : null);
       }
       // tiny wiggle
       if (Math.random() < 0.02) this.vx = (Math.random() - 0.5) * 0.3;
@@ -1200,7 +1526,7 @@ class Brood {
 }
 
 // ---------------------------------------------------------------------------
-// Bugs: aphid, pillbug, worm, spider, centipede
+// Bugs: aphid, pillbug, worm, spider, centipede, wasp, beetle
 // ---------------------------------------------------------------------------
 const BUG_DEF = {
   aphid:     { hp: 5,   speed: 0.1,  dmg: 0,  corpse: 4 },
@@ -1210,7 +1536,6 @@ const BUG_DEF = {
   centipede: { hp: 80,  speed: 0.32, dmg: 9,  corpse: 28 },
   wasp:      { hp: 35,  speed: 0.85, dmg: 5,  corpse: 14 },
   beetle:    { hp: 140, speed: 0.22, dmg: 12, corpse: 32 },
-  redant:    { hp: 28,  speed: 0.5,  dmg: 6,  corpse: 6 },
 };
 
 class Bug {
@@ -1240,14 +1565,11 @@ class Bug {
     this.digT = 0;       // beetle bulldozing cooldown
     this.turnT = 0;      // beetle: committed to walking away from a tree
     this.digWait = 0;    // gnawing packed earth: pause between bites
-    this.raidT = 2700;   // redant: how long the raid lasts (~45s)
-    this.resident = false; // redant: a defender of the rival nest (never raids/expires)
-    this.homeX = null;     // redant: x to garrison/march toward (rival entrance)
   }
 
   get predator() {
     return this.kind === 'spider' || this.kind === 'centipede' ||
-           this.kind === 'wasp' || this.kind === 'beetle' || this.kind === 'redant';
+           this.kind === 'wasp' || this.kind === 'beetle';
   }
 
   hurt(dmg, kx, ky) {
@@ -1300,7 +1622,7 @@ class Bug {
       case 'spider':    this.spiderThink(); break;
       case 'wasp':      this.waspThink(); break;
       case 'beetle':    this.beetleThink(); break;
-      case 'redant':    this.redantThink(); break;
+
     }
 
     // walkers wedged in terrain thrash themselves loose; if the prison is
@@ -1448,7 +1770,7 @@ class Bug {
       this.x = nx; this.y = ny;
       this.dir = Math.cos(ang) >= 0 ? 1 : -1;
       if (dist2(this.x, this.y, prey.x, prey.y) < 100 && this.biteCd <= 0) {
-        prey.hurt(d.dmg, Math.sign(prey.x - this.x), -0.5);
+        prey.hurt(d.dmg, Math.sign(prey.x - this.x), -0.5, this);
         this.biteCd = 55;
         G.sfx('bite', this.x, this.y, 240);
       }
@@ -1480,7 +1802,7 @@ class Bug {
       this.climbing = false;
       if (prey.y < this.y - 6 && wall) { this.climbing = true; this.climbV = -0.8; }
       if (dist2(this.x, this.y, prey.x, prey.y) < 110 && this.biteCd <= 0) {
-        prey.hurt(d.dmg, this.dir * 1.2, -0.6);
+        prey.hurt(d.dmg, this.dir * 1.2, -0.6, this);
         this.biteCd = 50;
         G.sfx('bite', this.x, this.y, 260);
       }
@@ -1554,7 +1876,7 @@ class Bug {
       return;
     }
     if (prey && dist2(this.x, this.y, prey.x, prey.y) < 90 && this.biteCd <= 0) {
-      prey.hurt(d.dmg, this.dir, -0.4);
+      prey.hurt(d.dmg, this.dir, -0.4, this);
       this.biteCd = 45;
       this.swoopT = 110; // hit and run
       G.sfx('bite', this.x, this.y, 240);
@@ -1579,7 +1901,7 @@ class Bug {
       this.dir = Math.sign(prey.x - this.x) || 1;
       this.vx = this.dir * d.speed * 1.2;
       if (dist2(this.x, this.y, prey.x, prey.y) < 130 && this.biteCd <= 0) {
-        prey.hurt(d.dmg, this.dir * 1.4, -0.5);
+        prey.hurt(d.dmg, this.dir * 1.4, -0.5, this);
         this.biteCd = 70;
         G.sfx('bite', this.x, this.y, 260);
       }
@@ -1603,65 +1925,6 @@ class Bug {
         this.dir = -this.dir;
         this.turnT = 600; // wood or rock: trundle off elsewhere for a while
         this.digT = 30;
-      }
-    }
-  }
-
-  // redant: rival-colony ant. Raiders march on the player's entrance and
-  // withdraw when the raid clock runs out; residents garrison the rival nest,
-  // fighting only intruders that come near and never expiring.
-  redantThink() {
-    const d = BUG_DEF.redant;
-    // where this ant heads when there's no prey in reach
-    const marchX = this.resident ? (this.homeX != null ? this.homeX : this.x)
-                                 : G.colony.entrance.x;
-    if (!this.resident) {
-      this.raidT--;
-      if (this.raidT <= 0) this.fleeing = true;
-    }
-    if (this.fleeing) {
-      const edge = this.x < WORLD_W / 2 ? 10 : WORLD_W - 10;
-      this.dir = Math.sign(edge - this.x) || 1;
-      this.vx = this.dir * d.speed * 1.2;
-      if (this.blocked && sideWall(this, this.dir)) { this.climbing = true; this.climbV = -0.8; }
-      else this.climbing = false;
-      if (Math.abs(this.x - edge) < 30) this.dead = true;
-      return;
-    }
-    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, this.x)));
-    let prey = G.nearestAnt(this.x, this.y, 110, false);
-    if (prey && prey.y > T.surf[sx] + 60) prey = null; // raiders stay shallow
-    if (prey) {
-      this.dir = Math.sign(prey.x - this.x) || 1;
-      this.vx = this.dir * d.speed * 1.2;
-      this.climbing = false;
-      if (prey.y < this.y - 6 && sideWall(this, this.dir)) { this.climbing = true; this.climbV = -0.8; }
-      if (dist2(this.x, this.y, prey.x, prey.y) < 90 && this.biteCd <= 0) {
-        prey.hurt(d.dmg, this.dir, -0.4);
-        this.biteCd = 50;
-        G.sfx('bite', this.x, this.y, 240);
-      }
-    } else {
-      // march toward the garrison / target entrance; climb slopes but not trees
-      const tx = marchX;
-      if (this.turnT <= 0) this.dir = Math.sign(tx - this.x) || 1;
-      this.vx = this.dir * d.speed * (Math.abs(this.x - tx) < 20 ? 0.3 : 1);
-      const aboveGround = this.y < T.surf[sx] - 6;
-      if (this.climbing && aboveGround) {
-        // climbed into a tree: drop off and detour
-        this.climbing = false;
-        this.dir = -this.dir;
-        this.turnT = 240 + (this.id % 4) * 80;
-      } else if (this.blocked) {
-        if (!aboveGround && sideWall(this, this.dir) && Math.random() < 0.6) {
-          this.climbing = true; this.climbV = -0.8;
-        } else {
-          this.climbing = false;
-          this.dir = -this.dir;
-          this.turnT = 240 + (this.id % 4) * 80;
-        }
-      } else if (this.onGround) {
-        this.climbing = false;
       }
     }
   }
@@ -1788,33 +2051,6 @@ class Bug {
         ctx.restore();
         break;
       }
-      case 'redant': {
-        ctx.save();
-        ctx.translate(ex, ey);
-        if (this.climbing) ctx.rotate(-this.dir * Math.PI / 2 * 0.85);
-        ctx.scale(this.dir, 1);
-        const rc = fl ? '#fff' : '#c03028';
-        const rd = fl ? '#fff' : '#701418';
-        const rlo = Math.sin(this.phase) > 0 ? 1 : 0;
-        ctx.fillStyle = rd;
-        ctx.fillRect(-3 + rlo, 1, 1, 2);
-        ctx.fillRect(-rlo, 1, 1, 2);
-        ctx.fillRect(2 + rlo, 1, 1, 2);
-        ctx.fillRect(3, -3, 1, 1);
-        ctx.fillRect(4, -4, 1, 1);
-        ctx.fillStyle = rc;
-        ctx.fillRect(-6, -2, 4, 3);   // gaster
-        ctx.fillRect(-2, -1, 3, 2);   // thorax
-        ctx.fillRect(1, -2, 3, 3);    // head
-        ctx.fillStyle = rd;           // mandibles
-        const rmo = this.biteCd > 40 ? 1 : 0;
-        ctx.fillRect(4, -2 - rmo, 1, 1);
-        ctx.fillRect(4, 0 + rmo, 1, 1);
-        ctx.fillStyle = '#200808';
-        ctx.fillRect(2, -1, 1, 1);
-        ctx.restore();
-        break;
-      }
       case 'spider': {
         ctx.save();
         ctx.translate(ex, ey);
@@ -1881,6 +2117,7 @@ class Item {
     if (++this.age > ITEM_ROT && ROTS[this.kind]) { this.dead = true; return; }
     physStep(this);
     this.vx *= 0.85;
+    if (Math.abs(this.vx) < 0.01) this.vx = 0;   // (and then it rests)
   }
 }
 
@@ -1928,6 +2165,14 @@ function drawItem(ctx, it, camx, camy) {
       ctx.fillRect(ex - 1, ey - 2, 3, 1);      // cap
       ctx.fillStyle = '#c8ecd0';
       ctx.fillRect(ex, ey - 3, 1, 1);
+      break;
+    case 'berry':     // a juicy wedge of the fallen fruit
+      ctx.fillStyle = '#c8304a';
+      ctx.fillRect(ex - 1, ey - 1, 3, 3);
+      ctx.fillStyle = '#ff8c98';
+      ctx.fillRect(ex - 1, ey - 1, 1, 1);
+      ctx.fillStyle = '#7a1828';
+      ctx.fillRect(ex + 1, ey + 1, 1, 1);
       break;
     case 'crystal':
       ctx.fillStyle = '#78b4e0';

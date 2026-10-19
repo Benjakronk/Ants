@@ -1,6 +1,7 @@
 // Multi-seed colony check in plain Node: runs several worlds headlessly (an
 // idle player parked in the nest) and reports food, deliveries and foragers
-// per day -- or per season for runs of a year. Each seed runs in its own
+// per day -- or per season for runs of a year -- for the players' colony
+// and the red rival beside it (its size, raids, food stolen). Each seed runs in its own
 // process, with a seeded Math.random so a run is reproducible.
 //   node test/forageseeds.js [days] [seeds...]      (default 3 days, seeds 1-8)
 //   node test/forageseeds.js 13                      a whole year and a day
@@ -39,7 +40,9 @@ function runWorld(seed) {
     const loose = G.items.filter(i => !i.dead && !i.carried && ITEM_DEF[i.kind] && ITEM_DEF[i.kind].food).length;
     return { day: G.day, season: G.season, food: Math.round(G.colony.food), got: Math.round(G.colony.stats.foodGathered),
       ants: G.ants.length, brood: G.brood.length, loose, surfRet,
-      ret: G.ants.filter(a => a.state === 'return').length, died: G.colony.stats.antsDied };
+      ret: G.ants.filter(a => a.state === 'return').length, died: G.colony.stats.antsDied,
+      blk: G.colony.members().length, red: G.rival.members().length, rfood: Math.round(G.rival.food),
+      raids: G.rival.stats.raids, stolen: Math.round(G.colony.stats.foodStolen || 0), redDown: G.rival.defeated };
   })()`);
   const t0 = run('G.tick');
   for (let i = 1; i <= days * DAY; i++) {
@@ -68,20 +71,25 @@ if (one) {
     ch.on('message', rows => { out[seed] = rows; });
     ch.on('exit', () => {
       if (--left) return;
-      let lost = 0, starving = 0, gotSum = 0;
+      let lost = 0, starving = 0, gotSum = 0, redMax = 0, redGone = 0, raids = 0;
       for (const sd of seeds) {
         const rows = out[sd] || [];
         console.log('seed ' + sd + ': ' + rows.map(r => r.over
           ? `[${r.over} d${r.day}]`
-          : `d${r.day} ${SEASON[r.season]} food ${r.food} got ${r.got} ants ${r.ants} died ${r.died}` +
+          : `d${r.day} ${SEASON[r.season]} food ${r.food} got ${r.got} ants ${r.blk} died ${r.died}` +
+            ` red ${r.red}/${r.rfood} raids ${r.raids} stolen ${r.stolen}` +
             (days <= 6 ? ` loose ${r.loose} ret ${r.ret}/${r.surfRet}` : '')).join(' | '));
         const last = rows.filter(r => !r.over).pop() || {};
         if (rows.some(r => r.over && !r.canContinue)) lost++;
         else if (last.food < 5) starving++;
         gotSum += last.got || 0;
+        redMax = Math.max(redMax, ...rows.map(r => r.red || 0));
+        if (!last.red) redGone++;
+        raids += last.raids || 0;
       }
       console.log(`seeds ${seeds.length}: lost ${lost}, starving at the end ${starving}, ` +
-        `avg food delivered ${Math.round(gotSum / seeds.length)} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+        `avg food delivered ${Math.round(gotSum / seeds.length)}; red: largest ${redMax} ants, ` +
+        `died out ${redGone}, raids ${raids} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
     });
   }
 }

@@ -52,73 +52,84 @@ function int16Decode(b64, len) {
 }
 
 function serializeAnt(a) {
-  return {
+  const o = {
     id: a.id, caste: a.caste, x: Math.round(a.x), y: Math.round(a.y),
     hp: Math.round(a.hp * 10) / 10, playerIdx: a.playerIdx,
     carryId: a.carry ? a.carry.id : 0,
     soil: Math.round(a.soil || 0), thatch: Math.round(a.thatch || 0),
+    col: a.colony ? a.colony.idx : 0,
   };
+  if (a.raiding) { o.raiding = true; o.raidRole = a.raidRole; }
+  return o;
 }
 function serializeBrood(b) {
   return {
     id: b.id, kind: b.kind, x: Math.round(b.x), y: Math.round(b.y),
     age: Math.round(b.age), feedCount: b.feedCount, hungry: b.hungry, hungerT: b.hungerT,
-    royal: b.royal || false,
+    royal: b.royal || false, col: b.colony ? b.colony.idx : 0,
   };
 }
 function serializeBug(b) {
   return {
     id: b.id, kind: b.kind, x: Math.round(b.x), y: Math.round(b.y),
     hp: Math.round(b.hp), fleeing: b.fleeing,
-    resident: b.resident || false,
-    homeX: b.homeX == null ? null : Math.round(b.homeX),
   };
 }
 function serializeItem(it) {
-  return {
+  const o = {
     id: it.id, kind: it.kind, x: Math.round(it.x), y: Math.round(it.y),
     value: it.value, carriedBy: it.carried ? it.carried.id : 0,
     age: Math.round(it.age || 0),   // the rot timer (older saves: fresh)
+  };
+  if (it.site) o.site = true;       // a piece of the contested site's fruit
+  return o;
+}
+function serializeColony(c) {
+  return {
+    faction: c.faction,
+    food: Math.round(c.food * 10) / 10, score: c.score,
+    eggT: c.eggT, lastDigTaskDay: c.lastDigTaskDay,
+    lastRaidDay: c.lastRaidDay || 0,
+    lastCrystalTaskDay: c.lastCrystalTaskDay || 0,
+    tasks: c.tasks.filter(t => !t.done),
+    stats: c.stats,
+    chambers: c.chambers.map(ch => {
+      const o = { id: ch.id, type: ch.type, x: ch.x, y: ch.y, area: ch.area, claimed: ch.claimed };
+      if (ch.anchor) o.anchor = true;
+      if (ch.leaves) o.leaves = Math.round(ch.leaves * 10) / 10;
+      return o;
+    }),
+    nextChamberId: c.nextChamberId,
+    crystals: c.crystals,
+    upg: Object.assign({}, c.upg),
+    shelters: c.shelters.map(sh => ({ x: sh.x, y: sh.y, t: sh.t })),
+    objectives: c.objectives,
+    defeated: c.defeated, slain: c.slain, queenSeen: c.queenSeen,
+    raid: c.raid, expandN: c.expandN, lastExpandDay: c.lastExpandDay, digJob: c.digJob,
   };
 }
 
 function saveWorld(slot) {
   if (!G || !G.running) return false;
-  const c = G.colony;
   // v3: chambers, building loads, surface line, packed-earth wear, build
   // material. v4: the calendar (implicit in tick), milestones, crystals and
   // upgrades, aphid shelters, fungus garden stock, royal brood, the last
-  // nuptial flight.
-  // restoreWorld still loads v2 and v3 saves (missing fields get defaults).
+  // nuptial flight. v5: every colony (G.colonies: the players' and the
+  // red rival, each with its milestones, raid and growth), each ant's and
+  // brood's colony, the contested food site.
+  // restoreWorld still loads v2-v4 saves (missing fields get defaults).
   const data = {
-    v: 4,
+    v: 5,
     w: WORLD_W, h: WORLD_H,
     seed: G.seed,
     tick: G.tick,
     day: G.day,
     playerCount: G.players.length,
     terrain: rleEncode(T.m),
-    colony: {
-      food: Math.round(c.food * 10) / 10, score: c.score,
-      eggT: c.eggT, lastDigTaskDay: c.lastDigTaskDay,
-      lastRaidDay: c.lastRaidDay || 0,
-      lastCrystalTaskDay: c.lastCrystalTaskDay || 0,
-      tasks: c.tasks.filter(t => !t.done),
-      stats: c.stats,
-      chambers: c.chambers.map(ch => {
-        const o = { id: ch.id, type: ch.type, x: ch.x, y: ch.y, area: ch.area, claimed: ch.claimed };
-        if (ch.anchor) o.anchor = true;
-        if (ch.leaves) o.leaves = Math.round(ch.leaves * 10) / 10;
-        return o;
-      }),
-      nextChamberId: c.nextChamberId,
-      crystals: c.crystals,
-      upg: Object.assign({}, c.upg),
-      shelters: c.shelters.map(sh => ({ x: sh.x, y: sh.y, t: sh.t })),
-    },
-    objectives: G.objectives,
+    colonies: G.colonies.map(serializeColony),
     lastFlightYear: G.lastFlightYear,
     flight: G.flight,
+    contested: G.contested,
     surf: int16Encode(T.surf),
     wear: T.wearList(),
     buildMats: G.players.map(p => p.buildMat),
@@ -150,9 +161,10 @@ function slotInfo(slot) {
     const d = JSON.parse(raw);
     // (v3 and older restart the calendar: year 1, spring)
     const day = d.v >= 4 ? d.day : 0;
+    const c = d.v >= 5 ? d.colonies[0] : d.colony;
     return {
-      day, ants: d.ants.length, food: Math.round(d.colony.food),
-      score: d.colony.score, playerCount: d.playerCount,
+      day, ants: d.ants.filter(a => !a.col).length, food: Math.round(c.food),
+      score: c.score, playerCount: d.playerCount,
       season: Math.floor(day / SEASON_DAYS) % 4, year: Math.floor(day / YEAR_DAYS) + 1,
     };
   } catch (e) { return null; }

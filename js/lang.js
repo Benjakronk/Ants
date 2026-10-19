@@ -93,7 +93,14 @@ const STR = {
   m_centi: ['SOMETHING SLITHERS IN THE DEEP...', 'NOE ÅLER SEG I DYPET...'],
   m_wasp: ['AN ANGRY BUZZ ON THE WIND...', 'EN SINT SUMMING PÅ VINDEN...'],
   m_beetle: ['SOMETHING HEAVY TRUNDLES CLOSER...', 'NOE TUNGT TRAMPER NÆRMERE...'],
-  m_raid: ['RIVAL ANTS ARE RAIDING THE COLONY!', 'RIVALISERENDE MAUR ANGRIPER KOLONIEN!'],
+  m_raid: ['RED RAIDERS ARE MARCHING ON THE NEST!', 'RØDE RØVERE MARSJERER MOT TUA!'],
+  m_raidSteal: ['RED RAIDERS ARE STEALING FROM THE STORES!', 'RØDE RØVERE STJELER FRA LAGRENE!'],
+  m_raidOver: ['THE RED RAIDERS RETREAT', 'DE RØDE RØVERNE TREKKER SEG TILBAKE'],
+  m_queenFound: ['YOU HAVE FOUND THE RED QUEEN!', 'DU HAR FUNNET DEN RØDE DRONNINGEN!'],
+  m_rivalSlain: ['THE RED QUEEN IS SLAIN! +{0} +{1}\x13', 'DEN RØDE DRONNINGEN ER DREPT! +{0} +{1}\x13'],
+  m_rivalDied: ['THE RED QUEEN HAS DIED', 'DEN RØDE DRONNINGEN ER DØD'],
+  m_siteFell: ['A FRUIT HAS FALLEN BETWEEN THE NESTS!', 'EN FRUKT HAR FALT MELLOM TUENE!'],
+  ui_siteLabel: ['CONTESTED FRUIT', 'STRIDSFRUKT'],
 
   // tasks
   t_gather: ['GATHER FOOD', 'SANK MAT'],
@@ -167,7 +174,7 @@ const STR = {
   o_food100: ['STORE {0} FOOD', 'LAGRE {0} MAT'],
   o_mound: ['THATCH A MOUND OVER THE ENTRANCE', 'BYGG EN STRÅTUE OVER INNGANGEN'],
   o_pop25: ['GROW TO {0} ANTS', 'VOKS TIL {0} MAUR'],
-  o_crystals: ['STORE 2 CRYSTALS', 'LAGRE 2 KRYSTALLER'],
+  o_contested: ['BRING HOME {0} PIECES OF CONTESTED FRUIT', 'BÆR HJEM {0} FRUKTBITER FRA STRIDSPLASSEN'],
   o_stockpile: ['{0} FOOD STORED AS WINTER COMES', '{0} MAT PÅ LAGER NÅR VINTEREN KOMMER'],
   o_royal: ['DIG A ROOMY ROYAL CHAMBER', 'GRAV ET ROMSLIG DRONNINGKAMMER'],
   o_princess: ['RAISE A PRINCESS', 'AL OPP EN PRINSESSE'],
@@ -201,6 +208,10 @@ const STR = {
   ui_open: ['ENTRANCE OPEN', 'INNGANGEN ÅPEN'],
   ui_crystals: ['CRYSTALS: {0}', 'KRYSTALLER: {0}'],
   ui_yearGoal: ['RAISE PRINCESSES FOR SPRING OF YEAR {0}', 'AL OPP PRINSESSER TIL VÅREN I ÅR {0}'],
+  ui_rival: ['RED COLONY: ABOUT {0} ANTS', 'RØD KOLONI: CIRKA {0} MAUR'],
+  ui_rivalSlain: ['RED QUEEN SLAIN', 'RØD DRONNING DREPT'],
+  ui_rivalDied: ['RED QUEEN DEAD', 'RØD DRONNING DØD'],
+  ui_rivalQueen: ['QUEEN {0}%', 'DRONNING {0}%'],
   ui_storeCap: ['STORES HOLD {0}: MARK MORE STORAGE (X)', 'LAGRENE RYMMER {0}: MERK MER LAGER (X)'],
   ui_seasonDay: ['{0} D{1}', '{0} D{1}'],
   ui_level: ['LV {0}', 'NIVÅ {0}'],
@@ -219,6 +230,9 @@ const STR = {
   r_noFlight: ['NO PRINCESS WAS RAISED IN TIME', 'INGEN PRINSESSE BLE ALT OPP I TIDE'],
   ui_milestones: ['MILESTONES: {0}/12', 'DELMÅL: {0}/12'],
   ui_colonySize: ['COLONY: {0} ANTS', 'KOLONI: {0} MAUR'],
+  ui_rivalWon: ['RIVAL: BIGGER THAN THE RED COLONY', 'RIVAL: STØRRE ENN DEN RØDE KOLONIEN'],
+  ui_rivalLost: ['RIVAL: THE RED COLONY IS BIGGER', 'RIVAL: DEN RØDE KOLONIEN ER STØRRE'],
+  ui_rivalDead: ['RIVAL: THE RED QUEEN IS DEAD', 'RIVAL: DEN RØDE DRONNINGEN ER DØD'],
   ui_continue: ['CONTINUE THE COLONY', 'FORTSETT KOLONIEN'],
   ui_toTitle: ['RETURN TO TITLE', 'TILBAKE TIL TITTEL'],
 };
@@ -245,7 +259,6 @@ const BUG_NAME_DEF = {
   centipede: ['THE CENTIPEDE', 'TUSENBEINET'],
   wasp: ['THE WASP', 'VEPSEN'],
   beetle: ['THE BEETLE', 'BILLEN'],
-  redant: ['THE RED ANT', 'RØDMAUREN'],
   aphid: ['THE APHID', 'BLADLUSA'],
   pillbug: ['THE PILLBUG', 'SKRUKKETROLLET'],
   worm: ['THE WORM', 'MARKEN'],
@@ -339,6 +352,7 @@ function helpText() {
     ['AL OPP PRINSESSER OM HØSTEN: NESTE VÅR', '#a8e8a0'],
     ['FLYR DE UT. DRONNINGEN MÅ LEVE!', '#a8e8a0'],
     ['VINTEREN FRYSER: BYGG STRÅTUE OG SAMLE MAT.', '#a8e8a0'],
+    ['BONUS: DREP DEN RØDE DRONNINGEN I ØST.', '#ff9080'],
   ] : [
     ['CONTROLS', '#ffe080'],
     ['  WASD / ARROWS . MOVE / CLIMB', '#c8b890'],
@@ -355,5 +369,6 @@ function helpText() {
     ['RAISE PRINCESSES IN AUTUMN: THE NEXT', '#a8e8a0'],
     ['SPRING THEY FLY. KEEP THE QUEEN ALIVE!', '#a8e8a0'],
     ['WINTER FREEZES: THATCH A MOUND, STOCK FOOD.', '#a8e8a0'],
+    ['BONUS: SLAY THE RED QUEEN IN HER EASTERN NEST.', '#ff9080'],
   ];
 }
