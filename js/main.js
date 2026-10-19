@@ -1,35 +1,28 @@
-// MAUR -- main: game state, input, player control, rendering, menus.
+// MAUR -- client: input, simulation events, camera, rendering, menus. The
+// simulation itself lives in game.js; this file only feeds it the local
+// player's input and draws what it reports.
 'use strict';
 
 const VIEW_W = 320, VIEW_H = 200, HUD_H = 24;
 
-// key bindings per player (KeyboardEvent.code)
-const BIND = [
-  { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', bite: 'Space', act: 'KeyE', abil: 'KeyQ', swap: 'Tab' },
-  // P2 fits a Norwegian keyboard: arrows + , . K L
-  { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bite: 'Period', act: 'Comma', abil: 'KeyK', swap: 'KeyL' },
-];
+// the local player's slot in G.players (always 0 offline)
+const LOCAL = 0;
 
-// ---------------------------------------------------------------------------
-// global game object
-// ---------------------------------------------------------------------------
-const G = {
-  state: 'title',     // title | slots | intro | help | play | pause | dead | gameover
-  running: false,
-  seed: 0,
+// key bindings (KeyboardEvent.code); each action accepts any of its keys
+const BIND = {
+  up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
+  left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
+  bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['Tab'],
+};
+
+// client-side state, layered onto the simulation's G
+Object.assign(G, {
+  state: 'title',     // title | slots | intro | help | play | pause | gameover
   slot: 1,
-  tick: 0,
-  playerCount: 1,
-  players: [],        // { ant, cam:{x,y} }
-  ants: [], brood: [], bugs: [], items: [],
-  pheromones: [],
+  msgs: [],           // on-screen messages { text, color, t }
+  takeover: null,     // ant-selection overlay { types, sel, refX, refY, live }
+  cam: { x: 0, y: 0 },
   stars: [],
-  trees: [],
-  colony: null,
-  rival: null,        // rival red-ant nest { x, entrance, ... } (terrain + defenders)
-  msgs: [],
-  deadQueue: [],      // player indices waiting for takeover
-  takeover: null,     // { pIdx, list, sel }
   menuSel: 0,
   slotSel: 0,
   eraseArm: -1,
@@ -38,105 +31,94 @@ const G = {
   showMap: false,
   prevState: 'title',
   gameOverStats: null,
-  splitVert: localStorage.getItem('maur_split') === 'v',
+  frame: 0,           // render frame counter (blinking, title animation)
+});
 
-  get day() { return Math.floor(this.tick / DAY_LEN); },
-  tod() { return (this.tick % DAY_LEN) / DAY_LEN; },
-  isNight() { return this.tod() >= 0.7; },
+function localAnt() {
+  const p = G.players[LOCAL];
+  return p && p.ant && p.ant.hp > 0 ? p.ant : null;
+}
 
-  msg(text, color) {
-    this.msgs.push({ text, color: color || '#e8e0c8', t: 300 });
-    if (this.msgs.length > 4) this.msgs.shift();
+function pushMsg(text, color) {
+  G.msgs.push({ text, color: color || '#e8e0c8', t: 300 });
+  if (G.msgs.length > 4) G.msgs.shift();
+}
+
+// ---------------------------------------------------------------------------
+// particles (purely cosmetic, client only)
+// ---------------------------------------------------------------------------
+const Particles = {
+  list: [],
+  add(x, y, vx, vy, life, color) {
+    if (this.list.length > 400) this.list.shift();
+    this.list.push({ x, y, vx, vy, life, max: life, color });
   },
-
-  makeItem(kind, x, y, value) { return new Item(kind, x, y, value); },
-
-  nearPlayer(x, y) {
-    let best = Infinity;
-    for (const p of this.players) {
-      if (!p.ant || p.ant.hp <= 0) continue;
-      const d = Math.hypot(p.ant.x - x, p.ant.y - y);
-      if (d < best) best = d;
-    }
-    return best;
-  },
-
-  nearestItem(x, y, r) {
-    let best = null, bd = r * r;
-    for (const it of this.items) {
-      if (it.dead || it.carried) continue;
-      const d = dist2(x, y, it.x, it.y);
-      if (d < bd) { bd = d; best = it; }
-    }
-    return best;
-  },
-
-  nearestPredator(x, y, r) {
-    let best = null, bd = r * r;
-    for (const b of this.bugs) {
-      if (b.dead || !b.predator || b.fleeing) continue;
-      const d = dist2(x, y, b.x, b.y);
-      if (d < bd) { bd = d; best = b; }
-    }
-    return best;
-  },
-
-  nearestAnt(x, y, r, undergroundOnly) {
-    let best = null, bd = r * r;
-    for (const a of this.ants) {
-      if (a.hp <= 0) continue;
-      if (undergroundOnly && a.y < T.surf[Math.floor(Math.max(0, Math.min(WORLD_W - 1, a.x)))] + 30) continue;
-      const d = dist2(x, y, a.x, a.y);
-      if (d < bd) { bd = d; best = a; }
-    }
-    return best;
-  },
-
-  particles: {
-    list: [],
-    add(x, y, vx, vy, life, color) {
-      if (this.list.length > 400) this.list.shift();
-      this.list.push({ x, y, vx, vy, life, max: life, color });
-    },
-    dirt(x, y, n) {
-      for (let i = 0; i < n; i++) {
-        this.add(x, y, (Math.random() - 0.5) * 1.6, -Math.random() * 1.4,
-          20 + Math.random() * 16, Math.random() < 0.5 ? '#6b4226' : '#8a5a34');
-      }
-    },
-    blood(x, y, n) {
-      for (let i = 0; i < n; i++) {
-        this.add(x, y, (Math.random() - 0.5) * 1.4, -Math.random() * 1.2,
-          18 + Math.random() * 14, Math.random() < 0.5 ? '#9acd32' : '#7aa824');
-      }
-    },
-    sparkle(x, y, n) {
-      for (let i = 0; i < n; i++) {
-        this.add(x, y, (Math.random() - 0.5) * 0.8, -Math.random() * 0.8 - 0.2,
-          24 + Math.random() * 12, Math.random() < 0.5 ? '#ffe040' : '#fff8a0');
-      }
-    },
-    update() {
-      for (const p of this.list) {
-        p.vy += 0.08;
-        p.x += p.vx; p.y += p.vy;
-        if (T.solid(p.x, p.y)) { p.vx = 0; p.vy = 0; }
-        p.life--;
-      }
-      this.list = this.list.filter(p => p.life > 0);
-    },
-    draw(ctx, camx, camy) {
-      for (const p of this.list) {
-        const ex = Math.round(p.x - camx), ey = Math.round(p.y - camy);
-        if (ex < 0 || ex > VIEW_W || ey < 0 || ey > VIEW_H) continue;
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = Math.min(1, p.life / (p.max * 0.5));
-        ctx.fillRect(ex, ey, 1, 1);
-        ctx.globalAlpha = 1;
-      }
+  dirt(x, y, n) {
+    for (let i = 0; i < n; i++) {
+      this.add(x, y, (Math.random() - 0.5) * 1.6, -Math.random() * 1.4,
+        20 + Math.random() * 16, Math.random() < 0.5 ? '#6b4226' : '#8a5a34');
     }
   },
+  blood(x, y, n) {
+    for (let i = 0; i < n; i++) {
+      this.add(x, y, (Math.random() - 0.5) * 1.4, -Math.random() * 1.2,
+        18 + Math.random() * 14, Math.random() < 0.5 ? '#9acd32' : '#7aa824');
+    }
+  },
+  sparkle(x, y, n) {
+    for (let i = 0; i < n; i++) {
+      this.add(x, y, (Math.random() - 0.5) * 0.8, -Math.random() * 0.8 - 0.2,
+        24 + Math.random() * 12, Math.random() < 0.5 ? '#ffe040' : '#fff8a0');
+    }
+  },
+  clank(x, y, n) {
+    for (let i = 0; i < n; i++) this.add(x, y, (Math.random() - 0.5), -0.5, 10, '#c0c0c8');
+  },
+  update() {
+    for (const p of this.list) {
+      p.vy += 0.08;
+      p.x += p.vx; p.y += p.vy;
+      if (T.solid(p.x, p.y)) { p.vx = 0; p.vy = 0; }
+      p.life--;
+    }
+    this.list = this.list.filter(p => p.life > 0);
+  },
+  draw(ctx, camx, camy) {
+    for (const p of this.list) {
+      const ex = Math.round(p.x - camx), ey = Math.round(p.y - camy);
+      if (ex < 0 || ex > VIEW_W || ey < 0 || ey > VIEW_H) continue;
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.min(1, p.life / (p.max * 0.5));
+      ctx.fillRect(ex, ey, 1, 1);
+      ctx.globalAlpha = 1;
+    }
+  }
 };
+
+// ---------------------------------------------------------------------------
+// simulation events -> sound, particles, messages
+// ---------------------------------------------------------------------------
+
+// how far a world point is from where the local player is listening
+function listenDist(x, y) {
+  const a = localAnt();
+  if (a) return Math.hypot(a.x - x, a.y - y);
+  const v = playerView();
+  return Math.hypot(G.cam.x + v.vw / 2 - x, G.cam.y + v.vh / 2 - y);
+}
+
+function drainEvents() {
+  for (const e of G.events) {
+    if (e.t === 'msg') {
+      if (e.to < 0 || e.to === LOCAL) pushMsg(msgText(e), e.color);
+    } else if (e.t === 'sfx') {
+      if (e.x == null || listenDist(e.x, e.y) < e.r) Sfx.play(e.k);
+    } else if (e.t === 'fx') {
+      if (Particles[e.k] && listenDist(e.x, e.y) < 400) Particles[e.k](e.x, e.y, e.n);
+    }
+  }
+  G.events.length = 0;
+}
 
 // ---------------------------------------------------------------------------
 // input
@@ -157,594 +139,170 @@ function tookPress(code) {
   if (pressed[code]) { pressed[code] = false; return true; }
   return false;
 }
-
-// ---------------------------------------------------------------------------
-// world setup
-// ---------------------------------------------------------------------------
-function newWorld(slot, playerCount) {
-  const seed = (Math.random() * 0xFFFFFFFF) >>> 0;
-  const world = genWorld(seed);
-  T.init(world);
-  G.seed = seed;
-  G.slot = slot;
-  G.tick = Math.floor(DAY_LEN * 0.08); // start in the morning
-  G.playerCount = playerCount;
-  G.trees = world.trees;
-  G.colony = new Colony(world.colony);
-  G.rival = world.rival;
-  G.ants = []; G.brood = []; G.bugs = []; G.items = [];
-  G.pheromones = []; G.msgs = []; G.deadQueue = []; G.takeover = null;
-  G.particles.list = [];
-  ENT_ID = 1;
-
-  const c = G.colony;
-  // the royal household
-  const queen = new Ant(c.queenCh.x, c.queenCh.y, 'queen');
-  G.ants.push(queen);
-  for (let i = 0; i < 7; i++) {
-    const spots = [c.junction, c.storage, c.nursery];
-    const s = spots[i % spots.length];
-    G.ants.push(new Ant(s.x + (Math.random() - 0.5) * 20, s.y - 4, 'worker'));
-  }
-  for (let i = 0; i < 2; i++) G.ants.push(new Ant(c.junction.x + (Math.random() - 0.5) * 16, c.junction.y, 'soldier'));
-  for (let i = 0; i < 2; i++) G.ants.push(new Ant(c.nursery.x + (Math.random() - 0.5) * 16, c.nursery.y - 4, 'nurse'));
-  for (let i = 0; i < 2; i++) {
-    const l = new Brood(c.nursery.x + (Math.random() - 0.5) * 20, c.nursery.y - 2, 'larva');
-    l.age = 600; G.brood.push(l);
-  }
-  G.brood.push(new Brood(c.nursery.x, c.nursery.y - 2, 'egg'));
-
-  // player ants
-  G.players = [];
-  for (let p = 0; p < playerCount; p++) {
-    const a = new Ant(c.entrance.x + (p ? 8 : -8), c.entrance.y - 8, 'worker');
-    a.playerIdx = p;
-    G.ants.push(a);
-    G.players.push({ ant: a, cam: { x: a.x - VIEW_W / 2, y: a.y - 60 } });
-  }
-
-  // scatter food & fauna
-  for (let i = 0; i < 18; i++) {
-    const x = 40 + Math.random() * (WORLD_W - 80);
-    G.items.push(G.makeItem('seed', x, T.surf[Math.floor(x)] - 8));
-  }
-  for (let i = 0; i < 5; i++) {
-    const x = 40 + Math.random() * (WORLD_W - 80);
-    G.items.push(G.makeItem('leaf', x, T.surf[Math.floor(x)] - 6));
-  }
-  for (const t of G.trees.slice(0, 7)) {
-    G.bugs.push(new Bug(t.x + (Math.random() < 0.5 ? -5 : 5),
-      T.surf[t.x] - 10 - Math.random() * 40, 'aphid'));
-  }
-  for (let i = 0; i < 5; i++) {
-    const x = 60 + Math.random() * (WORLD_W - 120);
-    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 6, 'pillbug'));
-  }
-  for (let i = 0; i < 5; i++) {
-    const x = 100 + Math.random() * (WORLD_W - 200);
-    G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 200 + Math.random() * 400, 'worm'));
-  }
-
-  // the rival colony's red-ant defenders, garrisoned on their far-side mound
-  const r = G.rival;
-  for (let i = 0; i < 5; i++) {
-    const rx = Math.max(20, Math.min(WORLD_W - 20, r.entrance.x + (Math.random() - 0.5) * 90));
-    const def = new Bug(rx, T.surf[Math.floor(rx)] - 8, 'redant');
-    def.resident = true; def.homeX = r.entrance.x;
-    G.bugs.push(def);
-  }
-
-  // stars
-  G.stars = [];
-  for (let i = 0; i < 140; i++) {
-    G.stars.push({ x: Math.random() * WORLD_W, y: Math.random() * 280 });
-  }
-
-  G.running = true;
-  G.autosaveT = 7200;
+function held(action) { return BIND[action].some(k => keys[k]); }
+function tookAction(action) {
+  let hit = false;
+  for (const k of BIND[action]) if (tookPress(k)) hit = true;
+  return hit;
 }
 
-function loadWorld(slot, playerCount) {
-  const d = loadWorldData(slot);
-  if (!d) return false;
-  // saves from a different world size can't be reconciled with the new map
-  if (d.w !== WORLD_W || d.h !== WORLD_H) return false;
-  const world = genWorld(d.seed);
-  world.m = rleDecode(d.terrain, WORLD_W * WORLD_H);
-  T.init(world);
-  G.seed = d.seed;
+// copy the keyboard into the local player's input for this tick
+function readInput() {
+  const inp = G.players[LOCAL].input;
+  inp.dx = (held('right') ? 1 : 0) - (held('left') ? 1 : 0);
+  inp.dy = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
+  inp.bite = held('bite');
+  if (tookAction('act')) inp.act = true;
+  if (tookAction('abil')) inp.abil = true;
+}
+
+function clearInput() {
+  const p = G.players[LOCAL];
+  if (p) p.input = newInput();
+}
+
+// ---------------------------------------------------------------------------
+// starting and ending worlds
+// ---------------------------------------------------------------------------
+function enterWorld(slot) {
   G.slot = slot;
-  G.tick = d.tick;
-  G.playerCount = playerCount || d.playerCount;
-  G.trees = world.trees;
-  G.colony = new Colony(world.colony);
-  G.rival = world.rival;
-  Object.assign(G.colony, d.colony);
-  G.colony.tasks = d.colony.tasks || [];
-  G.colony.stats = d.colony.stats;
-  G.ants = []; G.brood = []; G.bugs = []; G.items = [];
-  G.pheromones = []; G.msgs = []; G.deadQueue = []; G.takeover = null;
-  G.particles.list = [];
-
-  const byId = {};
-  for (const s of d.ants) {
-    const a = new Ant(s.x, s.y, s.caste);
-    a.id = s.id; a.hp = s.hp; a.playerIdx = -1;
-    G.ants.push(a); byId[a.id] = a;
-  }
-  for (const s of d.brood) {
-    const b = new Brood(s.x, s.y, s.kind);
-    b.id = s.id; b.age = s.age; b.feedCount = s.feedCount;
-    b.hungry = s.hungry; b.hungerT = s.hungerT;
-    G.brood.push(b);
-  }
-  for (const s of d.bugs) {
-    const b = new Bug(s.x, s.y, s.kind);
-    b.id = s.id; b.hp = s.hp; b.fleeing = s.fleeing;
-    b.resident = s.resident || false;
-    if (s.homeX != null) b.homeX = s.homeX;
-    G.bugs.push(b);
-  }
-  for (const s of d.items) {
-    const it = new Item(s.kind, s.x, s.y, s.value);
-    it.id = s.id;
-    if (s.carriedBy && byId[s.carriedBy]) {
-      it.carried = byId[s.carriedBy];
-      byId[s.carriedBy].carry = it;
-    }
-    G.items.push(it);
-  }
-  ENT_ID = d.nextId || 10000;
-
-  // reattach players
-  G.players = [];
-  const savedPlayers = d.ants.filter(s => s.playerIdx >= 0).sort((a, b) => a.playerIdx - b.playerIdx);
-  for (let p = 0; p < G.playerCount; p++) {
-    let ant = null;
-    const sp = savedPlayers.find(s => s.playerIdx === p);
-    if (sp && byId[sp.id] && byId[sp.id].hp > 0) ant = byId[sp.id];
-    if (!ant) ant = G.ants.find(a => a.playerIdx < 0 && a.caste !== 'queen' && a.hp > 0);
-    if (!ant) ant = G.ants.find(a => a.playerIdx < 0 && a.hp > 0);
-    if (ant) {
-      ant.playerIdx = p;
-      ant.state = 'idle';
-      G.players.push({ ant, cam: { x: ant.x - VIEW_W / 2, y: ant.y - 60 } });
-    } else {
-      G.players.push({ ant: null, cam: { x: 0, y: 0 } });
-      G.deadQueue.push(p);
-    }
-  }
-
+  TerrainView.build();
   G.stars = [];
-  const srng = mulberry32(d.seed ^ 0x5747);
+  const srng = mulberry32(G.seed ^ 0x5747);
   for (let i = 0; i < 140; i++) G.stars.push({ x: srng() * WORLD_W, y: srng() * 280 });
-
-  G.running = true;
+  G.msgs = []; G.takeover = null;
+  Particles.list = [];
   G.autosaveT = 7200;
+  const a = localAnt();
+  G.cam = { x: a ? a.x - VIEW_W / 2 : 0, y: a ? a.y - 60 : 0 };
+}
+
+function startNewWorld(slot) {
+  newWorld((Math.random() * 0xFFFFFFFF) >>> 0, 1);
+  enterWorld(slot);
+}
+
+function startSavedWorld(slot) {
+  const d = loadWorldData(slot);
+  if (!d || !restoreWorld(d, 1)) return false;
+  enterWorld(slot);
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// player control
-// ---------------------------------------------------------------------------
-
-// a soldier's call to arms: nearby ants turn on the soldier's closest enemy.
-// Returns the number of ants rallied, or -1 if there was no enemy in range.
-function rallyAllies(soldier, radius, foe) {
-  foe = foe || G.nearestPredator(soldier.x, soldier.y, 400);
-  if (!foe) return -1;
-  let n = 0;
-  for (const a of G.ants) {
-    if (a === soldier || a.hp <= 0 || a.playerIdx >= 0 || a.caste === 'queen') continue;
-    if (dist2(a.x, a.y, soldier.x, soldier.y) > radius * radius) continue;
-    if (a.carry) continue; // laden ants finish their errand
-    a.state = 'fight';
-    a.target = foe;
-    a.nav = null;
-    a.rallyT = 600; // courage: don't immediately flee the thing we charge
-    n++;
-  }
-  return n;
-}
-
-function controlPlayer(pIdx) {
-  const p = G.players[pIdx];
-  const a = p.ant;
-  if (!a || a.hp <= 0) return;
-  const b = BIND[pIdx];
-  const c = a.def;
-
-  let dx = (keys[b.right] ? 1 : 0) - (keys[b.left] ? 1 : 0);
-  let dy = (keys[b.down] ? 1 : 0) - (keys[b.up] ? 1 : 0);
-
-  const SPEED = c.speed * 1.5;
-  a.vx = dx * SPEED;
-  if (dx !== 0) a.dir = dx;
-
-  // climbing: ants go up walls and hang from ceilings. Underground the
-  // walls are implied -- every passage is a chewed-out tunnel, so holding
-  // up always climbs even in wide dug-out chambers.
-  a.climbing = false;
-  a.ceiling = false;
-  if (dy < 0) {
-    let wallDir = 0;
-    if (sideWall(a, a.dir)) wallDir = a.dir;
-    else if (sideWall(a, -a.dir)) wallDir = -a.dir;
-    else if (wallNear(a, a.dir, 5)) wallDir = a.dir;
-    else if (wallNear(a, -a.dir, 5)) wallDir = -a.dir;
-    const ceil = ceilAbove(a, 4);
-    if (wallDir && (dx === 0 || dx === wallDir || !ceil)) {
-      a.climbing = true; a.climbV = -SPEED * 1.1;
-      a.dir = wallDir;
-      if (dx === 0) a.vx = wallDir * SPEED * 0.6; // drift onto the wall
-    } else if (ceil) {
-      a.ceiling = true; // hang from the roof; crawl with left/right
-    } else if (underground(a)) {
-      a.climbing = true; a.climbV = -SPEED * 1.1; // tunnel climb, no wall needed
-    } else if (a.onGround) {
-      a.vy = -1.9; // hop
-    }
-  } else if (dy > 0 && !a.onGround &&
-      (underground(a) ||
-       sideWall(a, a.dir) || sideWall(a, -a.dir) || wallNear(a, 1, 5) || wallNear(a, -1, 5))) {
-    a.climbing = true; a.climbV = SPEED * 1.1;
-  }
-
-  // bite / dig
-  if (keys[b.bite] && a.biteCd <= 0) {
-    a.biteCd = c.digCd;
-    a.biteAnim = 8;
-    let ux = dx, uy = dy;
-    if (ux === 0 && uy === 0) ux = a.dir;
-    const len = Math.hypot(ux, uy);
-    ux /= len; uy /= len;
-    const bx = a.x + ux * (a.hw + 3.5), by = a.y + uy * (a.hh + 3.5);
-
-    // bite a bug?
-    let bit = null, bd = 90;
-    for (const bug of G.bugs) {
-      if (bug.dead) continue;
-      const d = dist2(bx, by, bug.x, bug.y);
-      if (d < bd) { bd = d; bit = bug; }
-    }
-    if (bit) {
-      bit.hurt(c.dmg, ux * 1.2, uy * 0.6 - 0.3);
-      bit.lastHitBy = 'player';
-      Sfx.play('bite');
-    } else {
-      const res = T.dig(bx, by, c.digR);
-      // second pass right at the body so the ant can sink into its own shaft
-      const res2 = T.dig(a.x + ux * 2, a.y + uy * 2, c.digR * 0.8);
-      res.count += res2.count; res.leaves += res2.leaves;
-      res.fungi += res2.fungi; res.crystals += res2.crystals;
-      if (res.count > 0) {
-        G.particles.dirt(bx, by, 4);
-        Sfx.play('dig');
-        // expansion task: only digging below the surface counts
-        const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, bx)));
-        if (by > T.surf[sx] + 40) G.colony.progress('dig', res.count);
-        // underground harvest: crystals and mushrooms tumble out of the wall
-        if (res.crystals > 1) {
-          G.items.push(G.makeItem('crystal', bx, by));
-          G.particles.sparkle(bx, by, 6);
-          G.msg(L('m_crystalFound'), '#80e0ff');
-          Sfx.play('task');
-        } else if (res.fungi > 1 && Math.random() < 0.6) {
-          G.items.push(G.makeItem('fungus', bx, by));
-        } else if (res.leaves > 0 && Math.random() < 0.3 && !a.carry) {
-          const it = G.makeItem('leaf', bx, by);
-          G.items.push(it);
-        }
-      } else if (T.digHitsHard(bx, by, c.digR)) {
-        Sfx.play('clank');
-        G.particles.add(bx, by, (Math.random() - 0.5), -0.5, 10, '#c0c0c8');
-      }
-    }
-  }
-
-  // caste ability: soldiers rally, nurses heal
-  if (tookPress(b.abil)) {
-    if (a.caste === 'soldier') {
-      if (a.abilCd > 0) {
-        // still catching its breath
-      } else {
-        const n = rallyAllies(a, 280);
-        if (n < 0) {
-          G.msg(L('m_noEnemy'));
-        } else {
-          a.abilCd = 600;
-          G.msg(n > 0 ? L('m_rally', n) : L('m_rallyAlone'), '#ff8040');
-          Sfx.play('danger');
-        }
-      }
-    } else if (a.caste === 'nurse') {
-      if (a.abilCd <= 0) {
-        if (G.colony.food < 2) {
-          G.msg(L('m_noFood'), '#ff8040');
-        } else {
-          let healed = 0;
-          for (const o of G.ants) {
-            if (o.hp <= 0 || o.hp >= o.maxHp) continue;
-            if (dist2(a.x, a.y, o.x, o.y) > 40 * 40) continue;
-            o.hp = Math.min(o.maxHp, o.hp + 10);
-            G.particles.sparkle(o.x, o.y - 4, 4);
-            healed++;
-          }
-          if (healed > 0) {
-            G.colony.food -= 2;
-            a.abilCd = 360;
-            G.msg(L('m_healed', healed), '#80ff80');
-            Sfx.play('milk');
-          } else {
-            G.msg(L('m_noWounded'));
-          }
-        }
-      }
-    }
-  }
-
-  // switch to another ant
-  if (tookPress(b.swap)) {
-    buildTakeover(pIdx, a.x, a.y, a);
-    return;
-  }
-
-  // interact
-  if (tookPress(b.act)) {
-    const col = G.colony;
-    if (a.carry) {
-      const it = a.carry;
-      const nearStorage = Math.hypot(a.x - col.storage.x, a.y - col.storage.y) < 28;
-      const larva = G.brood.find(l => l.kind === 'larva' && l.hungry && !l.dead &&
-        dist2(a.x, a.y, l.x, l.y) < 144);
-      if (nearStorage && ITEM_DEF[it.kind]) {
-        col.deposit(it, a);
-      } else if (larva && ITEM_DEF[it.kind]) {
-        larva.feed();
-        it.dead = true; a.carry = null;
-        col.progress('feed', 1);
-        G.msg(L('m_fed'));
-        Sfx.play('milk');
-      } else {
-        it.carried = null; a.carry = null;
-        it.vx = a.dir * 0.6; it.vy = -0.5;
-        Sfx.play('drop');
-      }
-    } else {
-      const it = G.nearestItem(a.x, a.y, 10);
-      // nurses can scoop up eggs and larvae and carry them to safety
-      let broodNear = null;
-      if (!it && a.caste === 'nurse') {
-        let bd = 100;
-        for (const br of G.brood) {
-          if (br.dead || br.carried) continue;
-          const d = dist2(a.x, a.y, br.x, br.y);
-          if (d < bd) { bd = d; broodNear = br; }
-        }
-      }
-      if (it) {
-        it.carried = a; a.carry = it;
-        Sfx.play('pickup');
-      } else if (broodNear) {
-        broodNear.carried = a; a.carry = broodNear;
-        G.msg(L('m_carrying', broodNameDef(broodNear.kind)));
-        Sfx.play('pickup');
-      } else {
-        // milk an aphid?
-        const aphid = G.bugs.find(bg => bg.kind === 'aphid' && !bg.dead &&
-          bg.milkCd <= 0 && dist2(a.x, a.y, bg.x, bg.y) < 150);
-        if (aphid) {
-          aphid.milkCd = 1800;
-          const hd = G.makeItem('honeydew', a.x, a.y);
-          hd.carried = a; a.carry = hd;
-          G.items.push(hd);
-          G.msg(L('m_milked'));
-          Sfx.play('milk');
-        }
-      }
-    }
-  }
+function endWorld() {
+  G.gameOverStats = G.over;
+  deleteWorld(G.slot);
+  G.running = false;
+  G.takeover = null;
+  G.state = 'gameover';
+  Sfx.play('die');
 }
 
 // ---------------------------------------------------------------------------
 // play update
 // ---------------------------------------------------------------------------
 function updatePlay() {
-  G.tick++;
-
-  for (let p = 0; p < G.players.length; p++) controlPlayer(p);
-
-  // ants
-  for (const a of G.ants) {
-    if (a.hp > 0) a.update();
-    if (a.playerIdx >= 0 && a.climbing) {
-      // stubborn overhang: shimmy sideways, away from the wall first
-      if (a.vBlocked && a.climbV < 0) {
-        const vhw = Math.max(1, a.hw - 1.5);
-        for (const s of [-1, -2, 1, 2]) {
-          const nx = a.x + a.dir * s;
-          if (!T.boxSolid(nx, a.y - 1, vhw, a.hh)) { a.x = nx; a.y -= 1; break; }
-        }
-      }
-      a.vBlocked = false;
-      // ledge-boost: only once no wall remains in grab reach -- and never
-      // underground, where wall-less climbing is the whole point
-      if (a.climbV < 0 && !underground(a) &&
-          !wallNear(a, a.dir, 5) && !wallNear(a, -a.dir, 5)) {
-        a.climbing = false; a.vy = -1.5; a.vx = a.dir * 0.8;
-      }
-    }
+  // the ant-selection overlay owns the keys while it's open
+  if (G.takeover) { updateTakeover(); clearInput(); }
+  else if (tookAction('swap') && localAnt()) {
+    const a = localAnt();
+    if (!openTakeover(a.x, a.y, true)) pushMsg(L('m_noSwitch'), '#ff8040');
+    clearInput();
+  } else {
+    readInput();
   }
-  // deaths
-  for (const a of G.ants) {
-    if (a.hp <= 0 && !a.dead) {
-      a.dead = true;
-      if (a.carry) { a.carry.carried = null; a.carry = null; }
-      G.items.push(G.makeItem('corpse', a.x, a.y));
-      G.colony.stats.antsDied++;
-      if (a.playerIdx >= 0) {
-        Sfx.play('die');
-        G.msg(G.playerCount > 1 ? L('m_pDied', a.playerIdx + 1) : L('m_youDied'), '#ff5040');
-        G.deadQueue.push(a.playerIdx);
-        G.players[a.playerIdx].ant = null;
-        G.players[a.playerIdx].deathPos = { x: a.x, y: a.y };
-      } else {
-        if (a.caste === 'queen') {
-          G.msg(L('m_queenDead'), '#ff4030');
-          Sfx.play('danger');
-        } else if (G.nearPlayer(a.x, a.y) < 300) {
-          G.msg(L('m_antDied'), '#c08070');
-          Sfx.play('kill');
-        }
-      }
-    }
-  }
-  G.ants = G.ants.filter(a => !a.dead);
 
-  // brood
-  for (const b of G.brood) {
-    b.update();
-    if (b.hp <= 0 && !b.dead) {
-      b.dead = true;
-      G.particles.blood(b.x, b.y, 4);
-      G.msg(L('m_larvaDied'), '#c08070');
-    }
-  }
-  G.brood = G.brood.filter(b => !b.dead);
-
-  // bugs
-  for (const b of G.bugs) {
-    b.update();
-    if (b.hp <= 0 && !b.dead) {
-      b.dead = true;
-      const it = G.makeItem(b.predator || b.kind === 'worm' ? 'bigcorpse' : 'corpse', b.x, b.y, BUG_DEF[b.kind].corpse);
-      G.items.push(it);
-      G.particles.blood(b.x, b.y, 8);
-      if (b.predator) {
-        G.colony.stats.predatorsSlain++;
-        G.msg(L('m_slain', bugNameDef(b.kind)), '#ffe040');
-        Sfx.play('kill');
-      } else if (G.nearPlayer(b.x, b.y) < 250) {
-        Sfx.play('kill');
-      }
-    }
-  }
-  G.bugs = G.bugs.filter(b => !b.dead);
-
-  // items
-  for (const it of G.items) if (!it.dead) it.update();
-  G.items = G.items.filter(i => !i.dead);
-
-  // pheromone trails from laden ants
-  if (G.tick % 8 === 0) {
-    for (const a of G.ants) {
-      if (a.carry && a.hp > 0) {
-        G.pheromones.push({ x: a.x, y: a.y + 2, t: 900 });
-      }
-    }
-    if (G.pheromones.length > 700) G.pheromones.splice(0, G.pheromones.length - 700);
-  }
-  for (const ph of G.pheromones) ph.t--;
-  if (G.tick % 30 === 0) G.pheromones = G.pheromones.filter(p => p.t > 0);
-
-  G.particles.update();
-  G.colony.update();
+  stepSim();
+  drainEvents();
+  Particles.update();
 
   // messages
   for (const m of G.msgs) m.t--;
   G.msgs = G.msgs.filter(m => m.t > 0);
 
-  // cameras
-  for (let i = 0; i < G.players.length; i++) {
-    const p = G.players[i];
-    if (!p.ant) continue;
-    const v = playerView(i);
-    // focus point with a deadzone: pixel jiggle (digging, climbing) doesn't
-    // shake the view; big jumps (takeover, load) snap it
-    if (p.fx === undefined || Math.abs(p.ant.x - p.fx) > 100 || Math.abs(p.ant.y - p.fy) > 100) {
-      p.fx = p.ant.x; p.fy = p.ant.y; p.look = p.ant.dir * 24;
-    }
-    const DZX = 5, DZY = 8;
-    if (p.ant.x > p.fx + DZX) p.fx = p.ant.x - DZX;
-    else if (p.ant.x < p.fx - DZX) p.fx = p.ant.x + DZX;
-    if (p.ant.y > p.fy + DZY) p.fy = p.ant.y - DZY;
-    else if (p.ant.y < p.fy - DZY) p.fy = p.ant.y + DZY;
-    // eased look-ahead so turning around doesn't yank the view
-    p.look += (p.ant.dir * 24 - p.look) * 0.03;
-    const tx = p.fx - v.vw / 2 + p.look;
-    const ty = p.fy - v.vh / 2 - 8;
-    p.cam.x += (tx - p.cam.x) * 0.08;
-    p.cam.y += (ty - p.cam.y) * 0.08;
-    p.cam.x = Math.max(0, Math.min(WORLD_W - v.vw, p.cam.x));
-    p.cam.y = Math.max(0, Math.min(WORLD_H - v.vh, p.cam.y));
-  }
+  updateCamera();
 
-  // takeover queue
-  if (G.deadQueue.length > 0 && !G.takeover) {
-    const pIdx = G.deadQueue[0];
-    const ref = G.players[pIdx].deathPos || G.colony.entrance;
-    if (!buildTakeover(pIdx, ref.x, ref.y, null)) {
-      endWorld();
-      return;
-    }
-  }
+  if (G.over) { endWorld(); return; }
 
-  // extinction check
-  if (G.ants.filter(a => a.hp > 0).length === 0) {
-    endWorld();
-    return;
+  // dead: offer another body
+  const me = G.players[LOCAL];
+  if (!localAnt() && !G.takeover) {
+    const ref = me.deathPos || G.colony.entrance;
+    openTakeover(ref.x, ref.y, false);
   }
 
   // autosave
   G.autosaveT--;
   if (G.autosaveT <= 0) {
     G.autosaveT = 7200;
-    if (saveWorld(G.slot)) { G.msg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
+    if (saveWorld(G.slot)) { pushMsg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
   }
 
   if (tookPress('KeyM')) G.showMap = !G.showMap;
   if (tookPress('Escape') || tookPress('KeyP')) {
-    G.state = 'pause'; G.menuSel = 0; Sfx.play('menu');
+    if (G.takeover && G.takeover.live) { G.takeover = null; Sfx.play('menu'); }
+    else { G.state = 'pause'; G.menuSel = 0; Sfx.play('menu'); }
   }
 }
 
-// the ant-selection overlay, shared by death takeover and live switching.
-// Lists available CASTES (not individuals); choosing one takes the nearest
-// NPC ant of that caste. prevAnt set = a live switch (cancellable, releases
-// the current ant); prevAnt null = death takeover.
-const CASTE_ORDER = ['worker', 'soldier', 'nurse', 'queen'];
-
-function takeoverCounts() {
-  const counts = {};
-  for (const a of G.ants) {
-    if (a.hp > 0 && a.playerIdx < 0) counts[a.caste] = (counts[a.caste] || 0) + 1;
+function updateCamera() {
+  const a = localAnt();
+  if (!a) return;
+  const p = G.cam;
+  const v = playerView();
+  // focus point with a deadzone: pixel jiggle (digging, climbing) doesn't
+  // shake the view; big jumps (takeover, load) snap it
+  if (p.fx === undefined || Math.abs(a.x - p.fx) > 100 || Math.abs(a.y - p.fy) > 100) {
+    p.fx = a.x; p.fy = a.y; p.look = a.dir * 24;
   }
-  return counts;
+  const DZX = 5, DZY = 8;
+  if (a.x > p.fx + DZX) p.fx = a.x - DZX;
+  else if (a.x < p.fx - DZX) p.fx = a.x + DZX;
+  if (a.y > p.fy + DZY) p.fy = a.y - DZY;
+  else if (a.y < p.fy - DZY) p.fy = a.y + DZY;
+  // eased look-ahead so turning around doesn't yank the view
+  p.look += (a.dir * 24 - p.look) * 0.03;
+  const tx = p.fx - v.vw / 2 + p.look;
+  const ty = p.fy - v.vh / 2 - 8;
+  p.x += (tx - p.x) * 0.08;
+  p.y += (ty - p.y) * 0.08;
+  p.x = Math.max(0, Math.min(WORLD_W - v.vw, p.x));
+  p.y = Math.max(0, Math.min(WORLD_H - v.vh, p.y));
 }
 
-function buildTakeover(pIdx, refX, refY, prevAnt) {
-  const counts = takeoverCounts();
-  const types = CASTE_ORDER.filter(c => counts[c]).map(c => ({ caste: c, count: counts[c] }));
-  if (types.length === 0) {
-    if (prevAnt) G.msg(L('m_noSwitch'), '#ff8040');
-    return false;
-  }
-  G.takeover = { pIdx, types, sel: 0, refX, refY, prevAnt };
-  G.state = 'dead';
-  if (prevAnt) Sfx.play('menu');
+// ---------------------------------------------------------------------------
+// the ant-selection overlay, shared by death takeover and live switching
+// (live = cancellable, keeps the current ant until a choice is made). The
+// world keeps running underneath -- online it can't pause for one player.
+// ---------------------------------------------------------------------------
+function openTakeover(refX, refY, live) {
+  const types = takeoverOptions();
+  if (types.length === 0) return false;
+  G.takeover = { types, sel: 0, refX, refY, live };
+  Sfx.play('menu');
   return true;
 }
 
-function endWorld() {
-  G.gameOverStats = {
-    day: G.day,
-    score: G.colony.score,
-    stats: Object.assign({}, G.colony.stats),
-  };
-  deleteWorld(G.slot);
-  G.running = false;
-  G.state = 'gameover';
-  Sfx.play('die');
+function updateTakeover() {
+  const tk = G.takeover;
+  // refresh against ants that died (or got taken) while the menu was open
+  tk.types = takeoverOptions();
+  if (tk.types.length === 0) {
+    // nobody free right now; a dead player waits (the sim ends the world
+    // if the whole colony is gone)
+    if (tk.live) G.takeover = null;
+    return;
+  }
+  tk.sel = Math.min(tk.sel, tk.types.length - 1);
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { tk.sel = (tk.sel + tk.types.length - 1) % tk.types.length; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.types.length; Sfx.play('menu'); }
+  if (tookPress('Enter') || tookPress('Space')) {
+    if (takeOver(LOCAL, tk.types[tk.sel].caste, tk.refX, tk.refY)) {
+      G.takeover = null;
+      G.cam.fx = undefined; // snap the camera to the new body
+      Sfx.play('select');
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -779,14 +337,15 @@ function skyColor(tod) {
   return stops[1][1];
 }
 
-function drawViewport(p, vx, vy, vw, vh) {
+function drawViewport(vx, vy, vw, vh) {
   ctx.save();
   ctx.beginPath();
   ctx.rect(vx, vy, vw, vh);
   ctx.clip();
   ctx.translate(vx, vy);
 
-  const camx = Math.round(p.cam.x), camy = Math.round(p.cam.y);
+  const camx = Math.round(G.cam.x), camy = Math.round(G.cam.y);
+  const me = localAnt();
   const tod = G.tod();
 
   // sky
@@ -828,8 +387,8 @@ function drawViewport(p, vx, vy, vw, vh) {
   }
 
   // world
-  ctx.drawImage(T.bgCan, camx, camy, vw, vh, 0, 0, vw, vh);
-  ctx.drawImage(T.terCan, camx, camy, vw, vh, 0, 0, vw, vh);
+  ctx.drawImage(TerrainView.bgCan, camx, camy, vw, vh, 0, 0, vw, vh);
+  ctx.drawImage(TerrainView.terCan, camx, camy, vw, vh, 0, 0, vw, vh);
 
   // the food cache, piled by prosperity
   const col = G.colony;
@@ -859,17 +418,17 @@ function drawViewport(p, vx, vy, vw, vh) {
   for (const a of G.ants) if (a.playerIdx < 0) a.draw(ctx, camx, camy);
   for (const pp of G.players) if (pp.ant) pp.ant.draw(ctx, camx, camy);
 
-  G.particles.draw(ctx, camx, camy);
+  Particles.draw(ctx, camx, camy);
 
   // darkness: depth + night, with a pool of sight around your ant
-  if (p.ant) {
-    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, p.ant.x)));
-    const depth = Math.max(0, p.ant.y - T.bgSurf[sx]);
+  if (me) {
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, me.x)));
+    const depth = Math.max(0, me.y - T.bgSurf[sx]);
     let amb = Math.min(0.86, depth / 90 * 0.86);
     if (G.isNight()) amb = Math.max(amb, 0.55);
     else if (tod > 0.62) amb = Math.max(amb, (tod - 0.62) / 0.08 * 0.4);
     if (amb > 0.03) {
-      const px2 = Math.round(p.ant.x - camx), py2 = Math.round(p.ant.y - camy);
+      const px2 = Math.round(me.x - camx), py2 = Math.round(me.y - camy);
       const grad = ctx.createRadialGradient(px2, py2, 18, px2, py2, 90);
       grad.addColorStop(0, 'rgba(4,2,8,0)');
       grad.addColorStop(0.7, `rgba(4,2,8,${amb * 0.55})`);
@@ -906,21 +465,19 @@ function drawHud() {
   bevelPanel(0, y, VIEW_W, HUD_H);
   const col = G.colony;
 
-  // player panels
-  for (let i = 0; i < G.playerCount; i++) {
-    const px2 = i === 0 ? 4 : VIEW_W - 86;
-    const p = G.players[i];
-    drawText(ctx, 'P' + (i + 1), px2, y + 4, i === 0 ? '#ffe080' : '#80d0ff');
-    if (p.ant) {
-      drawHpBar(px2 + 14, y + 5, 40, Math.max(0, p.ant.hp / p.ant.maxHp));
-      drawText(ctx, casteName(p.ant.caste), px2 + 14, y + 13, '#b0a080');
-      if (p.ant.carry) {
-        drawItem(ctx, { kind: p.ant.carry.kind, x: 0, y: 0 },
-          -(px2 + 62), -(y + 8));
-      }
-    } else {
-      drawText(ctx, L('w_dead'), px2 + 14, y + 5, '#e03020');
+  // player panel
+  const me = localAnt();
+  const px2 = 4;
+  drawText(ctx, 'P1', px2, y + 4, '#ffe080');
+  if (me) {
+    drawHpBar(px2 + 14, y + 5, 40, Math.max(0, me.hp / me.maxHp));
+    drawText(ctx, casteName(me.caste), px2 + 14, y + 13, '#b0a080');
+    if (me.carry) {
+      drawItem(ctx, { kind: me.carry.kind, x: 0, y: 0 },
+        -(px2 + 62), -(y + 8));
     }
+  } else {
+    drawText(ctx, L('w_dead'), px2 + 14, y + 5, '#e03020');
   }
 
   // colony status, center
@@ -962,8 +519,8 @@ function drawMinimap() {
   bevelPanel(mx - 3, my - 3, mw + 6, mh + 6);
   ctx.fillStyle = '#101418';
   ctx.fillRect(mx, my, mw, mh);
-  ctx.drawImage(T.bgCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
-  ctx.drawImage(T.terCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
+  ctx.drawImage(TerrainView.bgCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
+  ctx.drawImage(TerrainView.terCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   const sx = mw / WORLD_W, sy = mh / WORLD_H;
   for (const a of G.ants) {
     if (a.hp <= 0) continue;
@@ -978,34 +535,18 @@ function drawMinimap() {
   }
 }
 
-// each player's viewport rectangle on the screen (above the HUD).
-// 2P splits horizontally (stacked) or vertically (side by side).
-function playerView(i) {
-  const fullH = VIEW_H - HUD_H;
-  if (G.playerCount === 1) return { vx: 0, vy: 0, vw: VIEW_W, vh: fullH };
-  if (G.splitVert) {
-    const vw = (VIEW_W - 2) / 2;
-    return { vx: i === 0 ? 0 : vw + 2, vy: 0, vw, vh: fullH };
-  }
-  const vh = (fullH - 2) / 2;
-  return { vx: 0, vy: i === 0 ? 0 : vh + 2, vw: VIEW_W, vh };
+// the game viewport on the screen (above the HUD)
+function playerView() {
+  return { vx: 0, vy: 0, vw: VIEW_W, vh: VIEW_H - HUD_H };
 }
 
 function drawPlay() {
-  if (G.playerCount === 1) {
-    drawViewport(G.players[0], 0, 0, VIEW_W, VIEW_H - HUD_H);
-  } else {
-    ctx.fillStyle = '#000';
-    if (G.splitVert) ctx.fillRect((VIEW_W - 2) / 2, 0, 2, VIEW_H - HUD_H);
-    else ctx.fillRect(0, (VIEW_H - HUD_H - 2) / 2, VIEW_W, 2);
-    for (let i = 0; i < 2; i++) {
-      const v = playerView(i);
-      drawViewport(G.players[i], v.vx, v.vy, v.vw, v.vh);
-    }
-  }
+  TerrainView.flush();
+  drawViewport(0, 0, VIEW_W, VIEW_H - HUD_H);
   drawHud();
   drawTaskAndMsgs();
   if (G.showMap) drawMinimap();
+  if (G.takeover) drawTakeover();
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,17 +677,14 @@ function updateSlots() {
       Sfx.play('menu');
     }
   }
-  let pc = 0;
-  if (tookPress('Enter') || tookPress('Space')) pc = 1;
-  if (tookPress('KeyT')) pc = 2;
-  if (pc) {
+  if (tookPress('Enter') || tookPress('Space')) {
     Sfx.play('select');
     const slot = G.slotSel + 1;
-    if (slotInfo(slot) && loadWorld(slot, pc)) {
-      G.state = 'play'; G.msg(L('m_welcome'));
+    if (slotInfo(slot) && startSavedWorld(slot)) {
+      G.state = 'play'; pushMsg(L('m_welcome'));
     } else {
       // empty slot, or a save from an incompatible world size: start fresh
-      newWorld(slot, pc);
+      startNewWorld(slot);
       G.state = 'intro';
       G.introLine = 0;
     }
@@ -1164,16 +702,15 @@ function drawIntro() {
     drawTextC(ctx, lines[i], VIEW_W / 2, y, i === lines.length - 1 ? '#ffa040' : '#c8b890');
     y += 11;
   }
-  if (shown >= lines.length && (G.tick >> 4) % 2 === 0) {
+  if (shown >= lines.length && (G.frame >> 4) % 2 === 0) {
     drawTextC(ctx, L('ui_pressSpace'), VIEW_W / 2, 182, '#ffe040');
   }
-  G.tick++;
 }
 
 function updateIntro() {
   if (tookPress('Space') || tookPress('Enter')) {
     G.state = 'play';
-    G.msg(L('m_gather'), '#80ff80');
+    pushMsg(L('m_gather'), '#80ff80');
     Sfx.play('select');
   }
 }
@@ -1203,9 +740,6 @@ function pauseItems() {
     { id: 'save', label: L('ui_saveGame') },
     { id: 'help', label: L('ui_help') },
   ];
-  if (G.playerCount > 1) {
-    items.push({ id: 'split', label: L('ui_split', L(G.splitVert ? 'ui_vert' : 'ui_horiz')) });
-  }
   items.push({ id: 'quit', label: L('ui_saveQuit') });
   return items;
 }
@@ -1234,15 +768,11 @@ function updatePause() {
         G.state = 'play';
         break;
       case 'save':
-        if (saveWorld(G.slot)) { G.msg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
+        if (saveWorld(G.slot)) { pushMsg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
         G.state = 'play';
         break;
       case 'help':
         G.prevState = 'pause'; G.state = 'help';
-        break;
-      case 'split':
-        G.splitVert = !G.splitVert;
-        localStorage.setItem('maur_split', G.splitVert ? 'v' : 'h');
         break;
       case 'quit':
         saveWorld(G.slot);
@@ -1253,20 +783,17 @@ function updatePause() {
   }
 }
 
-function drawDead() {
-  drawPlay();
+function drawTakeover() {
+  const tk = G.takeover;
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  const tk = G.takeover;
-  if (!tk) return;
   bevelPanel(70, 30, 180, 140);
-  const pcol = tk.pIdx === 0 ? '#ffe080' : '#80d0ff';
-  const pTag = G.playerCount > 1 ? L('ui_player', tk.pIdx + 1) + ' ' : '';
-  if (tk.prevAnt) {
-    drawTextCS(ctx, pTag + L('ui_switchAnt'), VIEW_W / 2, 38, pcol, 2);
+  const pcol = '#ffe080';
+  if (tk.live) {
+    drawTextCS(ctx, L('ui_switchAnt'), VIEW_W / 2, 38, pcol, 2);
     drawTextC(ctx, L('ui_lendLegs'), VIEW_W / 2, 58, '#c8b890');
   } else {
-    drawTextCS(ctx, pTag + L('ui_youDied'), VIEW_W / 2, 38, '#ff5040', 2);
+    drawTextCS(ctx, L('ui_youDied'), VIEW_W / 2, 38, '#ff5040', 2);
     drawTextC(ctx, L('ui_colonyLives'), VIEW_W / 2, 58, '#c8b890');
   }
   drawTextC(ctx, L('ui_continueAs'), VIEW_W / 2, 70, pcol);
@@ -1277,62 +804,8 @@ function drawDead() {
     if (sel) drawText(ctx, '\x06', 92, 84 + i * 12, '#ffe040');
     drawText(ctx, label, 104, 84 + i * 12, sel ? '#ffe040' : '#c8b890');
   }
-  drawTextC(ctx, tk.prevAnt ? L('ui_switchKeys') : L('ui_takeOver'),
+  drawTextC(ctx, tk.live ? L('ui_switchKeys') : L('ui_takeOver'),
     VIEW_W / 2, 160, '#a09070');
-}
-
-function updateDead() {
-  const tk = G.takeover;
-  if (!tk) { G.state = 'play'; return; }
-  // refresh against ants that died (or got taken) while the menu was open
-  const counts = takeoverCounts();
-  tk.types = tk.types.filter(t => counts[t.caste]);
-  for (const t of tk.types) t.count = counts[t.caste];
-  if (tk.types.length === 0) {
-    if (tk.prevAnt && tk.prevAnt.hp > 0) { G.takeover = null; G.state = 'play'; }
-    else endWorld();
-    return;
-  }
-  tk.sel = Math.min(tk.sel, tk.types.length - 1);
-
-  if (tk.prevAnt && tookPress('Escape')) {
-    G.takeover = null; G.state = 'play';
-    Sfx.play('menu');
-    return;
-  }
-  if (tookPress('ArrowUp') || tookPress('KeyW')) { tk.sel = (tk.sel + tk.types.length - 1) % tk.types.length; Sfx.play('menu'); }
-  if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.types.length; Sfx.play('menu'); }
-  if (tookPress('Enter') || tookPress('Space')) {
-    const caste = tk.types[tk.sel].caste;
-    // nearest free ant of the chosen caste
-    let a = null, bd = Infinity;
-    for (const c of G.ants) {
-      if (c.hp <= 0 || c.playerIdx >= 0 || c.caste !== caste) continue;
-      const d = dist2(c.x, c.y, tk.refX, tk.refY);
-      if (d < bd) { bd = d; a = c; }
-    }
-    if (!a) return; // died this very frame; the prune above catches it next tick
-    if (tk.prevAnt && tk.prevAnt.hp > 0) {
-      // hand the old body back to the colony
-      const prev = tk.prevAnt;
-      prev.playerIdx = -1;
-      prev.state = 'idle'; prev.stateT = 120;
-      prev.target = null; prev.nav = null;
-      prev.climbing = false; prev.ceiling = false;
-    }
-    a.playerIdx = tk.pIdx;
-    a.state = 'idle';
-    a.climbing = false;
-    a.ceiling = false;
-    a.nav = null;
-    G.players[tk.pIdx].ant = a;
-    G.players[tk.pIdx].cam = { x: a.x - VIEW_W / 2, y: a.y - 60 };
-    if (!tk.prevAnt) G.deadQueue.shift();
-    G.takeover = null;
-    G.state = 'play';
-    G.msg(L('m_nowPlaying', casteName(a.caste)), tk.pIdx === 0 ? '#ffe080' : '#80d0ff');
-    Sfx.play('select');
-  }
 }
 
 function drawGameOver() {
@@ -1354,8 +827,7 @@ function drawGameOver() {
     let y = 74;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
   }
-  if ((G.tick >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
-  G.tick++;
+  if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
 }
 
 function updateGameOver() {
@@ -1372,7 +844,7 @@ function globalKeys() {
   if (tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
   if (tookPress('KeyN')) {
     const m = Sfx.toggleMute();
-    if (G.state === 'play') G.msg(L('m_sound', L(m ? 'w_off' : 'w_on')), '#80c0ff');
+    if (G.state === 'play') pushMsg(L('m_sound', L(m ? 'w_off' : 'w_on')), '#80c0ff');
   }
 }
 
@@ -1395,13 +867,13 @@ function frame(now) {
       case 'help': updateHelp(); break;
       case 'play': updatePlay(); break;
       case 'pause': updatePause(); break;
-      case 'dead': updateDead(); break;
       case 'gameover': updateGameOver(); break;
     }
     // clear one-shot presses each sim step
     for (const k in pressed) pressed[k] = false;
   }
 
+  G.frame++;
   switch (G.state) {
     case 'title': drawTitle(); break;
     case 'slots': drawSlots(); break;
@@ -1409,7 +881,6 @@ function frame(now) {
     case 'help': drawHelp(); break;
     case 'play': drawPlay(); break;
     case 'pause': drawPause(); break;
-    case 'dead': drawDead(); break;
     case 'gameover': drawGameOver(); break;
   }
 }

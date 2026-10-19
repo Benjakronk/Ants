@@ -163,8 +163,8 @@ class Ant {
     this.hp -= dmg;
     this.flash = 6;
     this.vx += kx || 0; this.vy += (ky || 0) - 0.5;
-    G.particles.blood(this.x, this.y, 4);
-    if (G.nearPlayer(this.x, this.y) < 220) Sfx.play('hurt');
+    G.fx('blood', this.x, this.y, 4);
+    G.sfx('hurt', this.x, this.y, 220);
     if (this.playerIdx < 0 && this.caste !== 'soldier' && this.caste !== 'queen' &&
         this.rallyT <= 0 && this.state !== 'rescue') {
       this.state = 'flee'; this.stateT = 120;
@@ -185,7 +185,7 @@ class Ant {
       T.dig(this.x, this.y, Math.max(this.hw, this.hh) + 2.5);
       this.digCd = this.def.digCd;
       this.biteAnim = 6;
-      G.particles.dirt(this.x, this.y, 2);
+      G.fx('dirt', this.x, this.y, 2);
       // wood or rock against the body: chewing won't free us, and a
       // sub-pixel overlap pins every walking move -- wriggle out instead
       if (T.boxHard(this.x, this.y, this.hw, this.hh)) {
@@ -382,8 +382,8 @@ class Ant {
         if (hit) {
           T.dig(hit.bx, hit.by, c.digR);
           T.dig(this.x + ux * 2, this.y + uy * 2, c.digR * 0.8); // clear around the body too
-          G.particles.dirt(hit.bx, hit.by, 3);
-          if (G.nearPlayer(hit.bx, hit.by) < 200) Sfx.play('dig');
+          G.fx('dirt', hit.bx, hit.by, 3);
+          G.sfx('dig', hit.bx, hit.by, 200);
           this.digCd = c.digCd + 6;
           this.biteAnim = 6;
           this.blockedT = 12;
@@ -446,8 +446,8 @@ class Ant {
         this.vy = 0; // grip the soil: no falling back between squeezes
         this.noProgT = 235;
         this.biteAnim = 6;
-        G.particles.dirt(this.x, this.y, 2);
-        if (G.nearPlayer(this.x, this.y) < 200) Sfx.play('dig');
+        G.fx('dirt', this.x, this.y, 2);
+        G.sfx('dig', this.x, this.y, 200);
       } else {
         // bedrock or wood in the way: this route is hopeless
         this.noProgT = 0;
@@ -547,7 +547,7 @@ class Ant {
           // chew only what's actually in the way (don't erode the nest)
           T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1);
           this.biteAnim = 6;
-          if ((G.tick & 7) === 0) G.particles.dirt(this.x, this.y, 2);
+          if ((G.tick & 7) === 0) G.fx('dirt', this.x, this.y, 2);
         }
         if (!T.boxSolid(nx, ny, 1.5, 1.5) && !T.boxHard(nx, ny, this.hw, this.hh)) {
           this.x = nx; this.y = ny;
@@ -633,7 +633,7 @@ class Ant {
             dist2(this.x, this.y, o.x, o.y) < 576) {
           o.hp = Math.min(o.maxHp, o.hp + 1.5);
           G.colony.food -= 0.05;
-          if (G.nearPlayer(o.x, o.y) < 200) G.particles.sparkle(o.x, o.y - 3, 1);
+          G.fx('sparkle', o.x, o.y - 3, 1);
           break;
         }
       }
@@ -744,7 +744,7 @@ class Ant {
           it.carried = this;
           this.carry = it;
           this.state = 'return';
-          if (G.nearPlayer(this.x, this.y) < 200) Sfx.play('pickup');
+          G.sfx('pickup', this.x, this.y, 200);
         }
         break;
       }
@@ -768,7 +768,7 @@ class Ant {
           hd.carried = this; this.carry = hd;
           G.items.push(hd);
           this.state = 'return';
-          if (G.nearPlayer(this.x, this.y) < 220) Sfx.play('milk');
+          G.sfx('milk', this.x, this.y, 220);
         }
         break;
       }
@@ -823,7 +823,7 @@ class Ant {
           p.hurt(this.def.dmg, Math.sign(p.x - this.x) * 0.8, -0.3);
           this.biteCd = 40;
           this.biteAnim = 8;
-          if (G.nearPlayer(this.x, this.y) < 220) Sfx.play('bite');
+          G.sfx('bite', this.x, this.y, 220);
         }
         break;
       }
@@ -841,8 +841,8 @@ class Ant {
             if (n > 0) {
               this.abilCd = 900;
               if (G.nearPlayer(this.x, this.y) < 260) {
-                G.msg(L('m_alarm'), '#ff8040');
-                Sfx.play('danger');
+                G.msg('m_alarm', [], '#ff8040');
+                G.sfx('danger');
               }
             }
           }
@@ -887,7 +887,7 @@ class Ant {
             if (d < 9) {
               l.feed();
               this.carry.dead = true; this.carry = null;
-              if (G.nearPlayer(this.x, this.y) < 200) Sfx.play('milk');
+              G.sfx('milk', this.x, this.y, 200);
             }
           } else {
             this.navTo('nursery');
@@ -1015,7 +1015,7 @@ class Brood {
 
   hurt(dmg) {
     this.hp -= dmg;
-    G.particles.blood(this.x, this.y, 3);
+    G.fx('blood', this.x, this.y, 3);
   }
 
   feed() {
@@ -1044,7 +1044,7 @@ class Brood {
       if (this.age > 3600) {  // ~60s
         this.kind = 'larva';
         this.age = 0;
-        if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('hatch');
+        G.sfx('hatch', this.x, this.y, 240);
       }
     } else {
       this.hungerT--;
@@ -1143,11 +1143,11 @@ class Bug {
     this.hp -= dmg;
     this.flash = 6;
     this.vx += kx || 0; this.vy += (ky || 0) - 0.4;
-    G.particles.blood(this.x, this.y, 4);
+    G.fx('blood', this.x, this.y, 4);
     if (this.kind === 'pillbug') this.curl = 180;
     if (this.kind === 'aphid' || this.kind === 'worm') this.fleeing = true;
     if (this.predator && this.hp < this.maxHp * 0.25) this.fleeing = true;
-    if (G.nearPlayer(this.x, this.y) < 220) Sfx.play('hurt');
+    G.sfx('hurt', this.x, this.y, 220);
   }
 
   update() {
@@ -1319,7 +1319,7 @@ class Bug {
       if (dist2(this.x, this.y, prey.x, prey.y) < 100 && this.biteCd <= 0) {
         prey.hurt(d.dmg, Math.sign(prey.x - this.x), -0.5);
         this.biteCd = 55;
-        if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('bite');
+        G.sfx('bite', this.x, this.y, 240);
       }
     } else {
       this.diggerThink(3.5, 0.02);
@@ -1351,7 +1351,7 @@ class Bug {
       if (dist2(this.x, this.y, prey.x, prey.y) < 110 && this.biteCd <= 0) {
         prey.hurt(d.dmg, this.dir * 1.2, -0.6);
         this.biteCd = 50;
-        if (G.nearPlayer(this.x, this.y) < 260) Sfx.play('bite');
+        G.sfx('bite', this.x, this.y, 260);
       }
     } else {
       // prowl the surface
@@ -1426,7 +1426,7 @@ class Bug {
       prey.hurt(d.dmg, this.dir, -0.4);
       this.biteCd = 45;
       this.swoopT = 110; // hit and run
-      if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('bite');
+      G.sfx('bite', this.x, this.y, 240);
     }
     this.x = Math.max(8, Math.min(WORLD_W - 8, this.x));
     this.y = Math.max(8, this.y);
@@ -1450,7 +1450,7 @@ class Bug {
       if (dist2(this.x, this.y, prey.x, prey.y) < 130 && this.biteCd <= 0) {
         prey.hurt(d.dmg, this.dir * 1.4, -0.5);
         this.biteCd = 70;
-        if (G.nearPlayer(this.x, this.y) < 260) Sfx.play('bite');
+        G.sfx('bite', this.x, this.y, 260);
       }
     } else {
       // menace the mound (unless we just bounced off a tree)
@@ -1465,8 +1465,8 @@ class Bug {
       const bx = this.x + this.dir * (this.hw + 3);
       if (T.digHasTarget(bx, this.y, 5)) {
         T.dig(bx, this.y, 5);
-        G.particles.dirt(bx, this.y, 3);
-        if (G.nearPlayer(bx, this.y) < 220) Sfx.play('dig');
+        G.fx('dirt', bx, this.y, 3);
+        G.sfx('dig', bx, this.y, 220);
         this.digT = 40;
       } else {
         this.dir = -this.dir;
@@ -1508,7 +1508,7 @@ class Bug {
       if (dist2(this.x, this.y, prey.x, prey.y) < 90 && this.biteCd <= 0) {
         prey.hurt(d.dmg, this.dir, -0.4);
         this.biteCd = 50;
-        if (G.nearPlayer(this.x, this.y) < 240) Sfx.play('bite');
+        G.sfx('bite', this.x, this.y, 240);
       }
     } else {
       // march toward the garrison / target entrance; climb slopes but not trees

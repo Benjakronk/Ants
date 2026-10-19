@@ -29,7 +29,7 @@ const STR = {
   ui_world: ['WORLD {0}', 'VERDEN {0}'],
   ui_empty: ['EMPTY - A NEW COLONY AWAITS', 'TOM - EN NY KOLONI VENTER'],
   ui_eraseArm: ['X AGAIN TO ERASE!', 'X IGJEN FOR Å SLETTE!'],
-  ui_slotKeys: ['ENTER: 1 PLAYER    T: 2 PLAYERS', 'ENTER: 1 SPILLER    T: 2 SPILLERE'],
+  ui_slotKeys: ['ENTER: PLAY', 'ENTER: SPILL'],
   ui_slotKeys2: ['X: ERASE    ESC: BACK', 'X: SLETT    ESC: TILBAKE'],
   ui_pressSpace: ['PRESS SPACE', 'TRYKK MELLOMROM'],
   ui_pressEnter: ['PRESS ENTER', 'TRYKK ENTER'],
@@ -38,9 +38,6 @@ const STR = {
   ui_paused: ['PAUSED', 'PAUSE'],
   ui_resume: ['RESUME', 'FORTSETT'],
   ui_saveGame: ['SAVE GAME', 'LAGRE SPILL'],
-  ui_split: ['SPLIT: {0}', 'DELING: {0}'],
-  ui_horiz: ['HORIZONTAL', 'VANNRETT'],
-  ui_vert: ['VERTICAL', 'LODDRETT'],
   ui_saveQuit: ['SAVE + QUIT', 'LAGRE + AVSLUTT'],
   ui_switchAnt: ['SWITCH ANT', 'BYTT MAUR'],
   ui_lendLegs: ['LEND YOUR LEGS ELSEWHERE.', 'LÅN BORT BEINA DINE.'],
@@ -145,6 +142,19 @@ const BROOD_NAME_DEF = {
 };
 function broodNameDef(k) { return (BROOD_NAME_DEF[k] || [k, k])[LANG]; }
 
+// simulation messages arrive as { key, args }; an arg may be a name token
+// ({ caste }, { bug }, { brood }, { key }) translated here, on the client
+function msgArg(a) {
+  if (a && typeof a === 'object') {
+    if (a.caste) return casteName(a.caste);
+    if (a.bug) return bugNameDef(a.bug);
+    if (a.brood) return broodNameDef(a.brood);
+    if (a.key) return L(a.key);
+  }
+  return a;
+}
+function msgText(m) { return L(m.key, ...(m.args || []).map(msgArg)); }
+
 // tasks carry type (+ kind for hunts), not baked text -- translated at draw
 // time so saves stay language-neutral. Older saves' hunt tasks lack kind;
 // fall back to looking the bug up while it's still alive.
@@ -196,28 +206,28 @@ function introText() {
 
 function helpText() {
   return LANG === 1 ? [
-    ['SPILLER 1', '#ffe080'],
-    ['  W A S D ....... GÅ / KLATRE', '#c8b890'],
+    ['KONTROLLER', '#ffe080'],
+    ['  WASD / PILER .. GÅ / KLATRE', '#c8b890'],
     ['  MELLOMROM ..... BIT / GRAV', '#c8b890'],
     ['  E ............. PLUKK OPP / BRUK', '#c8b890'],
-    ['  Q ............. EVNE    TAB: BYTT MAUR', '#c8b890'],
-    ['SPILLER 2', '#80d0ff'],
-    ['  PILER ......... GÅ / KLATRE', '#c8b890'],
-    ['  . , K L ....... BIT, BRUK, EVNE, BYTT', '#c8b890'],
+    ['  Q ............. EVNE', '#c8b890'],
+    ['  TAB ........... BYTT MAUR', '#c8b890'],
+    ['', ''],
+    ['', ''],
     ['', ''],
     ['M: KART  ESC: PAUSE  HOLD OPP FOR Å KLATRE', '#a09070'],
     ['SOLDATER KALLER KOLONIEN TIL KAMP. PLEIERE', '#a8e8a0'],
     ['HELBREDER OG BÆRER YNGELEN I SIKKERHET.', '#a8e8a0'],
     ['BÆR MAT TIL LAGERKAMMERET.', '#a8e8a0'],
   ] : [
-    ['PLAYER 1', '#ffe080'],
-    ['  W A S D ....... MOVE / CLIMB', '#c8b890'],
+    ['CONTROLS', '#ffe080'],
+    ['  WASD / ARROWS . MOVE / CLIMB', '#c8b890'],
     ['  SPACE ......... BITE / DIG', '#c8b890'],
     ['  E ............. PICK UP / USE', '#c8b890'],
-    ['  Q ............. ABILITY    TAB: SWITCH ANT', '#c8b890'],
-    ['PLAYER 2', '#80d0ff'],
-    ['  ARROWS ........ MOVE / CLIMB', '#c8b890'],
-    ['  . , K L ....... BITE, USE, ABILITY, SWITCH', '#c8b890'],
+    ['  Q ............. ABILITY', '#c8b890'],
+    ['  TAB ........... SWITCH ANT', '#c8b890'],
+    ['', ''],
+    ['', ''],
     ['', ''],
     ['M: MAP   ESC: PAUSE   HOLD UP AT WALLS TO CLIMB', '#a09070'],
     ['SOLDIERS RALLY THE COLONY TO WAR. NURSES', '#a8e8a0'],

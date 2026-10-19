@@ -27,21 +27,21 @@ class Colony {
       // treasure, not food: the colony hoards it for pure score
       this.score += 80;
       this.progress('crystal', 1);
-      G.msg(L('m_crystal', 80), '#80e0ff');
-      Sfx.play('task');
+      G.msg('m_crystal', [80], '#80e0ff');
+      G.sfx('task');
     } else {
       const v = Number(item.value) || 0;
       this.food += v;
       this.stats.foodGathered += v;
       if (who && who.playerIdx >= 0) {
         this.progress('gather', 1);
-        G.msg(L('m_foodStored', item.value));
+        G.msg('m_foodStored', [item.value], null, who.playerIdx);
       }
     }
     item.dead = true;
     if (who) who.carry = null;
-    G.particles.sparkle(this.storage.x, this.storage.y - 6, 5);
-    if (G.nearPlayer(this.storage.x, this.storage.y) < 280) Sfx.play('deposit');
+    G.fx('sparkle', this.storage.x, this.storage.y - 6, 5);
+    G.sfx('deposit', this.storage.x, this.storage.y, 280);
   }
 
   spawnAdult(x, y) {
@@ -54,8 +54,8 @@ class Colony {
     const a = new Ant(x, y, caste);
     G.ants.push(a);
     this.stats.antsBorn++;
-    G.msg(L('m_emerged', casteName(caste)));
-    if (G.nearPlayer(x, y) < 300) Sfx.play('hatch');
+    G.msg('m_emerged', [{ caste }]);
+    G.sfx('hatch', x, y, 300);
   }
 
   update() {
@@ -80,8 +80,8 @@ class Colony {
     if (this.food <= 0 && pop > 0) {
       for (const a of G.ants) if (a.hp > 0) a.hp -= 0.006;
       if (this.starveMsgT <= 0) {
-        G.msg(L('m_starving'), '#ff6040');
-        Sfx.play('starve');
+        G.msg('m_starving', [], '#ff6040');
+        G.sfx('starve');
         this.starveMsgT = 1800;
       }
     }
@@ -97,8 +97,8 @@ class Colony {
         const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg');
         G.brood.push(e);
         this.eggT = 2700;
-        G.msg(L('m_eggLaid'));
-        if (G.nearPlayer(queen.x, queen.y) < 300) Sfx.play('lay');
+        G.msg('m_eggLaid');
+        G.sfx('lay', queen.x, queen.y, 300);
       }
       if (this.eggT <= 0) this.eggT = 600; // re-check soon
     }
@@ -125,12 +125,12 @@ class Colony {
 
     if (this.food < 25 && !this.active('gather')) {
       tasks.push({ type: 'gather', n: 0, need: 5, reward: 50 });
-      G.msg(L('m_newTask', L('t_gather')), '#80ff80');
+      G.msg('m_newTask', [{ key: 't_gather' }], '#80ff80');
     }
     const hungry = G.brood.filter(b => b.kind === 'larva' && b.hungry && !b.dead).length;
     if (hungry > 0 && !this.active('feed')) {
       tasks.push({ type: 'feed', n: 0, need: Math.min(2, hungry), reward: 40 });
-      G.msg(L('m_newTask', L('t_feed')), '#80ff80');
+      G.msg('m_newTask', [{ key: 't_feed' }], '#80ff80');
     }
     const pred = G.bugs.find(b => b.predator && !b.dead &&
       Math.abs(b.x - this.x) < 400);
@@ -139,20 +139,20 @@ class Colony {
         type: 'hunt', kind: pred.kind,
         targetId: pred.id, n: 0, need: 1, reward: 100
       });
-      G.msg(L('m_defend'), '#ff8040');
-      Sfx.play('danger');
+      G.msg('m_defend', [], '#ff8040');
+      G.sfx('danger');
     }
     if (G.day > this.lastDigTaskDay && G.day >= 1 && !this.active('dig')) {
       this.lastDigTaskDay = G.day;
       tasks.push({ type: 'dig', n: 0, need: 600, reward: 60 });
-      G.msg(L('m_newTask', L('t_dig')), '#80ff80');
+      G.msg('m_newTask', [{ key: 't_dig' }], '#80ff80');
     }
     // a prospecting expedition: dig deep below the nest for a crystal
     if (G.day >= 1 && G.day > (this.lastCrystalTaskDay || 0) + 1 &&
         !this.active('crystal') && Math.random() < 0.35) {
       this.lastCrystalTaskDay = G.day;
       tasks.push({ type: 'crystal', n: 0, need: 1, reward: 150 });
-      G.msg(L('m_newTask', L('t_crystal')), '#80e0ff');
+      G.msg('m_newTask', [{ key: 't_crystal' }], '#80e0ff');
     }
   }
 
@@ -168,8 +168,8 @@ class Colony {
     t.doneT = 240;
     this.score += t.reward;
     this.stats.tasksDone++;
-    G.msg(L('m_taskDone', t.reward), '#ffe040');
-    Sfx.play('task');
+    G.msg('m_taskDone', [t.reward], '#ffe040');
+    G.sfx('task');
   }
 
   checkTasks() {
@@ -253,30 +253,30 @@ class Colony {
     if (count('spider') < spiderCap && day >= 1 && Math.random() < (night ? 0.0014 : 0.00025)) {
       const x = Math.random() < 0.5 ? 25 : WORLD_W - 25;
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'spider'));
-      G.msg(L('m_spider'), '#ff8040');
-      Sfx.play('danger');
+      G.msg('m_spider', [], '#ff8040');
+      G.sfx('danger');
     }
     const centiCap = Math.min(2, 1 + Math.floor(day / 4));
     if (count('centipede') < centiCap && day >= 2 && Math.random() < 0.0004) {
       const x = 100 + Math.random() * (WORLD_W - 200);
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 300 + Math.random() * 400, 'centipede'));
-      G.msg(L('m_centi'), '#ff8040');
-      Sfx.play('danger');
+      G.msg('m_centi', [], '#ff8040');
+      G.sfx('danger');
     }
     // wasps hunt by day
     const waspCap = Math.min(3, 1 + Math.floor(day / 3));
     if (count('wasp') < waspCap && day >= 1 && !night && Math.random() < 0.0005) {
       const x = Math.random() < 0.5 ? 60 : WORLD_W - 60;
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 80, 'wasp'));
-      G.msg(L('m_wasp'), '#ff8040');
-      Sfx.play('danger');
+      G.msg('m_wasp', [], '#ff8040');
+      G.sfx('danger');
     }
     // a rare armored heavyweight, once the colony is established
     if (count('beetle') < 1 && day >= 3 && Math.random() < 0.00018) {
       const x = Math.random() < 0.5 ? 30 : WORLD_W - 30;
       G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'beetle'));
-      G.msg(L('m_beetle'), '#ff8040');
-      Sfx.play('danger');
+      G.msg('m_beetle', [], '#ff8040');
+      G.sfx('danger');
     }
     // rival-colony raids: at most one per day, growing bolder over time.
     // The raiders advance from the direction of the rival nest, emerging from
@@ -292,8 +292,8 @@ class Colony {
         const x = Math.max(20, Math.min(WORLD_W - 20, baseX + (Math.random() - 0.5) * 40));
         G.bugs.push(new Bug(x, T.surf[Math.floor(x)] - 8, 'redant'));
       }
-      G.msg(L('m_raid'), '#ff5040');
-      Sfx.play('danger');
+      G.msg('m_raid', [], '#ff5040');
+      G.sfx('danger');
     }
   }
 }

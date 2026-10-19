@@ -39,7 +39,7 @@ const path = require('path');
   await page.waitForTimeout(200);
   const afterLoad = await page.evaluate(() => {
     G.running = false;
-    loadWorld(G.slot, 1);
+    startSavedWorld(G.slot);
     const defs = G.bugs.filter(b => b.kind === 'redant' && b.resident);
     return { rivalX: G.rival ? G.rival.x : null, residentDefenders: defs.length,
              homeXs: defs.map(b => b.homeX | 0) };

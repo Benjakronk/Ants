@@ -21,8 +21,8 @@ const path = require('path');
     const t = G.trees[0];
     const a = G.players[0].ant;
     a.x = t.x + 30; a.y = T.surf[t.x + 30] - 6;
-    const p = G.players[0];
-    p.cam.x = t.x - 160; p.cam.y = t.topY - 30;
+    const p = G.cam;
+    p.x = t.x - 160; p.y = t.topY - 30;
     p.fx = a.x; p.fy = a.y;
     G.tick = Math.floor(DAY_LEN * 0.3); // midday light
     return { tree: t, count: G.trees.length };
@@ -30,9 +30,9 @@ const path = require('path');
   console.log('trees:', info.count, 'first:', JSON.stringify(info.tree));
   // freeze camera on the tree for the shot
   await page.evaluate(() => {
-    const t = G.trees[0], p = G.players[0];
-    p.cam.x = Math.max(0, t.x - 160); p.cam.y = Math.max(0, t.topY - 40);
-    p.fx = p.cam.x + 160; p.fy = p.cam.y + 88;
+    const t = G.trees[0], p = G.cam;
+    p.x = Math.max(0, t.x - 160); p.y = Math.max(0, t.topY - 40);
+    p.fx = p.x + 160; p.fy = p.y + 88;
   });
   await page.waitForTimeout(120);
   await page.screenshot({ path: 'test/shot-tree.png' });

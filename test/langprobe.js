@@ -42,10 +42,10 @@ const path = require('path');
   await page.waitForTimeout(600);
   check('norwegian after reload', await page.evaluate(() => LANG === 1));
 
-  // start a 2P game in Norwegian
+  // start a game in Norwegian
   await page.keyboard.press('Enter'); // START SPILL -> slots
   await page.waitForTimeout(200);
-  await page.keyboard.press('t');
+  await page.keyboard.press('Enter');
   await page.waitForTimeout(2500);
   await page.keyboard.press('Space'); // skip intro
   await page.waitForTimeout(400);
@@ -68,35 +68,6 @@ const path = require('path');
   await page.screenshot({ path: 'test/shot-switch-no.png' });
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-
-  // P2 Norwegian-layout keys: K = ability, L = switch, , = use, . = bite
-  const p2 = await page.evaluate(() => {
-    // make P2 a nurse next to a wounded worker so K visibly heals
-    const a = G.players[1].ant;
-    const nurse = G.ants.find(o => o.playerIdx < 0 && o.caste === 'nurse');
-    if (nurse) {
-      nurse.playerIdx = 1; G.players[1].ant = nurse;
-      a.playerIdx = -1; a.state = 'idle';
-    }
-    const n2 = G.players[1].ant;
-    const w = G.ants.find(o => o.playerIdx < 0 && o.caste === 'worker');
-    w.x = n2.x + 6; w.y = n2.y; w.hp = 5;
-    G.colony.food = 50;
-    return { wid: w.id, before: w.hp };
-  });
-  await page.keyboard.press('k');
-  await page.waitForTimeout(200);
-  const heal2 = await page.evaluate((wid) => {
-    const w = G.ants.find(o => o.id === wid);
-    return { hp: w ? w.hp : -1, cd: G.players[1].ant.abilCd };
-  }, p2.wid);
-  check('P2 K = ability (heal)', heal2.hp >= p2.before + 9 && heal2.cd > 0);
-
-  await page.keyboard.press('l');
-  await page.waitForTimeout(200);
-  check('P2 L = switch menu', await page.evaluate(() =>
-    G.takeover && G.takeover.pIdx === 1 && !!G.takeover.prevAnt));
-  await page.keyboard.press('Escape');
 
   // switch back to English for good measure
   await page.evaluate(() => setLang(false));

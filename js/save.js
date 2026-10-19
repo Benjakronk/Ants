@@ -73,7 +73,7 @@ function saveWorld(slot) {
     seed: G.seed,
     tick: G.tick,
     day: G.day,
-    playerCount: G.playerCount,
+    playerCount: G.players.length,
     terrain: rleEncode(T.m),
     colony: {
       food: Math.round(c.food * 10) / 10, score: c.score,

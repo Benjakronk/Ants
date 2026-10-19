@@ -28,10 +28,10 @@ const path = require('path');
   await page.keyboard.press('Tab');
   await page.waitForTimeout(200);
   const sw = await page.evaluate(() => ({
-    state: G.state, swap: !!(G.takeover && G.takeover.prevAnt),
+    state: G.state, swap: !!(G.takeover && G.takeover.live),
     types: G.takeover ? G.takeover.types.map(t => t.caste) : [],
   }));
-  check('switch menu opens with types', sw.state === 'dead' && sw.swap && sw.types.length >= 3);
+  check('switch menu opens with types', sw.state === 'play' && sw.swap && sw.types.length >= 3);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
   check('switch menu cancels', await page.evaluate(() => G.state === 'play' && !G.takeover));
@@ -137,42 +137,6 @@ const path = require('path');
   });
   check('NPC nurse enters rescue', rescue.includes('rescue'));
   console.log('  nurse states:', JSON.stringify(rescue));
-
-  // --- 2P split toggle ---
-  await page.evaluate(() => { G.state = 'title'; G.running = false; G.menuSel = 0; });
-  await page.keyboard.press('Enter');
-  await page.waitForTimeout(200);
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('t');
-  await page.waitForTimeout(2500);
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(300);
-  const h = await page.evaluate(() => ({ split: G.splitVert, v0: playerView(0), v1: playerView(1) }));
-  check('default horizontal split', !h.split && h.v0.vw === 320 && h.v1.vy > 0);
-  // pause -> SPLIT toggle
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(150);
-  for (let i = 0; i < 3; i++) { // RESUME,SAVE,HELP -> SPLIT
-    await page.keyboard.press('ArrowDown');
-    await page.waitForTimeout(120);
-  }
-  await page.keyboard.press('Enter');
-  await page.waitForTimeout(150);
-  const v = await page.evaluate(() => ({
-    split: G.splitVert, stored: localStorage.getItem('maur_split'),
-    v1: playerView(1), state: G.state,
-  }));
-  check('split toggles to vertical + persists', v.split && v.stored === 'v' && v.v1.vx > 0);
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: 'test/shot-vsplit.png' });
-
-  // P2 switch key
-  await page.keyboard.press('l');
-  await page.waitForTimeout(200);
-  const p2sw = await page.evaluate(() => G.takeover ? G.takeover.pIdx : -1);
-  check('P2 switch key opens menu', p2sw === 1);
-  await page.keyboard.press('Escape');
 
   console.log('\nERRORS:', errors.length ? errors.join('\n') : 'none');
   console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');

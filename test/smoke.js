@@ -57,6 +57,12 @@ const path = require('path');
   await page.keyboard.up('s');
   const after = await page.evaluate(() => ({ x: G.players[0].ant.x | 0, y: G.players[0].ant.y | 0 }));
   console.log('dig: before y=', before.y, 'after y=', after.y, 'dug down:', after.y > before.y + 5);
+  const repaint = await page.evaluate(() => {
+    const a = G.players[0].ant;
+    const x = Math.round(a.x), y = Math.round(a.y);
+    return { mat: T.get(x, y), alpha: TerrainView.terCtx.getImageData(x, y, 1, 1).data[3] };
+  });
+  console.log('dug pixel repainted:', repaint.mat === 0 && repaint.alpha === 0, JSON.stringify(repaint));
   await page.screenshot({ path: 'test/shot-dug.png' });
 
   // climb back up: hold W (against tunnel wall)
@@ -109,35 +115,45 @@ const path = require('path');
   console.log('load restored:', posAfter.state === 'play' && Math.abs(posAfter.x - posBefore.x) < 30 && posAfter.tick >= posBefore.tick);
   await page.screenshot({ path: 'test/shot-loaded.png' });
 
-  // 2-player smoke: erase nothing, start world 2 with T
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(200);
-  await page.keyboard.press('Enter'); // quit? no -- Escape resumed. Use pause menu quit:
+  // fresh world 2 (arrow keys drive the ant too)
   await page.evaluate(() => { G.state = 'title'; G.running = false; G.menuSel = 0; });
   await page.keyboard.press('Enter'); // start -> slots
   await page.waitForTimeout(200);
   await page.keyboard.press('ArrowDown'); // world 2
-  await page.keyboard.press('t');
+  await page.keyboard.press('Enter');
   await page.waitForTimeout(2500);
   await page.keyboard.press('Space'); // skip intro
   await page.waitForTimeout(400);
-  const twoP = await page.evaluate(() => ({
-    state: G.state, players: G.players.length,
-    p1: !!G.players[0].ant, p2: !!G.players[1] && !!G.players[1].ant,
-  }));
-  console.log('2P:', JSON.stringify(twoP));
-  await page.screenshot({ path: 'test/shot-2p.png' });
+  const x0 = await page.evaluate(() => G.players[0].ant.x);
+  await page.keyboard.down('ArrowLeft');
+  await page.waitForTimeout(800);
+  await page.keyboard.up('ArrowLeft');
+  console.log('world 2:', await page.evaluate(() => G.state), 'players:', await page.evaluate(() => G.players.length),
+    'arrow moved:', await page.evaluate(x => G.players[0].ant.x < x - 3, x0));
 
-  // kill P1's ant to test takeover screen
+  // live switch with Tab: the world keeps running under the overlay
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(200);
+  const t0 = await page.evaluate(() => G.tick);
+  await page.waitForTimeout(300);
+  console.log('switch overlay:', await page.evaluate(() => !!G.takeover && G.takeover.live),
+    'sim runs underneath:', await page.evaluate(t => G.tick > t, t0));
+  await page.screenshot({ path: 'test/shot-switch.png' });
+  await page.keyboard.press('ArrowDown'); // soldier
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+  console.log('switched to:', await page.evaluate(() => G.players[0].ant && G.players[0].ant.caste));
+
+  // kill the player's ant to test the takeover screen
   await page.evaluate(() => { G.players[0].ant.hp = 0; });
   await page.waitForTimeout(500);
-  console.log('takeover state:', await page.evaluate(() => G.state),
+  console.log('takeover open:', await page.evaluate(() => !!G.takeover && !G.takeover.live),
     'types:', await page.evaluate(() => G.takeover ? JSON.stringify(G.takeover.types) : 'none'));
   await page.screenshot({ path: 'test/shot-takeover.png' });
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
   console.log('after takeover:', await page.evaluate(() => G.state),
-    'p1 ant:', await page.evaluate(() => !!G.players[0].ant));
+    'p1 ant:', await page.evaluate(() => !!G.players[0].ant), 'overlay closed:', await page.evaluate(() => !G.takeover));
 
   console.log('\nERRORS:', errors.length ? errors.join('\n') : 'none');
   await browser.close();

@@ -21,18 +21,20 @@ python3 -m http.server   # then http://localhost:8000
 
 ## How to play
 
-|             | Player 1 | Player 2 |
-|-------------|----------|----------|
-| Move / climb | `W A S D` | Arrow keys |
-| Bite / dig   | `Space`   | `.` |
-| Pick up / use | `E`      | `,` |
+| Action | Keys |
+|--------|------|
+| Move / climb | `W A S D` or arrow keys |
+| Bite / dig | `Space` |
+| Pick up / use | `E` |
+| Caste ability | `Q` |
+| Switch ant | `Tab` |
 
 - **Hold up against a wall (or tree) to climb.** Ants climb everything.
   Hold up under a roof to hang and crawl upside-down — tunnel ceilings and
   tree branches alike.
 - **Bite** digs dirt, grass and leaves; rock and wood don't yield. The same
   bite wounds spiders, centipedes, pillbugs, worms... and prey becomes food.
-- **`E` / `,`** picks up items, deposits food at the storage chamber, feeds
+- **`E`** picks up items, deposits food at the storage chamber, feeds
   hungry larvae, and milks aphids for honeydew.
 - `M` map · `Esc`/`P` pause · `N` sound · `C` CRT filter
 
@@ -55,8 +57,8 @@ and the colony mound with its chambers dug beneath. Your nest sits in the
 left quarter of the map; a **rival red-ant colony** holds the right quarter,
 its mound garrisoned by defenders, with a long stretch of open forest beyond
 each nest to explore. Worlds save automatically
-(and on quit) — sink hours into one and come back later. `T` on the world
-select screen starts split-screen two-player; both ants serve the same colony.
+(and on quit) — sink hours into one and come back later. Online co-op is on
+the way (see `PLAN.md`).
 
 ### Wildlife
 
@@ -76,21 +78,34 @@ select screen starts split-screen two-player; both ants serve the same colony.
 Plain JavaScript on a 320×200 canvas, integer-scaled, with a hand-built 5×7
 bitmap font and WebAudio square-wave sound. No frameworks.
 
+The simulation and the client are separate, so the same simulation can run
+on a server. The sim never touches the DOM, audio or translations: it reads
+each player's `input` struct and emits `G.events` (messages by string key,
+positional sounds, particle bursts), and terrain edits are reported through
+`T.onEdit`.
+
 ```
-js/worldgen.js   seeded procedural generation (terrain, nest, trees)
-js/terrain.js    per-pixel destructible terrain + render canvases
-js/entities.js   ants (player + AI), brood, bugs, items, physics
-js/colony.js     colony simulation: food, brood cycle, tasks, spawning
-js/save.js       localStorage saves, RLE-packed terrain
-js/main.js       game states, input, split-screen rendering, HUD
-js/font.js       bitmap font · js/sfx.js WebAudio bleeps
+simulation (runs in the browser or headless in Node)
+js/worldgen.js     seeded procedural generation (terrain, nest, trees)
+js/terrain.js      per-pixel destructible terrain, digging
+js/entities.js     ants (player + AI), brood, bugs, items, physics
+js/colony.js       colony simulation: food, brood cycle, tasks, spawning
+js/game.js         world state G, setup/restore, player actions, stepSim()
+
+client
+js/terrainview.js  terrain canvases, repainted from edit rects
+js/main.js         input, event handling, camera, rendering, HUD, menus
+js/save.js         localStorage saves, RLE-packed terrain
+js/lang.js         English / Norwegian strings
+js/font.js         bitmap font · js/sfx.js WebAudio bleeps
 ```
 
 Headless tests (require `npm install` for Playwright):
 
 ```sh
-node test/smoke.js     # boot, play, dig, climb, save/load, 2P, takeover
+node test/smoke.js     # boot, play, dig, climb, save/load, switch, takeover
 node test/longsim.js   # fast-forward 3 in-game days of colony simulation
+node test/nodesim.js   # the sim alone in plain Node (no browser), with timings
 ```
 
 © 1998 BENSOFT INTERACTIVE (in spirit)
