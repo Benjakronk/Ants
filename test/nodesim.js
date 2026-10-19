@@ -63,14 +63,21 @@ check('build never buries the builder', !run('{ const a = G.players[0].ant; T.bo
 run('G.players[0].input.buildMat = true'); run('stepSim()');
 check('buildMat cycles to thatch', run('G.players[0].buildMat === M_THATCH && !G.players[0].input.buildMat'));
 run('G.players[0].input.buildMat = true'); run('stepSim()');
+check('buildMat cycles to the ant gate', run('G.players[0].buildMat === M_GATE'));
+run('G.players[0].input.buildMat = true'); run('stepSim()');
+check('buildMat cycles back to packed earth', run('G.players[0].buildMat === M_PACKED'));
 // X at the junction: the generated barracks marker cycles to royal, then
-// (with two royals) the next press removes it
+// (with two royals) to a fungus garden, and the next press removes it
 const nCh = run('G.colony.chambers.length');
+const markType = () => run(`(G.colony.chamberNear(G.players[0].ant.x, G.players[0].ant.y, CH_NEAR) || {}).type`);
 run('G.players[0].input.mark = true'); run('stepSim()');
-const t1 = run(`(G.colony.chamberNear(G.players[0].ant.x, G.players[0].ant.y, CH_NEAR) || {}).type`);
+const t1 = markType();
 run('G.players[0].input.mark = true'); run('stepSim()');
-check('mark cycles and removes a chamber', t1 === 'royal' && run('G.colony.chambers.length') === nCh - 1,
-  'barracks -> ' + t1 + ', chambers ' + nCh + ' -> ' + run('G.colony.chambers.length'));
+const t2 = markType();
+run('G.players[0].input.mark = true'); run('stepSim()');
+check('mark cycles and removes a chamber', t1 === 'royal' && t2 === 'fungus' &&
+  run('G.colony.chambers.length') === nCh - 1,
+  'barracks -> ' + t1 + ' -> ' + t2 + ', chambers ' + nCh + ' -> ' + run('G.colony.chambers.length'));
 const caps = run('JSON.stringify(G.colony.caps)');
 console.log('caps after removing the barracks:', caps);
 // put the barracks back so the timing run below matches a fresh colony
@@ -106,5 +113,73 @@ console.log('avg', (ms / ticks).toFixed(3), 'ms/tick, slowest', slowest.toFixed(
 console.log('events per second:', Object.entries(counts).map(([k, v]) => k + ' ' + (v / (ticks / 60)).toFixed(1)).join(', '));
 console.log('final:', JSON.stringify(run(`({ day: G.day, food: Math.round(G.colony.food), ants: G.ants.length })`)));
 check('no NaN in colony food', isFinite(run('G.colony.food')));
+
+// the rest of the colony year, on to the first day of spring in year 2 (an
+// idle player parked in the nest: the colony on its own). Stepped inside the
+// vm for speed; one row as each season ends.
+if (!process.argv.includes('--no-year')) {
+  t0 = Date.now();
+  const year = JSON.parse(run(`(() => {
+    const log = [];
+    const end = YEAR_DAYS * DAY_LEN + 600;
+    let n = 0;
+    while (G.tick < end) {
+      if (n++ % 600 === 0) { const a = G.players[0].ant; if (a) { a.x = G.colony.junction.x; a.y = G.colony.junction.y; } }
+      const s = G.season, food = G.colony.food, done = G.objectives.yearDone;
+      stepSim();
+      G.events.length = 0;
+      if (G.season !== s) {
+        log.push({ season: SEASON_KEYS[s], foodAtEnd: Math.round(food), ants: G.ants.length, brood: G.brood.length,
+          born: G.colony.stats.antsBorn, died: G.colony.stats.antsDied, milestones: done,
+          nan: !isFinite(G.colony.food) });
+      }
+      if (G.over) {
+        log.push({ over: G.over.reason, win: G.over.win, stars: G.over.stars, canContinue: G.over.canContinue });
+        if (!G.over.canContinue) break;
+        continueYear();
+      }
+    }
+    return JSON.stringify(log);
+  })()`));
+  console.log('the year (days 4-12, idle colony), ' + ((Date.now() - t0) / 1000).toFixed(0) + ' s:');
+  for (const r of year) console.log('  ' + JSON.stringify(r));
+  const lost = year.find(r => r.over && !r.canContinue);
+  check('the colony survives its first year', !lost, lost && lost.over);
+  check('a year ends on the first day of spring in year 2', year.some(r => r.over && r.canContinue) &&
+    run('G.year') === 2 && run('G.season') === 0);
+  check('no NaN all year', year.every(r => !r.nan) && isFinite(run('G.colony.food')));
+}
+
+// the colony's own ants leave a thatched mound over the entrance standing:
+// a fresh world, a dome with a gap in its side, half a day of summer
+// foraging (stores kept low so the foragers keep coming and going)
+if (!process.argv.includes('--no-mound')) {
+  const mound = JSON.parse(run(`(() => {
+    newWorld(777, 1);
+    G.tick = SEASON_DAYS * DAY_LEN + Math.floor(DAY_LEN * 0.1);   // summer morning
+    G.objectives = newObjectives(G.year, G.season, 0);
+    const c = G.colony, e = c.entrance;
+    const a = G.players[0].ant; a.x = c.queenCh.x; a.y = c.queenCh.y;
+    for (let x = e.x - 40; x <= e.x + 40; x++) {
+      for (let y = e.y - 45; y <= e.y + 2; y++) {
+        const d = Math.hypot(x - e.x, y - e.y);
+        if (d < 34 || d > 40 || (x > e.x && y > T.bgSurf[x] - 20)) continue;
+        if (T.get(x, y) === M_AIR) T.m[y * WORLD_W + x] = M_THATCH;
+      }
+      T.raiseSurf(x);
+    }
+    c.recountMound();
+    const size0 = c.mound.size, g0 = c.stats.foodGathered;
+    for (let i = 0; i < DAY_LEN / 2; i++) {
+      if (i % 1200 === 0) c.food = 20;
+      stepSim();
+      G.events.length = 0;
+    }
+    c.recountMound();
+    return JSON.stringify({ size0, size: c.mound.size, gathered: Math.round(c.stats.foodGathered - g0) });
+  })()`));
+  check('NPC foragers leave the thatched mound standing', mound.size >= mound.size0 * 0.95 && mound.gathered > 0,
+    JSON.stringify(mound));
+}
 console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');
 process.exitCode = fails.length ? 1 : 0;

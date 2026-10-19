@@ -21,10 +21,13 @@ const M_CRYSTAL = 8;// diggable (buried crystals -- treasure for the colony)
 // player-built materials (never generated; appended so saves keep their bytes)
 const M_PACKED = 9; // diggable but tough (packed earth walls: several bites)
 const M_THATCH = 10;// diggable in one bite (straw and pine needles, light)
+const M_GATE = 11;  // diggable but tough like packed earth; our own ants pass
+                    // through it as if it were air, everything else is barred
 
 function DIGGABLE(m) {
   return m === M_DIRT || m === M_GRASS || m === M_LEAF || m === M_ROOT ||
-         m === M_FUNGUS || m === M_CRYSTAL || m === M_PACKED || m === M_THATCH;
+         m === M_FUNGUS || m === M_CRYSTAL || m === M_PACKED || m === M_THATCH ||
+         m === M_GATE;
 }
 
 // --- seeded rng -------------------------------------------------------------

@@ -106,7 +106,9 @@ const path = require('path');
   // --- nurse brood carry: stand on a larva, press E to lift, E to drop ---
   await page.evaluate(() => {
     const a = G.players[0].ant;
-    const b = G.brood.find(b => !b.dead);
+    // one no NPC nurse has on its back right now (or a fresh egg)
+    let b = G.brood.find(b => !b.dead && !b.carried);
+    if (!b) { b = new Brood(a.x, a.y, 'egg'); G.brood.push(b); }
     b.x = a.x + 2; b.y = a.y;
   });
   await page.keyboard.press('e');
@@ -132,8 +134,15 @@ const path = require('path');
     G.bugs.push(new Bug(col.nursery.x + 40, col.nursery.y - 10, 'centipede'));
     const nurses = G.ants.filter(a => a.playerIdx < 0 && a.caste === 'nurse');
     for (const n of nurses) { n.state = 'tend'; n.stateT = 400; n.rallyT = 0; n.x = col.nursery.x - 12; n.y = col.nursery.y - 4; }
-    return new Promise(res => setTimeout(() =>
-      res(G.ants.filter(a => a.playerIdx < 0 && a.caste === 'nurse').map(a => a.state)), 2000));
+    // some brood in the nursery to save (the queen lays by her chamber, and
+    // a nurse with nothing left to ferry goes back to tending)
+    for (const b of G.brood) if (!b.carried) { b.x = col.nursery.x; b.y = col.nursery.y; b.safeT = 0; }
+    // every state the nurses pass through in the next 2 s
+    const seen = new Set();
+    const iv = setInterval(() => {
+      for (const a of G.ants) if (a.playerIdx < 0 && a.caste === 'nurse') seen.add(a.state);
+    }, 50);
+    return new Promise(res => setTimeout(() => { clearInterval(iv); res([...seen]); }, 2000));
   });
   check('NPC nurse enters rescue', rescue.includes('rescue'));
   console.log('  nurse states:', JSON.stringify(rescue));

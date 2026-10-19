@@ -85,7 +85,11 @@ const path = require('path');
   await page.waitForTimeout(200);
   const castes = await page.evaluate(() =>
     G.takeover ? G.takeover.types.map(t => casteName(t.caste)) : []);
-  check('norwegian caste names', castes.includes('ARBEIDER') && castes.includes('DRONNING'));
+  // (the queen is never playable, so she isn't offered)
+  check('norwegian caste names', castes.includes('ARBEIDER') && castes.includes('SOLDAT') &&
+    !castes.includes('DRONNING'));
+  check('norwegian season and milestone', await page.evaluate(() =>
+    L('season_winter') === 'VINTER' && L('o_queen') === 'HOLD DRONNINGEN I LIVE'));
   await page.screenshot({ path: 'test/shot-switch-no.png' });
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);

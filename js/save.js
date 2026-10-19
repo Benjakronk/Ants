@@ -62,7 +62,8 @@ function serializeAnt(a) {
 function serializeBrood(b) {
   return {
     id: b.id, kind: b.kind, x: Math.round(b.x), y: Math.round(b.y),
-    age: b.age, feedCount: b.feedCount, hungry: b.hungry, hungerT: b.hungerT,
+    age: Math.round(b.age), feedCount: b.feedCount, hungry: b.hungry, hungerT: b.hungerT,
+    royal: b.royal || false,
   };
 }
 function serializeBug(b) {
@@ -77,6 +78,7 @@ function serializeItem(it) {
   return {
     id: it.id, kind: it.kind, x: Math.round(it.x), y: Math.round(it.y),
     value: it.value, carriedBy: it.carried ? it.carried.id : 0,
+    age: Math.round(it.age || 0),   // the rot timer (older saves: fresh)
   };
 }
 
@@ -84,10 +86,12 @@ function saveWorld(slot) {
   if (!G || !G.running) return false;
   const c = G.colony;
   // v3: chambers, building loads, surface line, packed-earth wear, build
-  // material.
-  // restoreWorld still loads v2 saves (missing fields get defaults).
+  // material. v4: the calendar (implicit in tick), milestones, crystals and
+  // upgrades, aphid shelters, fungus garden stock, royal brood, the last
+  // nuptial flight.
+  // restoreWorld still loads v2 and v3 saves (missing fields get defaults).
   const data = {
-    v: 3,
+    v: 4,
     w: WORLD_W, h: WORLD_H,
     seed: G.seed,
     tick: G.tick,
@@ -104,10 +108,17 @@ function saveWorld(slot) {
       chambers: c.chambers.map(ch => {
         const o = { id: ch.id, type: ch.type, x: ch.x, y: ch.y, area: ch.area, claimed: ch.claimed };
         if (ch.anchor) o.anchor = true;
+        if (ch.leaves) o.leaves = Math.round(ch.leaves * 10) / 10;
         return o;
       }),
       nextChamberId: c.nextChamberId,
+      crystals: c.crystals,
+      upg: Object.assign({}, c.upg),
+      shelters: c.shelters.map(sh => ({ x: sh.x, y: sh.y, t: sh.t })),
     },
+    objectives: G.objectives,
+    lastFlightYear: G.lastFlightYear,
+    flight: G.flight,
     surf: int16Encode(T.surf),
     wear: T.wearList(),
     buildMats: G.players.map(p => p.buildMat),
@@ -137,9 +148,12 @@ function slotInfo(slot) {
   if (!raw) return null;
   try {
     const d = JSON.parse(raw);
+    // (v3 and older restart the calendar: year 1, spring)
+    const day = d.v >= 4 ? d.day : 0;
     return {
-      day: d.day, ants: d.ants.length, food: Math.round(d.colony.food),
+      day, ants: d.ants.length, food: Math.round(d.colony.food),
       score: d.colony.score, playerCount: d.playerCount,
+      season: Math.floor(day / SEASON_DAYS) % 4, year: Math.floor(day / YEAR_DAYS) + 1,
     };
   } catch (e) { return null; }
 }

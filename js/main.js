@@ -13,7 +13,7 @@ const BIND = {
   up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['Tab'],
-  build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'],
+  build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'], obj: ['KeyO'],
 };
 
 // client-side state, layered onto the simulation's G
@@ -22,6 +22,10 @@ Object.assign(G, {
   slot: 1,
   msgs: [],           // on-screen messages { text, color, t }
   takeover: null,     // ant-selection overlay { types, sel, refX, refY, live }
+  objScreen: null,    // objectives / upgrades overlay { page, sel } (O)
+  flyers: [],         // princesses on their nuptial flight (animation only)
+  flightCam: null,    // the camera watches the entrance during the flight { x, y, t }
+  overSel: 0,         // end screen menu
   cam: { x: 0, y: 0 },
   stars: [],
   menuSel: 0,
@@ -115,7 +119,8 @@ function drainEvents() {
     } else if (e.t === 'sfx') {
       if (e.x == null || listenDist(e.x, e.y) < e.r) Sfx.play(e.k);
     } else if (e.t === 'fx') {
-      if (Particles[e.k] && listenDist(e.x, e.y) < 400) Particles[e.k](e.x, e.y, e.n);
+      if (e.k === 'flight') startFlightFx(e.x, e.y, e.n);
+      else if (Particles[e.k] && listenDist(e.x, e.y) < 400) Particles[e.k](e.x, e.y, e.n);
     }
   }
   G.events.length = 0;
@@ -174,7 +179,8 @@ function enterWorld(slot) {
   G.stars = [];
   const srng = mulberry32(G.seed ^ 0x5747);
   for (let i = 0; i < 140; i++) G.stars.push({ x: srng() * WORLD_W, y: srng() * 280 });
-  G.msgs = []; G.takeover = null;
+  G.msgs = []; G.takeover = null; G.objScreen = null;
+  G.flyers = []; G.flightCam = null;
   Particles.list = [];
   G.autosaveT = 7200;
   const a = localAnt();
@@ -194,21 +200,69 @@ function startSavedWorld(slot) {
 }
 
 function endWorld() {
-  G.gameOverStats = G.over;
-  deleteWorld(G.slot);
+  const o = G.over;
+  G.gameOverStats = o;
+  G.overSel = 0;
+  // after a nuptial flight the colony lives on: keep (and save) the world
+  if (o.canContinue) saveWorld(G.slot);
+  else deleteWorld(G.slot);
   G.running = false;
-  G.takeover = null;
+  G.takeover = null; G.objScreen = null;
   G.state = 'gameover';
-  Sfx.play('die');
+  Sfx.play(o.win ? 'task' : 'die');
+}
+
+// ---------------------------------------------------------------------------
+// the nuptial flight: winged princesses rise from the entrance into the sky
+// (cosmetic; the sim already took them out of the colony)
+// ---------------------------------------------------------------------------
+function startFlightFx(x, y, n) {
+  G.flyers = [];
+  for (let i = 0; i < n; i++) {
+    G.flyers.push({ x, y, delay: i * 40, t: 0, dir: i % 2 ? 1 : -1, phase: Math.random() * 6 });
+  }
+  G.flightCam = { x, y, t: FLIGHT_T };
+}
+
+function updateFlyers() {
+  for (const f of G.flyers) {
+    if (f.delay > 0) { f.delay--; continue; }
+    f.t++;
+    // a hop out of the shaft, then a climbing spiral into the sky
+    f.x += f.dir * (0.3 + Math.sin(f.t * 0.05 + f.phase) * 0.6);
+    f.y -= Math.min(0.7, 0.15 + f.t * 0.004);
+  }
+  G.flyers = G.flyers.filter(f => f.t < 360);
+}
+
+function drawFlyers(camx, camy) {
+  for (const f of G.flyers) {
+    if (f.delay > 0) continue;
+    const ex = Math.round(f.x - camx), ey = Math.round(f.y - camy);
+    const flap = (f.t >> 2) % 2;
+    ctx.fillStyle = 'rgba(235,240,255,0.8)';        // wings
+    ctx.fillRect(ex - 4, ey - 3 - flap * 2, 4, 2);
+    ctx.fillRect(ex + 1, ey - 3 - flap * 2, 4, 2);
+    ctx.fillStyle = '#b0405c';                       // body
+    ctx.fillRect(ex - 3, ey - 1, 7, 2);
+    ctx.fillStyle = '#601c30';
+    ctx.fillRect(ex + 3, ey - 1, 1, 1);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // play update
 // ---------------------------------------------------------------------------
 function updatePlay() {
-  // the ant-selection overlay owns the keys while it's open
+  // the ant-selection overlay owns the keys while it's open (and the
+  // objectives screen likewise; neither pauses the world)
   if (G.takeover) { updateTakeover(); clearInput(); }
-  else if (tookAction('swap') && localAnt()) {
+  else if (G.objScreen) { clearInput(); updateObjScreen(); }
+  else if (tookAction('obj')) {
+    G.objScreen = { page: 0, sel: 0 };
+    Sfx.play('menu');
+    clearInput();
+  } else if (tookAction('swap') && localAnt()) {
     const a = localAnt();
     if (!openTakeover(a.x, a.y, true)) pushMsg(L('m_noSwitch'), '#ff8040');
     clearInput();
@@ -219,6 +273,7 @@ function updatePlay() {
   stepSim();
   drainEvents();
   Particles.update();
+  if (G.flyers.length) updateFlyers();
 
   // messages
   for (const m of G.msgs) m.t--;
@@ -250,10 +305,20 @@ function updatePlay() {
 }
 
 function updateCamera() {
-  const a = localAnt();
-  if (!a) return;
   const p = G.cam;
   const v = playerView();
+  // the nuptial flight: everyone watches the entrance
+  const fc = G.flightCam;
+  if (fc && fc.t > 0) {
+    fc.t--;
+    p.x += (fc.x - v.vw / 2 - p.x) * 0.06;
+    p.y += (fc.y - 40 - v.vh / 2 - p.y) * 0.06;
+    p.x = Math.max(0, Math.min(WORLD_W - v.vw, p.x));
+    p.y = Math.max(0, Math.min(WORLD_H - v.vh, p.y));
+    return;
+  }
+  const a = localAnt();
+  if (!a) return;
   // focus point with a deadzone: pixel jiggle (digging, climbing) doesn't
   // shake the view; big jumps (takeover, load) snap it
   if (p.fx === undefined || Math.abs(a.x - p.fx) > 100 || Math.abs(a.y - p.fy) > 100) {
@@ -310,6 +375,129 @@ function updateTakeover() {
 }
 
 // ---------------------------------------------------------------------------
+// the objectives screen (O): page 0 the season's milestones, page 1 the
+// crystal upgrades. Like the switch overlay it never pauses the world; a
+// purchase goes to the sim through the input struct (input.buy).
+// ---------------------------------------------------------------------------
+function updateObjScreen() {
+  const os = G.objScreen;
+  if (tookAction('obj') || tookPress('Escape')) { G.objScreen = null; Sfx.play('menu'); return; }
+  if (tookPress('ArrowLeft') || tookPress('KeyA') || tookPress('ArrowRight') || tookPress('KeyD')) {
+    os.page = 1 - os.page;
+    Sfx.play('menu');
+  }
+  if (os.page !== 1) return;
+  const n = UPGRADE_IDS.length;
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { os.sel = (os.sel + n - 1) % n; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { os.sel = (os.sel + 1) % n; Sfx.play('menu'); }
+  if (tookPress('Enter') || tookPress('Space')) G.players[LOCAL].input.buy = UPGRADE_IDS[os.sel];
+}
+
+const SEASON_ICON = ['\x18', '\x04', '\x17', '\x16'];
+
+function seasonName(s) { return L('season_' + SEASON_KEYS[s]); }
+
+// a milestone's progress as shown: n/need, a percentage, or a check mark
+function objProgress(o) {
+  if (o.done) return '\x19';
+  const def = objDef(o.id);
+  if (def && def.pct) return Math.floor(100 * Math.min(1, o.n / o.need)) + '%';
+  return Math.floor(o.n) + '/' + o.need;
+}
+
+function drawObjScreen() {
+  const os = G.objScreen;
+  const col = G.colony;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  // the world runs on under the panel: a hurt (or freezing) ant flashes it red
+  const me = localAnt();
+  if (me && me.flash > 0) {
+    ctx.fillStyle = '#e03020';
+    ctx.fillRect(8, 18, 304, 158);
+  }
+  bevelPanel(10, 20, 300, 154);
+  const title = os.page === 0 ? L('ui_objectives') : L('ui_upgrades');
+  drawTextCS(ctx, title, VIEW_W / 2, 26, '#ffa040');
+  drawText(ctx, '<', 18, 26, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
+  drawText(ctx, '>', 297, 26, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
+  drawText(ctx, (os.page + 1) + '/2', 270, 26, '#706050');
+
+  if (os.page === 0) {
+    const s = G.season;
+    drawText(ctx, SEASON_ICON[s] + ' ' + L('ui_seasonYear', seasonName(s), G.year), 20, 40, SEASON_COLOR[s]);
+    const left = SEASON_DAYS - G.seasonDay;
+    const ls = left <= 1 ? L('ui_lastDay') : L('ui_daysLeft', left);
+    drawText(ctx, ls, 300 - textWidth(ls), 40, '#c8b890');
+    let y = 56;
+    for (const o of G.objectives.list) {
+      const def = objDef(o.id);
+      drawText(ctx, o.done ? '\x19' : '-', 20, y, o.done ? '#80ff80' : '#a09070');
+      drawText(ctx, objName(o), 30, y, o.done ? '#80ff80' : '#e8e0c8');
+      const pr = objProgress(o);
+      drawText(ctx, pr, 300 - textWidth(pr), y, o.done ? '#80ff80' : '#ffe080');
+      // a food goal the stores can't hold yet says so (taking turns with
+      // the end-of-season note)
+      const capped = !o.done && FOOD_GOALS.includes(o.id) && col.caps && o.need > col.caps.food;
+      const atEnd = def && def.kind === 'end' && !o.done;
+      if (capped && (!atEnd || (G.frame >> 7) % 2)) {
+        drawText(ctx, L('ui_storeCap', col.caps.food), 30, y + 9, '#ff9040');
+        y += 9;
+      } else if (atEnd) {
+        drawText(ctx, L('ui_atEnd'), 30, y + 9, '#806e58');
+        y += 9;
+      }
+      y += 14;
+    }
+    y = Math.max(y, 108);
+    drawText(ctx, L('ui_mound', col.mound.size), 20, y, '#d8b860');
+    const seal = col.sealed ? L('ui_sealed') : L('ui_open');
+    drawText(ctx, seal, 300 - textWidth(seal), y, col.sealed ? '#80ff80' : '#ff9040');
+    drawText(ctx, L('ui_crystals', col.crystals), 20, y + 12, '#80e0ff');
+    const ms = L('ui_milestones', G.objectives.yearDone);
+    drawText(ctx, ms, 300 - textWidth(ms), y + 12, '#ffe040');
+    // the next flight: this spring's if it hasn't flown yet, else next year's
+    const flightYear = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year ? G.year : G.year + 1;
+    drawTextC(ctx, L('ui_yearGoal', flightYear), VIEW_W / 2, y + 28, '#ff90e0');
+    drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 162, '#a09070');
+  } else {
+    drawText(ctx, '\x13 ' + L('ui_crystals', col.crystals), 20, 40, '#80e0ff');
+    for (let i = 0; i < UPGRADE_IDS.length; i++) {
+      const id = UPGRADE_IDS[i];
+      const y = 58 + i * 16;
+      const sel = i === os.sel;
+      const lv = col.upg[id] || 0;
+      if (sel) drawText(ctx, '\x06', 18, y, '#ffe040');
+      drawText(ctx, L('up_' + id), 28, y, sel ? '#ffe040' : '#e8e0c8');
+      for (let k = 0; k < UPGRADES[id].length; k++) {     // level pips
+        ctx.fillStyle = k < lv ? '#80e0ff' : '#2a1c10';
+        ctx.fillRect(176 + k * 9, y, 7, 7);
+      }
+      const cost = col.upgradeCost(id);
+      const cs = cost === Infinity ? L('ui_max') : '\x13' + cost;
+      drawText(ctx, cs, 300 - textWidth(cs), y,
+        cost === Infinity ? '#80ff80' : cost <= col.crystals ? '#80e0ff' : '#806e58');
+    }
+    drawTextC(ctx, L('upd_' + UPGRADE_IDS[os.sel]), VIEW_W / 2, 128, '#c8b890');
+    drawTextC(ctx, L('ui_upgKeys'), VIEW_W / 2, 162, '#a09070');
+  }
+  // the newest message (a purchase, a refusal, the cold) would hide under
+  // the panel: a status line shows it here
+  const m = G.msgs[G.msgs.length - 1];
+  if (m) {
+    ctx.globalAlpha = Math.min(1, m.t / 60);
+    drawTextC(ctx, m.text, VIEW_W / 2, 150, m.color);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// milestones whose goal is food in the stores
+const FOOD_GOALS = ['food100', 'stockpile'];
+
+// a milestone's name, with its (yearly growing) target
+function objName(o) { return L('o_' + o.id, o.need); }
+
+// ---------------------------------------------------------------------------
 // rendering
 // ---------------------------------------------------------------------------
 const canvas = document.getElementById('game');
@@ -341,6 +529,85 @@ function skyColor(tod) {
   return stops[1][1];
 }
 
+// the sky's season: a fresh spring, a warm autumn, a pale grey winter
+const SKY_TINT = [[1.0, 1.04, 1.0], [1, 1, 1], [1.1, 0.94, 0.82], [0.9, 0.93, 1.0]];
+function seasonSky(c) {
+  const t = SKY_TINT[G.season];
+  let r = c[0] * t[0], g = c[1] * t[1], b = c[2] * t[2];
+  if (G.season === WINTER) {
+    const l = (r + g + b) / 3;
+    r += (l - r) * 0.4; g += (l - g) * 0.4; b += (l - b) * 0.4;
+  }
+  return [Math.min(255, r) | 0, Math.min(255, g) | 0, Math.min(255, b) | 0];
+}
+
+// winter: snow drifts on the ground (drawn, never terrain) and flakes falling
+function drawSnow(camx, camy, vw, vh) {
+  ctx.fillStyle = '#eef2f8';
+  for (let i = 0; i < vw; i++) {
+    const x = camx + i;
+    if (x < 0 || x >= WORLD_W) continue;
+    const s = T.surf[x];
+    if (s > T.bgSurf[x] + 2 || T.m[(s - 1) * WORLD_W + x] !== M_AIR) continue; // a pit, or built over
+    const ey = s - camy;
+    if (ey < -2 || ey > vh) continue;
+    const th = 1 + (pxHash(x, 77) % 3 === 0 ? 1 : 0);
+    ctx.fillRect(i, ey - th, 1, th);
+  }
+  ctx.fillStyle = '#ffffff';
+  for (let k = 0; k < 60; k++) {
+    const h = pxHash(k, 1234);
+    const fx = ((h % 997) + G.tick * (0.15 + (h % 5) * 0.04) + Math.sin(G.tick * 0.02 + k) * 6) % vw;
+    const fy = ((h >> 10) % 613 + G.tick * (0.25 + (h % 7) * 0.05)) % vh;
+    const wx = Math.floor(camx + fx);
+    if (wx < 0 || wx >= WORLD_W || camy + fy >= T.bgSurf[wx]) continue;  // only in the open air
+    ctx.fillRect(Math.floor(fx), Math.floor(fy), 1, 1);
+  }
+}
+
+// aphid shelters (a few aphids grazing under the thatch) and fungus gardens
+// (mushrooms on the floor, more with a bigger leaf stock)
+function drawStructures(camx, camy, vw, vh) {
+  const col = G.colony;
+  for (const sh of col.shelters) {
+    const ex = Math.round(sh.x - camx), ey = Math.round(sh.y - camy);
+    if (ex < -24 || ex > vw + 24 || ey < -24 || ey > vh + 10) continue;
+    // a signpost with an aphid on its plaque, off to the side
+    const sx = ex - 12;
+    ctx.fillStyle = '#5a3e22';
+    ctx.fillRect(sx, ey - 4, 1, 7);
+    ctx.fillStyle = '#7a6044';
+    ctx.fillRect(sx - 4, ey - 13, 9, 9);
+    ctx.fillStyle = '#2a1c10';
+    ctx.fillRect(sx - 3, ey - 12, 7, 7);
+    ctx.fillStyle = G.isWinter() ? '#708060' : '#8cc85a';
+    ctx.fillRect(sx - 2, ey - 9, 5, 3);
+    ctx.fillRect(sx - 1, ey - 10, 3, 1);
+    // the herd grazing (huddled and still in winter)
+    for (const o of [-6, -1, 4, 8]) {
+      const bob = G.isWinter() ? 0 : ((G.tick >> 5) + o) & 1;
+      ctx.fillStyle = '#8cc85a';
+      ctx.fillRect(ex + o - 1, ey + 1 - bob, 3, 2);
+      ctx.fillStyle = '#2a3a1a';
+      ctx.fillRect(ex + o + 1, ey + 1 - bob, 1, 1);
+    }
+  }
+  for (const ch of col.chambers) {
+    if (ch.type !== 'fungus' || !(ch.leaves > 0)) continue;
+    const ex = Math.round(ch.x - camx), fy = Math.round(chamberFloor(ch) - camy);
+    if (ex < -40 || ex > vw + 40 || fy < -10 || fy > vh + 20) continue;
+    const n = Math.min(8, Math.ceil(ch.leaves / 5));
+    for (let i = 0; i < n; i++) {
+      const mx = ex - 14 + (pxHash(ch.id, i) % 29);
+      if (Math.abs(mx - ex) < 3) continue;  // keep clear of the sign's stake
+      ctx.fillStyle = '#96b292';
+      ctx.fillRect(mx, fy - 1, 1, 2);
+      ctx.fillStyle = '#c8ecd0';
+      ctx.fillRect(mx - 1, fy - 2, 3, 1);
+    }
+  }
+}
+
 function drawViewport(vx, vy, vw, vh) {
   ctx.save();
   ctx.beginPath();
@@ -353,7 +620,7 @@ function drawViewport(vx, vy, vw, vh) {
   const tod = G.tod();
 
   // sky
-  const sc = skyColor(tod);
+  const sc = seasonSky(skyColor(tod));
   ctx.fillStyle = `rgb(${sc[0]},${sc[1]},${sc[2]})`;
   ctx.fillRect(0, 0, vw, vh);
 
@@ -393,6 +660,8 @@ function drawViewport(vx, vy, vw, vh) {
   // world
   ctx.drawImage(TerrainView.bgCan, camx, camy, vw, vh, 0, 0, vw, vh);
   ctx.drawImage(TerrainView.terCan, camx, camy, vw, vh, 0, 0, vw, vh);
+  if (G.season === WINTER) drawSnow(camx, camy, vw, vh);
+  drawStructures(camx, camy, vw, vh);
 
   // the food cache, piled by prosperity
   const col = G.colony;
@@ -427,6 +696,7 @@ function drawViewport(vx, vy, vw, vh) {
   for (const pp of G.players) if (pp.ant) pp.ant.draw(ctx, camx, camy);
 
   Particles.draw(ctx, camx, camy);
+  if (G.flyers.length) drawFlyers(camx, camy);
 
   // while building, show where the stamp will land (a red x: nowhere)
   const pl = G.players[LOCAL];
@@ -447,15 +717,18 @@ function drawViewport(vx, vy, vw, vh) {
     }
   }
 
-  // darkness: depth + night, with a pool of sight around your ant
-  if (me) {
-    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, me.x)));
-    const depth = Math.max(0, me.y - T.bgSurf[sx]);
+  // darkness: depth + night, with a pool of sight around your ant -- or,
+  // while the nuptial flight plays, around the entrance the camera watches
+  const fc = G.flightCam && G.flightCam.t > 0 ? G.flightCam : null;
+  if (me || fc) {
+    const lx = fc ? fc.x : me.x, ly = fc ? fc.y - 30 : me.y;
+    const sx = Math.floor(Math.max(0, Math.min(WORLD_W - 1, lx)));
+    const depth = Math.max(0, ly - T.bgSurf[sx]);
     let amb = Math.min(0.86, depth / 90 * 0.86);
     if (G.isNight()) amb = Math.max(amb, 0.55);
     else if (tod > 0.62) amb = Math.max(amb, (tod - 0.62) / 0.08 * 0.4);
     if (amb > 0.03) {
-      const px2 = Math.round(me.x - camx), py2 = Math.round(me.y - camy);
+      const px2 = Math.round(lx - camx), py2 = Math.round(ly - camy);
       const grad = ctx.createRadialGradient(px2, py2, 18, px2, py2, 90);
       grad.addColorStop(0, 'rgba(4,2,8,0)');
       grad.addColorStop(0.7, `rgba(4,2,8,${amb * 0.55})`);
@@ -463,7 +736,10 @@ function drawViewport(vx, vy, vw, vh) {
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, vw, vh);
     }
-    drawChamberLabels(camx, camy, me, markCh);
+    if (me) {
+      drawChamberLabels(camx, camy, me, markCh);
+      drawShelterLabel(camx, camy, me);
+    }
   }
 
   ctx.restore();
@@ -477,6 +753,7 @@ const CH_LOOK = {
   nursery:  { icon: '\x0E', color: '#efe9d8' },
   barracks: { icon: '\x12', color: '#e07050' },
   royal:    { icon: '\x11', color: '#ff90e0' },
+  fungus:   { icon: '\x14', color: '#a8d4b2' },
 };
 
 // the floor under a marker (markers sit at a chamber's middle)
@@ -525,6 +802,21 @@ function drawChamberLabels(camx, camy, me, target) {
   if (chamberCramped(ch)) drawTextCS(ctx, L('w_cramped'), ex, ey - 34, '#ff5040');
 }
 
+// an aphid shelter near the player's ant: its name, and whether it sleeps
+// (winter) or is short of thatch (it falls apart below half the need)
+function drawShelterLabel(camx, camy, me) {
+  const col = G.colony;
+  const sh = col.shelters.find(s => Math.abs(s.x - me.x) < 60 && Math.abs(s.y - me.y) < 40);
+  if (!sh) return;
+  const ex = Math.round(sh.x - 12 - camx), ey = Math.round(sh.y - camy);
+  drawTextCS(ctx, L('ui_shelter'), ex, ey - 24, '#8cc85a');
+  if (col.thatchNear(sh.x, sh.y, SHELTER_R) < SHELTER_THATCH) {
+    if ((G.frame >> 4) % 2) drawTextCS(ctx, L('ui_shelterWeak'), ex, ey - 33, '#ff5040');
+  } else if (G.isWinter()) {
+    drawTextCS(ctx, L('ui_shelterIdle'), ex, ey - 33, '#a0c0e0');
+  }
+}
+
 function bevelPanel(x, y, w, h) {
   ctx.fillStyle = '#4a3826';
   ctx.fillRect(x, y, w, h);
@@ -536,11 +828,11 @@ function bevelPanel(x, y, w, h) {
   ctx.fillRect(x + w - 1, y, 1, h);
 }
 
-function drawHpBar(x, y, w, pct) {
+function drawHpBar(x, y, w, pct, color) {
   ctx.fillStyle = '#1a1008';
   ctx.fillRect(x, y, w, 5);
   const fw = Math.max(0, Math.round((w - 2) * pct));
-  ctx.fillStyle = pct > 0.5 ? '#40c040' : pct > 0.25 ? '#e0c020' : '#e03020';
+  ctx.fillStyle = color || (pct > 0.5 ? '#40c040' : pct > 0.25 ? '#e0c020' : '#e03020');
   ctx.fillRect(x + 1, y + 1, fw, 3);
 }
 
@@ -568,13 +860,15 @@ function drawHud() {
   const px2 = 4;
   drawText(ctx, 'P1', px2, y + 4, '#ffe080');
   if (me) {
-    drawHpBar(px2 + 14, y + 5, 40, Math.max(0, me.hp / me.maxHp));
+    // out in the winter cold: the bar frosts over (blinking)
+    const freezing = G.isWinter() && !col.sheltered(me) && (G.frame >> 3) % 2;
+    drawHpBar(px2 + 14, y + 5, 40, Math.max(0, me.hp / me.maxHp), freezing ? '#a0d8ff' : null);
     drawText(ctx, casteName(me.caste), px2 + 14, y + 14, '#b0a080');
     if (me.carry) {
       drawItem(ctx, { kind: me.carry.kind, x: 0, y: 0 },
         -(px2 + 62), -(y + 8));
     }
-    // building loads: soil above, thatch below
+    // building loads: soil above (packed earth and gates), thatch below
     const thatchSel = pl.buildMat === M_THATCH;
     drawText(ctx, '\x0F', 74, y + 4, thatchSel ? '#806040' : '#c08850');
     drawLoadBar(81, y + 5, 28, me.soil / LOAD_CAP, '#a06a3c', !thatchSel);
@@ -594,12 +888,14 @@ function drawHud() {
   drawText(ctx, '\x0E' + brood + '/' + caps.brood, 116, y + 14, brood >= caps.brood ? '#ff9040' : '#d0c8b0');
   drawText(ctx, '\x03' + food + '/' + caps.food, 162, y + 4, food >= caps.food ? '#ff9040' : '#d8b878');
   drawText(ctx, L('w_score') + ' ' + col.score, 162, y + 14, '#a0c8a0');
-  drawText(ctx, (G.isNight() ? '\x05' : '\x04') + L('w_day') + ' ' + (G.day + 1), 234, y + 4, '#c0c0d8');
+  drawText(ctx, SEASON_ICON[G.season] + L('ui_seasonDay', seasonName(G.season), G.seasonDay + 1), 234, y + 4,
+    G.isNight() ? '#9090b8' : SEASON_COLOR[G.season]);
   if (me) drawText(ctx, L(buildMatKey(pl.buildMat)), 234, y + 14, '#a09070');
 }
 
 function drawTaskAndMsgs() {
   // current task, top left
+  let ty = 3;
   const t = G.colony.tasks.find(t => !t.done) || G.colony.tasks.find(t => t.done && t.doneT > 0);
   if (t) {
     let str;
@@ -607,11 +903,23 @@ function drawTaskAndMsgs() {
     else if (t.type === 'dig') str = taskText(t) + ' ' + Math.floor(t.n) + '/' + t.need;
     else str = taskText(t) + ' ' + t.n + '/' + t.need;
     const blink = t.done && (G.tick >> 3) % 2;
-    if (!blink) drawTextS(ctx, str, 4, 3, t.done ? '#ffe040' : '#a8e8a0');
+    if (!blink) drawTextS(ctx, str, 4, ty, t.done ? '#ffe040' : '#a8e8a0');
+    ty += 10;
+  }
+  // the season's next milestone, one line (O shows them all)
+  // crystals, top right
+  const cs = '\x13' + G.colony.crystals;
+  drawTextS(ctx, cs, VIEW_W - 5 - textWidth(cs), 3, '#80e0ff');
+  const o = G.objectives && G.objectives.list.find(o => !o.done);
+  if (o) {
+    // with the key that opens the full list, where it fits
+    let str = '\x06' + objName(o) + ' ' + objProgress(o);
+    if (4 + textWidth(str + ' (O)') < VIEW_W - 12 - textWidth(cs)) str += ' (O)';
+    drawTextS(ctx, str, 4, ty, '#ffd890');
   }
 
   // messages
-  let my = 14;
+  let my = 24;
   for (const m of G.msgs) {
     ctx.globalAlpha = Math.min(1, m.t / 60);
     drawTextCS(ctx, m.text, VIEW_W / 2, my, m.color);
@@ -637,6 +945,14 @@ function drawMinimap() {
     ctx.fillStyle = chamberCramped(ch) && (G.frame >> 4) % 2 ? '#ff4030' : CH_LOOK[ch.type].color;
     ctx.fillRect(cx - 1, cy - 1, 2, 2);
   }
+  // aphid shelters: green dots
+  for (const sh of G.colony.shelters) {
+    const cx = Math.round(mx + sh.x * sx), cy = Math.round(my + sh.y * sy);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(cx - 2, cy - 2, 4, 4);
+    ctx.fillStyle = '#8cc85a';
+    ctx.fillRect(cx - 1, cy - 1, 2, 2);
+  }
   for (const a of G.ants) {
     if (a.hp <= 0) continue;
     ctx.fillStyle = a.playerIdx === 0 ? '#ffff40' : a.playerIdx === 1 ? '#40d0ff'
@@ -656,11 +972,13 @@ function playerView() {
 }
 
 function drawPlay() {
+  if (TerrainView.season !== G.season) TerrainView.setSeason(G.season, G.cam.x);
   TerrainView.flush();
   drawViewport(0, 0, VIEW_W, VIEW_H - HUD_H);
   drawHud();
   drawTaskAndMsgs();
   if (G.showMap) drawMinimap();
+  if (G.objScreen) drawObjScreen();
   if (G.takeover) drawTakeover();
 }
 
@@ -826,6 +1144,7 @@ function updateIntro() {
   if (tookPress('Space') || tookPress('Enter')) {
     G.state = 'play';
     pushMsg(L('m_gather'), '#80ff80');
+    pushMsg(L('m_objHint'), '#ffd890');
     Sfx.play('select');
   }
 }
@@ -834,10 +1153,10 @@ function drawHelp() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   drawTextCS(ctx, L('ui_howto'), VIEW_W / 2, 12, '#ffa040', 2);
-  let y = 40;
+  let y = 32;
   for (const [line, color] of helpText()) {
     if (line) drawText(ctx, line, 24, y, color);
-    y += 11;
+    y += 10;
   }
   drawTextC(ctx, L('ui_escBack'), VIEW_W / 2, 186, '#706050');
 }
@@ -923,29 +1242,87 @@ function drawTakeover() {
     VIEW_W / 2, 160, '#a09070');
 }
 
+// three big pixel stars, earned ones in gold
+function drawStars(n, y) {
+  for (let i = 0; i < 3; i++) {
+    const x = VIEW_W / 2 - 34 + i * 24;
+    drawText(ctx, '\x15', x + 1, y + 1, '#000000', 3);
+    drawText(ctx, '\x15', x, y, i < n ? '#ffd030' : '#3a2c1c', 3);
+  }
+}
+
 function drawGameOver() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const s = G.gameOverStats;
-  drawTextCS(ctx, L('ui_gameover1'), VIEW_W / 2, 24, '#ff5040', 2);
-  drawTextCS(ctx, L('ui_gameover2'), VIEW_W / 2, 42, '#ff5040', 2);
-  if (s) {
+  if (s && s.canContinue) {
+    // the year's end: a nuptial flight (or none)
+    if (s.win) {
+      drawTextCS(ctx, L('ui_winTitle'), VIEW_W / 2, 16, '#ff90e0', 2);
+    } else {
+      drawTextCS(ctx, L('ui_noFlight1'), VIEW_W / 2, 10, '#e0c080', 2);
+      drawTextCS(ctx, L('ui_noFlight2'), VIEW_W / 2, 28, '#e0c080', 2);
+    }
+    drawStars(s.stars, 48);
     const lines = [
-      [L('ui_survived', s.day + 1), '#c8b890'],
+      [L(s.reason, s.flown), s.win ? '#ffd0f0' : '#c8b890'],
+      [L('ui_milestones', s.milestones), '#ffe040'],
+      [L('ui_colonySize', s.pop || 0), '#c8b890'],
       [L('ui_finalScore', s.score), '#ffe040'],
       [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],
-      [L('ui_tasksDone', s.stats.tasksDone), '#a09070'],
+      [L('ui_antsBorn', s.stats.antsBorn), '#a09070'],
+    ];
+    let y = 78;
+    for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 11; }
+    const items = [L('ui_continue'), L('ui_toTitle')];
+    for (let i = 0; i < items.length; i++) {
+      const sel = i === G.overSel;
+      const iy = 152 + i * 12;
+      if (sel) drawText(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, iy, '#ffe040');
+      drawTextCS(ctx, items[i], VIEW_W / 2, iy, sel ? '#ffe040' : '#c8b890');
+    }
+    return;
+  }
+  drawTextCS(ctx, L('ui_gameover1'), VIEW_W / 2, 20, '#ff5040', 2);
+  drawTextCS(ctx, L('ui_gameover2'), VIEW_W / 2, 38, '#ff5040', 2);
+  if (s) {
+    const lines = [
+      [L(s.reason || 'r_extinct'), '#ff9070'],
+      [L('ui_survived', s.day + 1), '#c8b890'],
+      [L('ui_finalScore', s.score), '#ffe040'],
+      [L('ui_milestones', s.milestones || 0), '#a09070'],
+      [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],
       [L('ui_antsBorn', s.stats.antsBorn), '#a09070'],
       [L('ui_antsLost', s.stats.antsDied), '#a09070'],
       [L('ui_predSlain', s.stats.predatorsSlain), '#a09070'],
     ];
-    let y = 74;
+    let y = 64;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
   }
   if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
 }
 
 function updateGameOver() {
+  const s = G.gameOverStats;
+  if (s && s.canContinue) {
+    // continue into the next year, or leave the (saved) world for now
+    const n = 2;
+    if (tookPress('ArrowUp') || tookPress('KeyW')) { G.overSel = (G.overSel + n - 1) % n; Sfx.play('menu'); }
+    if (tookPress('ArrowDown') || tookPress('KeyS')) { G.overSel = (G.overSel + 1) % n; Sfx.play('menu'); }
+    if (tookPress('Enter') || tookPress('Space')) {
+      Sfx.play('select');
+      if (G.overSel === 0) {
+        continueYear();
+        G.running = true;
+        G.state = 'play';
+        G.flyers = []; G.flightCam = null;
+        clearInput();
+      } else {
+        G.state = 'title'; G.menuSel = 0;
+      }
+    }
+    return;
+  }
   if (tookPress('Enter') || tookPress('Space') || tookPress('Escape')) {
     G.state = 'title'; G.menuSel = 0;
     Sfx.play('select');

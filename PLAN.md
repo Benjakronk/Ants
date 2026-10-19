@@ -96,6 +96,20 @@ that march out from their own nest. This is also the foundation for versus.
    areas drive food/brood/population/egg-rate caps, save v3). Thatch is plain
    building material for now; its mound warmth effect moves to Phase 2.
 2. **Seasons, objectives, the real rival colony, queen rules, crystal upgrades.**
+   - **2a done:** calendar from `G.tick` (3-day seasons, 48-min year), season
+     effects (food, winter cold, centipedes, slow queen, client tint + snow),
+     12 milestones + `O` screen, unplayable queen, princesses, succession and
+     loss, nuptial flight with stars and CONTINUE, crystals as currency with 4
+     upgrades (`input.buy`), ant gate (`M_GATE`), thatched mound, aphid
+     shelters, fungus gardens, save v4. Fixed the forage stall (surface line
+     and entrance anchor sinking down the shaft, map-wide spawn caps) and a
+     fight leash. After review: NPCs spare built thatch/walls (`spare` in
+     `T.dig`), nurses feed larvae lying by the queen (idle colonies grow
+     again), the sealed-winter milestone counts, milestone targets grow each
+     year, princesses stay out of fights. Moved on: a contested food site milestone and the rival
+     status in the stars go to 2b with the real rival; the objective arrow
+     and HUD rework stay in 3; legacy points / persistent-world years in 4.
+   - **2b:** the real rival `Colony` (`G.colonies`), red queen, raids.
 3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing.
 4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus.
 5. **Deploy to the VPS.**

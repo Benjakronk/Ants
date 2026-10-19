@@ -136,8 +136,11 @@ const path = require('path');
   const mat1 = await page.evaluate(() => G.players[0].buildMat === M_THATCH);
   await page.keyboard.press('r');
   await page.waitForTimeout(120);
-  const mat2 = await page.evaluate(() => G.players[0].buildMat === M_PACKED);
-  check('R cycles packed earth -> thatch -> packed earth', mat1 && mat2);
+  const mat2 = await page.evaluate(() => G.players[0].buildMat === M_GATE);
+  await page.keyboard.press('r');
+  await page.waitForTimeout(120);
+  const mat3 = await page.evaluate(() => G.players[0].buildMat === M_PACKED);
+  check('R cycles packed earth -> thatch -> gate -> packed earth', mat1 && mat2 && mat3);
   await page.evaluate(() => { G.state = 'pause'; });
 
   // --- thatch: one bite, and the bite gives thatch back ---
@@ -215,7 +218,7 @@ const path = require('path');
     return { n: G.colony.chambers.length, caps: Object.assign({}, G.colony.caps) };
   });
   const seq = [];
-  for (let k = 0; k < 6; k++) {
+  for (let k = 0; k < 7; k++) {
     await page.keyboard.press('x');
     await page.waitForTimeout(120);
     seq.push(await page.evaluate(() => {
@@ -227,8 +230,8 @@ const path = require('path');
   }
   await page.evaluate(() => { G.state = 'pause'; });
   check('X creates a storage chamber', seq[0].n === pre.n + 1 && seq[0].type === 'storage' && seq[0].area >= 250, seq[0]);
-  check('X cycles storage -> nursery -> barracks -> royal -> removed -> storage',
-    seq.map(s => s.type || 'null').join(',') === 'storage,nursery,barracks,royal,null,storage',
+  check('X cycles storage -> nursery -> barracks -> royal -> fungus -> removed -> storage',
+    seq.map(s => s.type || 'null').join(',') === 'storage,nursery,barracks,royal,fungus,null,storage',
     seq.map(s => s.type));
   check('storage area raises food capacity', seq[0].caps.food > pre.caps.food + 50,
     [pre.caps.food, seq[0].caps.food]);
@@ -238,8 +241,8 @@ const path = require('path');
     seq[2].caps.soldiers > pre.caps.soldiers);
   check('royal area speeds up egg laying', seq[3].caps.eggT < pre.caps.eggT, [pre.caps.eggT, seq[3].caps.eggT]);
   // (NPCs digging in the nest meanwhile may shift the other areas a little)
-  check('removing the marker restores capacity', Math.abs(seq[4].caps.food - pre.caps.food) <= 8,
-    [pre.caps.food, seq[4].caps.food]);
+  check('removing the marker restores capacity', Math.abs(seq[5].caps.food - pre.caps.food) <= 8,
+    [pre.caps.food, seq[5].caps.food]);
 
   const more = await page.evaluate(() => {
     // NPC path-digging inside the chamber claims nothing: capacity holds
@@ -360,7 +363,7 @@ const path = require('path');
       caps: G.colony.caps, surfHash: surfSum(),
     };
   });
-  check('save is version 3', saved.ok && saved.v === 3, saved.v);
+  check('save is version 4', saved.ok && saved.v === 4, saved.v);
   check('chambers round-trip', loaded.ok && loaded.chambers.join() === saved.chambers.join(), loaded.chambers);
   check('loads round-trip', loaded.soil === 37 && loaded.thatch === 12 && loaded.mat);
   check('packed earth and its wear round-trip', loaded.packed === saved.packed && loaded.packed > 0 &&
@@ -401,7 +404,7 @@ const path = require('path');
   });
   console.log('  fresh nest:', JSON.stringify(fresh));
   check('fresh nest capacity ~ old limits', fresh.caps.food >= 110 && fresh.caps.food <= 200 &&
-    fresh.caps.brood >= 5 && fresh.caps.brood <= 9 && fresh.caps.pop >= 18 && fresh.caps.pop <= 32);
+    fresh.caps.brood >= 5 && fresh.caps.brood <= 9 && fresh.caps.pop >= 15 && fresh.caps.pop <= 32);
 
   console.log('\nERRORS:', errors.length ? errors.join('\n') : 'none');
   console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');

@@ -18,11 +18,19 @@ const G = {
   colony: null,
   rival: null,        // rival red-ant nest { x, entrance, ... } (terrain + defenders)
   events: [],         // outgoing: { t: 'msg'|'sfx'|'fx', ... }, drained by the client
-  over: null,         // set when the colony is extinct: { day, score, stats }
+  over: null,         // set when the year ends: { win, reason, stars, day, score, stats, ... }
+  objectives: null,   // this season's milestones (see colony.js)
+  flight: null,       // the nuptial flight under way: { t, n, stars, milestones, pop }
+  lastFlightYear: 0,  // the year of the last nuptial flight (one per spring)
 
   get day() { return Math.floor(this.tick / DAY_LEN); },
   tod() { return (this.tick % DAY_LEN) / DAY_LEN; },
   isNight() { return this.tod() >= 0.7; },
+  // the calendar: 0 spring, 1 summer, 2 autumn, 3 winter; years count from 1
+  get season() { return Math.floor(this.day / SEASON_DAYS) % 4; },
+  get year() { return Math.floor(this.day / YEAR_DAYS) + 1; },
+  get seasonDay() { return this.day % SEASON_DAYS; },   // 0-based day within the season
+  isWinter() { return this.season === WINTER; },
 
   // a message by string key (translated by the client). args may hold name
   // tokens like { caste } or { bug }. `to` = a player index, or omit for all.
@@ -84,15 +92,15 @@ const G = {
 
 function newInput() {
   // dx/dy/bite/build are held state; act/abil/buildMat/mark are one-shot
-  // presses the sim consumes
+  // presses the sim consumes; buy is a one-shot upgrade id (or null)
   return {
     dx: 0, dy: 0, bite: false, act: false, abil: false,
-    build: false, buildMat: false, mark: false,
+    build: false, buildMat: false, mark: false, buy: null,
   };
 }
 
-// what the build key places, in cycle order
-const BUILD_MATS = [M_PACKED, M_THATCH];
+// what the build key places, in cycle order (gates cost soil)
+const BUILD_MATS = [M_PACKED, M_THATCH, M_GATE];
 const BUILD_R = 2.5, BUILD_CD = 8;
 
 function newPlayer(ant) {
@@ -102,7 +110,7 @@ function newPlayer(ant) {
   // this many ticks) just put the item down
   return {
     ant, input: newInput(), deathPos: null, buildMat: M_PACKED, buildWarned: false,
-    buildFailT: 0, refuseT: 0,
+    buildFailT: 0, refuseT: 0, coldT: 0,
   };
 }
 
@@ -118,6 +126,8 @@ function resetWorldState(world, seed) {
   G.ants = []; G.brood = []; G.bugs = []; G.items = [];
   G.pheromones = []; G.events = []; G.over = null;
   G.players = [];
+  G.flight = null; G.lastFlightYear = 0;
+  G.objectives = null;
 }
 
 function newWorld(seed, playerCount) {
@@ -183,6 +193,7 @@ function newWorld(seed, playerCount) {
   }
 
   G.colony.recalcChambers();
+  G.objectives = newObjectives(G.year, G.season, 0);
   G.running = true;
 }
 
@@ -194,7 +205,10 @@ function restoreWorld(d, playerCount) {
   const world = genWorld(d.seed);
   world.m = rleDecode(d.terrain, WORLD_W * WORLD_H);
   resetWorldState(world, d.seed);
-  G.tick = d.tick;
+  const v = d.v || 2;
+  // v3 and older had no calendar: their colony starts the year now, on the
+  // first day of spring (keeping the time of day)
+  G.tick = v >= 4 ? d.tick : d.tick % DAY_LEN;
   // v2 saves have no chambers: the generated nest's markers (made by the
   // Colony constructor) stand in for them. Chambers without `claimed` get
   // their current area as claimed on the recount below.
@@ -206,8 +220,26 @@ function restoreWorld(d, playerCount) {
   }
   G.colony.nextChamberId = Math.max(G.colony.nextChamberId || 1,
     ...G.colony.chambers.map(c => c.id + 1));
-  // the surface line as dug and built (v2 saves: the generated one)
+  // v4: crystals as currency, upgrades, aphid shelters, the calendar's
+  // milestones (older saves: none of any yet, and day counters restart)
+  const col = G.colony;
+  col.crystals = Math.max(0, Math.floor(Number(d.colony.crystals) || 0));
+  const upg = d.colony.upg || {};
+  col.upg = {};
+  for (const id of UPGRADE_IDS) col.upg[id] = Math.max(0, Math.min(UPGRADES[id].length, Math.floor(Number(upg[id]) || 0)));
+  col.shelters = Array.isArray(d.colony.shelters) ? d.colony.shelters.map(sh => ({ x: sh.x, y: sh.y, t: sh.t || SHELTER_T })) : [];
+  col.stats = Object.assign(new Colony(world.colony).stats, d.colony.stats || {});
+  for (const ch of col.chambers) if (!CH_TYPES.includes(ch.type)) ch.type = 'storage';
+  if (v < 4) col.lastDigTaskDay = col.lastRaidDay = col.lastCrystalTaskDay = 0;
+  const ob = d.objectives;
+  G.objectives = v >= 4 && ob && Array.isArray(ob.list) && ob.year === G.year && ob.season === G.season
+    ? ob : newObjectives(G.year, G.season, ob && ob.year === G.year ? ob.yearDone : 0);
+  G.lastFlightYear = d.lastFlightYear || 0;
+  G.flight = d.flight || null;
+  // the surface line as dug and built (v2 saves: the generated one). Older
+  // builds let it sink down open shafts: hold it to a shallow scrape.
   if (d.surf) T.surf.set(int16Decode(d.surf, WORLD_W));
+  for (let x = 0; x < WORLD_W; x++) T.surf[x] = Math.min(T.surf[x], T.bgSurf[x] + SURF_SINK);
   T.loadWear(d.wear);
 
   const byId = {};
@@ -222,6 +254,7 @@ function restoreWorld(d, playerCount) {
     const b = new Brood(s.x, s.y, s.kind);
     b.id = s.id; b.age = s.age; b.feedCount = s.feedCount;
     b.hungry = s.hungry; b.hungerT = s.hungerT;
+    b.royal = !!s.royal;
     G.brood.push(b);
   }
   for (const s of d.bugs) {
@@ -234,6 +267,7 @@ function restoreWorld(d, playerCount) {
   for (const s of d.items) {
     const it = new Item(s.kind, s.x, s.y, s.value);
     it.id = s.id;
+    it.age = s.age || 0;
     if (s.carriedBy && byId[s.carriedBy]) {
       it.carried = byId[s.carriedBy];
       byId[s.carriedBy].carry = it;
@@ -241,14 +275,19 @@ function restoreWorld(d, playerCount) {
     G.items.push(it);
   }
   ENT_ID = d.nextId || 10000;
+  // older rules let a colony carry on without its queen; under the new ones
+  // that ends the game at once, so such a save gets a new queen
+  if (v < 4 && !G.ants.some(a => a.caste === 'queen')) {
+    G.ants.push(new Ant(G.colony.queenCh.x, G.colony.queenCh.y, 'queen'));
+  }
 
-  // reattach players
+  // reattach players (never to the queen or a princess)
   for (let p = 0; p < playerCount; p++) {
     let ant = null;
     const sp = d.ants.find(s => s.playerIdx === p);
-    if (sp && byId[sp.id] && byId[sp.id].hp > 0) ant = byId[sp.id];
-    if (!ant) ant = G.ants.find(a => a.playerIdx < 0 && a.caste !== 'queen' && a.hp > 0);
-    if (!ant) ant = G.ants.find(a => a.playerIdx < 0 && a.hp > 0);
+    if (sp && byId[sp.id] && byId[sp.id].hp > 0 && PLAYABLE(byId[sp.id].caste)) ant = byId[sp.id];
+    if (!ant) ant = G.ants.find(a => a.playerIdx < 0 && a.caste === 'worker' && a.hp > 0);
+    if (!ant) ant = G.ants.find(a => a.playerIdx < 0 && PLAYABLE(a.caste) && a.hp > 0);
     if (ant) {
       ant.playerIdx = p;
       ant.state = 'idle';
@@ -275,7 +314,8 @@ function rallyAllies(soldier, radius, foe) {
   if (!foe) return -1;
   let n = 0;
   for (const a of G.ants) {
-    if (a === soldier || a.hp <= 0 || a.playerIdx >= 0 || a.caste === 'queen') continue;
+    // never the queen, nor a princess: they're the colony's future
+    if (a === soldier || a.hp <= 0 || a.playerIdx >= 0 || a.caste === 'queen' || a.caste === 'princess') continue;
     if (dist2(a.x, a.y, soldier.x, soldier.y) > radius * radius) continue;
     if (a.carry) continue; // laden ants finish their errand
     a.state = 'fight';
@@ -334,18 +374,23 @@ function buildClear(cx, cy, r) {
 }
 
 // lang key naming a build material (for messages and the HUD)
-function buildMatKey(m) { return m === M_THATCH ? 'mat_thatch' : 'mat_packed'; }
+function buildMatKey(m) { return m === M_THATCH ? 'mat_thatch' : m === M_GATE ? 'mat_gate' : 'mat_packed'; }
 
 function controlPlayer(pIdx) {
   const p = G.players[pIdx];
   const a = p.ant;
   const inp = p.input;
+  // crystal upgrades are bought for the whole colony (alive or not)
+  if (inp.buy) {
+    G.colony.buyUpgrade(inp.buy, pIdx);
+    inp.buy = null;
+  }
   if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; return; }
   const c = a.def;
 
   const dx = inp.dx, dy = inp.dy;
 
-  const SPEED = c.speed * 1.5;
+  const SPEED = a.speedNow() * 1.5;
   a.vx = dx * SPEED;
   if (dx !== 0) a.dir = dx;
 
@@ -380,7 +425,7 @@ function controlPlayer(pIdx) {
 
   // bite / dig
   if (inp.bite && a.biteCd <= 0) {
-    a.biteCd = c.digCd;
+    a.biteCd = a.digCdNow();
     a.biteAnim = 8;
     const { ux, uy, bx, by } = aimPoint(a, dx, dy);
 
@@ -392,14 +437,15 @@ function controlPlayer(pIdx) {
       if (d < bd) { bd = d; bit = bug; }
     }
     if (bit) {
-      bit.hurt(c.dmg, ux * 1.2, uy * 0.6 - 0.3);
+      bit.hurt(a.dmgNow(), ux * 1.2, uy * 0.6 - 0.3);
       bit.lastHitBy = 'player';
       G.sfx('bite', a.x, a.y);
     } else {
-      const res = T.dig(bx, by, c.digR, c.digPow);
+      const digR = a.digRNow();
+      const res = T.dig(bx, by, digR, c.digPow);
       // second pass right at the body so the ant can sink into its own shaft
       // (power 0: packed earth only yields to the real bite)
-      const res2 = T.dig(a.x + ux * 2, a.y + uy * 2, c.digR * 0.8, 0);
+      const res2 = T.dig(a.x + ux * 2, a.y + uy * 2, digR * 0.8, 0);
       res.count += res2.count; res.leaves += res2.leaves;
       res.fungi += res2.fungi; res.crystals += res2.crystals;
       res.natural += res2.natural;
@@ -524,7 +570,11 @@ function controlPlayer(pIdx) {
   if (inp.act) {
     inp.act = false;
     const col = G.colony;
-    if (a.carry) {
+    const garden = col.chamberNear(a.x, a.y, 30, 'fungus');
+    if (a.carry && a.carry.kind === 'leaf' && garden) {
+      // leaves for the fungus garden
+      feedGardenBy(a, pIdx, garden, LEAF_UNITS, () => { a.carry.dead = true; a.carry = null; });
+    } else if (a.carry) {
       const it = a.carry;
       // the main cache, or any chamber marked as storage
       const nearStorage = Math.hypot(a.x - col.storage.x, a.y - col.storage.y) < 28 ||
@@ -568,6 +618,10 @@ function controlPlayer(pIdx) {
         broodNear.carried = a; a.carry = broodNear;
         G.msg('m_carrying', [{ brood: broodNear.kind }], null, pIdx);
         G.sfx('pickup', a.x, a.y);
+      } else if (garden && a.thatch >= THATCH_PER_UNIT) {
+        // a thatch load makes good garden mulch too
+        feedGardenBy(a, pIdx, garden, Math.floor(a.thatch / THATCH_PER_UNIT),
+          u => { a.thatch -= u * THATCH_PER_UNIT; });
       } else {
         // milk an aphid?
         const aphid = G.bugs.find(bg => bg.kind === 'aphid' && !bg.dead &&
@@ -585,16 +639,29 @@ function controlPlayer(pIdx) {
   }
 }
 
+// player feeds a fungus garden n units; done(u) takes them from the ant
+function feedGardenBy(a, pIdx, garden, n, done) {
+  if (garden.area < CH_MIN_AREA) { G.msg('m_markCramped', [], '#ff8040', pIdx); return; }
+  const u = G.colony.feedGarden(garden, n);
+  if (u <= 0) { G.msg('m_gardenFull', [], '#ff8040', pIdx); G.sfx('clank', a.x, a.y); return; }
+  done(u);
+  G.msg('m_gardenFed', [Math.round(garden.leaves)], '#a8e0b0', pIdx);
+  G.sfx('deposit', a.x, a.y);
+  G.fx('sparkle', a.x, a.y - 6, 3);
+}
+
 // ---------------------------------------------------------------------------
 // taking over ants: on death, or a live switch. Players pick a CASTE (not an
-// individual); they get the nearest free ant of that caste.
+// individual); they get the nearest free ant of that caste. The queen and
+// the princesses are never playable.
 // ---------------------------------------------------------------------------
-const CASTE_ORDER = ['worker', 'soldier', 'nurse', 'queen'];
+const CASTE_ORDER = ['worker', 'soldier', 'nurse'];
+function PLAYABLE(caste) { return CASTE_ORDER.includes(caste); }
 
 function takeoverOptions() {
   const counts = {};
   for (const a of G.ants) {
-    if (a.hp > 0 && a.playerIdx < 0) counts[a.caste] = (counts[a.caste] || 0) + 1;
+    if (a.hp > 0 && a.playerIdx < 0 && PLAYABLE(a.caste)) counts[a.caste] = (counts[a.caste] || 0) + 1;
   }
   return CASTE_ORDER.filter(c => counts[c]).map(c => ({ caste: c, count: counts[c] }));
 }
@@ -602,6 +669,7 @@ function takeoverOptions() {
 // player pIdx takes the free ant of `caste` nearest (refX, refY). A living
 // current ant is handed back to the colony. Returns the new ant, or null.
 function takeOver(pIdx, caste, refX, refY) {
+  if (!PLAYABLE(caste)) return null;
   let a = null, bd = Infinity;
   for (const c of G.ants) {
     if (c.hp <= 0 || c.playerIdx >= 0 || c.caste !== caste) continue;
@@ -646,7 +714,7 @@ function stepSim() {
         const vhw = Math.max(1, a.hw - 1.5);
         for (const s of [-1, -2, 1, 2]) {
           const nx = a.x + a.dir * s;
-          if (!T.boxSolid(nx, a.y - 1, vhw, a.hh)) { a.x = nx; a.y -= 1; break; }
+          if (!T.boxSolid(nx, a.y - 1, vhw, a.hh, true)) { a.x = nx; a.y -= 1; break; }
         }
       }
       a.vBlocked = false;
@@ -706,6 +774,7 @@ function stepSim() {
       const it = G.makeItem(b.predator || b.kind === 'worm' ? 'bigcorpse' : 'corpse', b.x, b.y, BUG_DEF[b.kind].corpse);
       G.items.push(it);
       G.fx('blood', b.x, b.y, 8);
+      if (b.kind === 'centipede') objEvent('centipedes', 1);
       if (b.predator) {
         G.colony.stats.predatorsSlain++;
         G.msg('m_slain', [{ bug: b.kind }], '#ffe040');
@@ -734,13 +803,103 @@ function stepSim() {
   if (G.tick % 30 === 0) G.pheromones = G.pheromones.filter(p => p.t > 0);
 
   G.colony.update();
+  updateYear();
 
   // extinction
-  if (!G.over && G.ants.filter(a => a.hp > 0).length === 0) {
-    G.over = {
-      day: G.day,
-      score: G.colony.score,
-      stats: Object.assign({}, G.colony.stats),
-    };
+  if (!G.over && G.ants.filter(a => a.hp > 0).length === 0) gameOver(false, 'r_extinct');
+}
+
+// ---------------------------------------------------------------------------
+// the year: the seasons turning, winter's cold, the queen's succession, and
+// the nuptial flight that crowns it
+// ---------------------------------------------------------------------------
+const FLIGHT_T = 420;   // ticks the flight plays out before the year's end
+const SEASON_COLOR = ['#a0e070', '#ffe060', '#e09040', '#c0e0ff'];
+
+// the world's story ends (for now): the client shows the end screen
+function gameOver(win, reason, extra) {
+  G.over = Object.assign({
+    win, reason, day: G.day, year: G.year, season: G.season,
+    score: G.colony.score, stats: Object.assign({}, G.colony.stats),
+    stars: 0, flown: 0, milestones: G.objectives ? G.objectives.yearDone : 0,
+    canContinue: false,
+  }, extra || {});
+}
+
+// after a nuptial flight the colony may carry on into the next year
+function continueYear() {
+  if (G.over && G.over.canContinue) G.over = null;
+}
+
+function updateYear() {
+  // a new season (or a jump in time): judge the old milestones, set the new
+  const ob = G.objectives;
+  if (ob.year !== G.year || ob.season !== G.season) {
+    closeObjectives();
+    G.msg('m_season', [{ key: 'season_' + SEASON_KEYS[G.season] }, G.year], SEASON_COLOR[G.season]);
+    G.sfx('task');
+    if (G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year) startFlight(ob.yearDone);
+    G.objectives = newObjectives(G.year, G.season, ob.year === G.year ? ob.yearDone : 0);
   }
+
+  // the flight plays out, then the year's end screen
+  if (G.flight && --G.flight.t <= 0) {
+    const f = G.flight;
+    G.flight = null;
+    gameOver(f.n > 0, f.n > 1 ? 'r_flight' : f.n === 1 ? 'r_flight1' : 'r_noFlight',
+      { stars: f.stars, flown: f.n, milestones: f.milestones, pop: f.pop, canContinue: true });
+  }
+
+  // winter: the surface is deadly cold, except within a thatched mound
+  if (G.isWinter()) {
+    for (const a of G.ants) {
+      if (a.hp > 0 && !G.colony.sheltered(a)) a.hp -= COLD_DMG;
+    }
+    for (let i = 0; i < G.players.length; i++) {
+      const p = G.players[i];
+      if (p.coldT > 0) p.coldT--;
+      if (p.ant && p.ant.hp > 0 && !G.colony.sheltered(p.ant) && p.coldT <= 0) {
+        p.coldT = 600;
+        G.msg('m_cold', [], '#ffffff', i);
+      }
+    }
+  }
+
+  // the queen's line: a princess takes her place, or the colony is doomed
+  if (!G.over && !G.ants.some(a => a.caste === 'queen' && a.hp > 0)) {
+    const heir = G.ants.find(a => a.caste === 'princess' && a.hp > 0);
+    if (heir) crown(heir);
+    else if (!G.brood.some(b => b.royal && !b.dead)) gameOver(false, 'r_queen');
+  }
+}
+
+// a princess becomes the colony's new queen
+function crown(a) {
+  const frac = Math.max(0.2, a.hp / a.maxHp);
+  a.caste = 'queen';
+  a.hw = 3 * CASTE.queen.size; a.hh = 2 * CASTE.queen.size;
+  a.maxHp = CASTE.queen.hp; a.hp = a.maxHp * frac;
+  a.state = 'idle'; a.stateT = 60; a.nav = null; a.target = null;
+  G.msg('m_newQueen', [], '#ff90e0');
+  G.sfx('task');
+}
+
+// the nuptial flight: every adult princess takes wing from the entrance.
+// Stars: one for a princess flown, one for 3+ princesses (or a colony of
+// 30+), one for 8+ of the year's 12 milestones.
+function startFlight(milestones) {
+  const c = G.colony;
+  const flyers = G.ants.filter(a => a.caste === 'princess' && a.hp > 0);
+  G.ants = G.ants.filter(a => !flyers.includes(a));
+  const n = flyers.length;
+  const pop = G.ants.filter(a => a.hp > 0).length;
+  let stars = 0;
+  if (n > 0) stars = 1 + (n >= 3 || pop >= 30 ? 1 : 0) + (milestones >= 8 ? 1 : 0);
+  c.stats.flown = (c.stats.flown || 0) + n;
+  c.score += n * 500;
+  G.lastFlightYear = G.year;
+  G.flight = { t: FLIGHT_T, n, stars, milestones, pop };
+  if (n > 0) G.fx('flight', c.entrance.x, c.entrance.y - 4, n);
+  G.msg(n > 1 ? 'm_flight' : n === 1 ? 'm_flight1' : 'm_noFlight', [n], '#ff90e0');
+  G.sfx(n > 0 ? 'task' : 'starve');
 }

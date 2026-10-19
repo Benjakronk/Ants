@@ -7,8 +7,12 @@ const TerrainView = {
   terCtx: null,
   bgCan: null,      // dark underground backdrop (transparent above bgSurf)
   dirty: [],        // [x0, y0, x1, y1] rects waiting to be repainted
+  season: 0,        // the season the grass and leaves are painted for
+  slow: [],         // season repaint strips, a few repainted per frame
 
   build() {
+    this.season = G.season;
+    this.slow = [];
     // foreground
     this.terCan = document.createElement('canvas');
     this.terCan.width = WORLD_W; this.terCan.height = WORLD_H;
@@ -34,7 +38,7 @@ const TerrainView = {
         const depth = y - bgSurf[x];
 
         if (mat !== M_AIR) {
-          const c = matColor(mat, x, y, h, depth, mat === M_PACKED ? T.wear.get(i) : 0);
+          const c = matColor(mat, x, y, h, depth, TOUGH(mat) ? T.wear.get(i) : 0);
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
         // backdrop below the original surface
@@ -55,8 +59,25 @@ const TerrainView = {
     T.onEdit = (x0, y0, x1, y1) => this.dirty.push([x0, y0, x1, y1]);
   },
 
+  // the season turned: repaint the band above ground (grass and foliage)
+  // in strips, nearest the camera first, a couple per frame -- no hitch
+  setSeason(s, camX) {
+    this.season = s;
+    const W = 128;
+    this.slow = [];
+    for (let x0 = 0; x0 < WORLD_W; x0 += W) {
+      const x1 = Math.min(WORLD_W - 1, x0 + W - 1);
+      let ymax = 0;
+      for (let x = x0; x <= x1; x++) ymax = Math.max(ymax, T.bgSurf[x] + 4);
+      this.slow.push([x0, 0, x1, Math.min(WORLD_H - 1, ymax)]);
+    }
+    const cx = camX || 0;
+    this.slow.sort((a, b) => Math.abs(b[0] - cx) - Math.abs(a[0] - cx)); // nearest last (popped first)
+  },
+
   // repaint every edited rect straight from the material map
   flush() {
+    for (let k = 0; k < 2 && this.slow.length; k++) this.dirty.push(this.slow.pop());
     for (const [x0, y0, x1, y1] of this.dirty) {
       const w = x1 - x0 + 1, h = y1 - y0 + 1;
       const img = this.terCtx.createImageData(w, h);
@@ -67,7 +88,7 @@ const TerrainView = {
           if (mat === M_AIR) continue;
           const i = y * WORLD_W + x;
           const c = matColor(mat, x, y, pxHash(x, y), y - T.bgSurf[x],
-            mat === M_PACKED ? T.wear.get(i) : 0);
+            TOUGH(mat) ? T.wear.get(i) : 0);
           const o = ((y - y0) * w + (x - x0)) * 4;
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
@@ -78,7 +99,22 @@ const TerrainView = {
   },
 };
 
-// wear: bite damage on packed earth (shows as cracks)
+// grass and foliage by season (spring, summer, autumn, winter)
+const GRASS_SEASON = [
+  [[84, 150, 52], [70, 136, 44], [98, 164, 62]],
+  [[64, 128, 44], [52, 112, 36], [76, 142, 52]],
+  [[138, 128, 52], [120, 108, 44], [150, 118, 48]],
+  [[118, 128, 108], [104, 114, 96], [132, 140, 122]],
+];
+const LEAF_SEASON = [
+  [[70, 140, 44], [58, 124, 36], [86, 156, 54]],
+  [[46, 108, 31], [37, 93, 25], [59, 125, 39]],
+  [[196, 110, 30], [176, 64, 28], [214, 160, 40], [150, 90, 30], [120, 100, 30]],
+  [[96, 84, 64], [84, 74, 56], [108, 96, 74]],
+];
+const LEAF_FLECK = [[236, 196, 210], [82, 152, 62], [236, 196, 70], [235, 240, 248]];
+
+// wear: bite damage on packed earth and gates (shows as cracks)
 function matColor(mat, x, y, h, depth, wear) {
   switch (mat) {
     case M_DIRT: {
@@ -90,8 +126,7 @@ function matColor(mat, x, y, h, depth, wear) {
       return [c[0] * dk | 0, c[1] * dk | 0, c[2] * dk | 0];
     }
     case M_GRASS: {
-      const shades = [[64, 128, 44], [52, 112, 36], [76, 142, 52]];
-      return shades[h % 3];
+      return GRASS_SEASON[TerrainView.season][h % 3];
     }
     case M_ROCK: {
       const shades = [[112, 112, 120], [97, 97, 104], [126, 126, 134]];
@@ -106,9 +141,11 @@ function matColor(mat, x, y, h, depth, wear) {
       return shades[s];
     }
     case M_LEAF: {
-      const shades = [[46, 108, 31], [37, 93, 25], [59, 125, 39]];
-      let c = shades[h % 3];
-      if (h % 23 === 0) c = [82, 152, 62];
+      // spring blossoms, autumn colours, winter frost on withered leaves
+      const s = TerrainView.season;
+      const shades = LEAF_SEASON[s];
+      let c = shades[h % shades.length];
+      if (h % (s === 3 ? 5 : 23) === 0) c = LEAF_FLECK[s];
       return c;
     }
     case M_ROOT: {
@@ -136,6 +173,15 @@ function matColor(mat, x, y, h, depth, wear) {
       let c = shades[((y >> 1) + (h % 7 === 0 ? 1 : 0)) % 3];
       if ((y & 1) === 0 && h % 3 === 0) c = [112, 74, 44];  // tamp lines
       if (wear && h % 6 < wear * 1.6) c = [62, 40, 24];      // cracks
+      return c;
+    }
+    case M_GATE: {
+      // woven twig gate: crossed strands with pale knots, light enough to
+      // stand out against a dark tunnel as well as against the earth
+      const weave = (((x + y) >> 1) & 1) ^ (((x - y) >> 1) & 1);
+      let c = weave ? [134, 98, 60] : [96, 66, 40];
+      if (((x + y) & 3) === 0 && ((x - y) & 3) === 0) c = [188, 150, 88];
+      if (wear && h % 6 < wear * 1.6) c = [26, 16, 10];        // cracks
       return c;
     }
     case M_THATCH: {
