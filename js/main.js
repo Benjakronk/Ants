@@ -1849,7 +1849,7 @@ function drawTitle() {
   }
   ctx.restore();
 
-  drawTextC(ctx, '(C) 1998 BENSOFT INTERACTIVE', VIEW_W / 2, VIEW_H - 12, '#605040');
+  drawTextC(ctx, '(C) 2026 LEKTOR ENSRUD', VIEW_W / 2, VIEW_H - 12, '#605040');
 }
 
 function titleItems() {
@@ -2766,4 +2766,12 @@ window.addEventListener('beforeunload', () => {
   if (s) { Net.resumeSaved(s); G.state = 'netwait'; }
 }
 
-requestAnimationFrame(frame);
+// the opening logo first (not when a reload is getting back into a match),
+// then the loop; keys pressed to skip the logo must not reach the title menu
+function startLoop() {
+  for (const k in pressed) pressed[k] = false;
+  typed.length = 0;
+  requestAnimationFrame(frame);
+}
+if (G.state === 'netwait') startLoop();
+else Logo.play(document.getElementById('game')).then(startLoop, startLoop);

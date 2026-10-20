@@ -472,4 +472,4 @@ node test/netload.js      # one room, 4 bots, 2 minutes on a busy colony:
                           # (--natural: an uncrowded day-1 colony)
 ```
 
-© 1998 BENSOFT INTERACTIVE (in spirit)
+© 2026 Lektor Ensrud
