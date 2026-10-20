@@ -304,7 +304,6 @@ function clearInput() {
 // ---------------------------------------------------------------------------
 function enterWorld(slot) {
   G.slot = slot;
-  TerrainView.build();
   G.stars = [];
   const srng = mulberry32(G.seed ^ 0x5747);
   for (let i = 0; i < 140; i++) G.stars.push({ x: srng() * WORLD_W, y: srng() * 280 });
@@ -316,6 +315,7 @@ function enterWorld(slot) {
   // (no ant yet -- just joined online: the view starts at the nest)
   const f = a || G.colony.entrance;
   G.cam = { x: f.x - VIEW_W / 2, y: f.y - 60 };
+  TerrainView.build(f.x, f.y);      // the view around the start now, the rest frame by frame
 }
 
 function startNewWorld(slot) {
@@ -1633,6 +1633,7 @@ function drawMinimap() {
   bevelPanel(mx - 3, my - 3, mw + 6, mh + 6 + 70);
   ctx.fillStyle = '#101418';
   ctx.fillRect(mx, my, mw, mh);
+  TerrainView.finish();   // the whole map shows: no unpainted tiles (only in a world's first seconds)
   ctx.drawImage(TerrainView.bgCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   ctx.drawImage(TerrainView.terCan, 0, 0, WORLD_W, WORLD_H, mx, my, mw, mh);
   const sx = mw / WORLD_W, sy = mh / WORLD_H;
@@ -1927,19 +1928,33 @@ function updateSlots() {
   }
   if (tookPress('Enter') || tookPress('Space')) {
     Sfx.play('select');
-    const slot = G.slotSel + 1;
-    if (slotInfo(slot) && startSavedWorld(slot)) {
-      G.state = 'play'; pushMsg(L('m_welcome'));
-    } else {
-      // empty slot, or a save from an incompatible world size: start fresh
-      startNewWorld(slot);
-      G.state = 'intro';
-      G.introLine = 0;
-    }
+    // a LOADING frame goes on screen first; the world is made on the next step
+    G.loadSlot = G.slotSel + 1; G.loadAt = G.frame;
+    G.state = 'loading';
   }
 }
 
+function updateLoading() {
+  if (G.frame <= G.loadAt) return;   // the LOADING frame isn't drawn yet
+  const slot = G.loadSlot;
+  if (slotInfo(slot) && startSavedWorld(slot)) {
+    G.state = 'play'; pushMsg(L('m_welcome'));
+  } else {
+    // empty slot, or a save from an incompatible world size: start fresh
+    startNewWorld(slot);
+    G.state = 'intro';
+    G.introLine = 0;
+  }
+}
+
+function drawLoading() {
+  ctx.fillStyle = '#0c0805';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  drawTextC(ctx, L('ui_loading'), VIEW_W / 2, VIEW_H / 2 - 4, '#c8b890');
+}
+
 function drawIntro() {
+  TerrainView.flush();   // the map keeps painting in the background while the story is read
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const lines = introText();
@@ -2707,6 +2722,7 @@ function frame(now) {
       switch (G.state) {
         case 'title': updateTitle(); break;
         case 'slots': updateSlots(); break;
+        case 'loading': updateLoading(); break;
         case 'intro': updateIntro(); break;
         case 'help': updateHelp(); break;
         case 'play': updatePlay(); break;
@@ -2731,6 +2747,7 @@ function frame(now) {
   switch (G.state) {
     case 'title': drawTitle(); break;
     case 'slots': drawSlots(); break;
+    case 'loading': drawLoading(); break;
     case 'intro': drawIntro(); break;
     case 'help': drawHelp(); break;
     case 'play': drawPlay(); break;

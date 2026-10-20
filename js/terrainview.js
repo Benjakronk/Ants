@@ -6,57 +6,82 @@ const TerrainView = {
   terCan: null,     // foreground material pixels (transparent where air)
   terCtx: null,
   bgCan: null,      // dark underground backdrop (transparent above bgSurf)
+  bgCtx: null,
   dirty: [],        // [x0, y0, x1, y1] rects waiting to be repainted
   season: 0,        // the season the grass and leaves are painted for
   slow: [],         // season repaint strips, a few repainted per frame
+  pending: [],      // first-paint tiles not yet painted, nearest the focus last
 
-  build() {
+  // A new world: the whole map is ~12 million pixels, far too many to paint
+  // before the first frame (that alone was ~0.75 s). So only a band around
+  // (fx, fy) -- where the camera starts -- is painted now; the rest is queued
+  // as tiles, nearest first, and flush() paints a few milliseconds' worth per
+  // frame (all of it within a few seconds, long before anyone walks there).
+  build(fx, fy) {
     this.season = G.season;
     this.slow = [];
-    // foreground
     this.terCan = document.createElement('canvas');
     this.terCan.width = WORLD_W; this.terCan.height = WORLD_H;
     this.terCtx = this.terCan.getContext('2d');
-    const img = this.terCtx.createImageData(WORLD_W, WORLD_H);
-    const d = img.data;
-
-    // background (cave backdrop)
-    this.bgCan = document.createElement('canvas');
+    this.bgCan = document.createElement('canvas');      // the cave backdrop
     this.bgCan.width = WORLD_W; this.bgCan.height = WORLD_H;
-    const bgCtx = this.bgCan.getContext('2d');
-    const bimg = bgCtx.createImageData(WORLD_W, WORLD_H);
-    const bd = bimg.data;
+    this.bgCtx = this.bgCan.getContext('2d');
+    fx = fx === undefined ? WORLD_W / 2 : fx; fy = fy === undefined ? 0 : fy;
+    const nx0 = Math.max(0, Math.floor(fx - 400)), nx1 = Math.min(WORLD_W - 1, Math.floor(fx + 400));
+    const ny0 = Math.max(0, Math.floor(fy - 220)), ny1 = Math.min(WORLD_H - 1, Math.floor(fy + 280));
+    this.paint(nx0, ny0, nx1, ny1, true);
+    const TW = 128, TH = 120;
+    this.pending = [];
+    for (let y0 = 0; y0 < WORLD_H; y0 += TH) {
+      for (let x0 = 0; x0 < WORLD_W; x0 += TW) {
+        const x1 = Math.min(WORLD_W - 1, x0 + TW - 1), y1 = Math.min(WORLD_H - 1, y0 + TH - 1);
+        if (x0 >= nx0 && x1 <= nx1 && y0 >= ny0 && y1 <= ny1) continue;     // already painted
+        this.pending.push([x0, y0, x1, y1]);
+      }
+    }
+    const dist = r => Math.hypot((r[0] + r[2]) / 2 - fx, ((r[1] + r[3]) / 2 - fy) * 1.5);
+    this.pending.sort((a, b) => dist(b) - dist(a));     // nearest last (popped first)
+    this.dirty = [];
+    T.onEdit = (x0, y0, x1, y1) => this.dirty.push([x0, y0, x1, y1]);
+  },
 
+  // paint the rect (inclusive) straight from the material map; withBg: the
+  // cave backdrop too (it only changes when the world is new)
+  paint(x0, y0, x1, y1, withBg) {
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    const img = this.terCtx.createImageData(w, h);
+    const d = img.data;
+    const bimg = withBg ? this.bgCtx.createImageData(w, h) : null;
+    const bd = withBg ? bimg.data : null;
     const m = T.m, bgSurf = T.bgSurf;
-
-    for (let y = 0; y < WORLD_H; y++) {
-      for (let x = 0; x < WORLD_W; x++) {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
         const i = y * WORLD_W + x;
-        const o = i * 4;
-        const h = pxHash(x, y);
         const mat = m[i];
         const depth = y - bgSurf[x];
-
+        if (mat === M_AIR && (!withBg || depth < 0)) continue;
+        const o = ((y - y0) * w + (x - x0)) * 4;
+        const hs = pxHash(x, y);
         if (mat !== M_AIR) {
-          const c = matColor(mat, x, y, h, depth, TOUGH(mat) ? T.wear.get(i) : 0, mat === M_GATE && gateRim(x, y));
+          const c = matColor(mat, x, y, hs, depth, TOUGH(mat) ? T.wear.get(i) : 0, mat === M_GATE && gateRim(x, y));
           d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
         }
         // backdrop below the original surface
-        if (depth >= 0) {
+        if (withBg && depth >= 0) {
           const t = Math.min(1, depth / 520);
-          let r = 46 - 32 * t, g = 30 - 22 * t, b2 = 18 - 13 * t;
-          const j = (h % 7) - 3;
-          r += j; g += j * 0.7; b2 += j * 0.5;
-          bd[o] = Math.max(0, r); bd[o + 1] = Math.max(0, g); bd[o + 2] = Math.max(0, b2);
-          bd[o + 3] = 255;
+          const j = (hs % 7) - 3;
+          bd[o] = Math.max(0, 46 - 32 * t + j); bd[o + 1] = Math.max(0, 30 - 22 * t + j * 0.7);
+          bd[o + 2] = Math.max(0, 18 - 13 * t + j * 0.5); bd[o + 3] = 255;
         }
       }
     }
-    this.terCtx.putImageData(img, 0, 0);
-    bgCtx.putImageData(bimg, 0, 0);
+    this.terCtx.putImageData(img, x0, y0);
+    if (withBg) this.bgCtx.putImageData(bimg, x0, y0);
+  },
 
-    this.dirty = [];
-    T.onEdit = (x0, y0, x1, y1) => this.dirty.push([x0, y0, x1, y1]);
+  // paint every queued first-paint tile now (tests, or a full-map view)
+  finish() {
+    while (this.pending.length) this.paint(...this.pending.pop(), true);
   },
 
   // the season turned: repaint the band above ground (grass and foliage)
@@ -77,28 +102,19 @@ const TerrainView = {
 
   // repaint every edited rect straight from the material map (a pixel
   // wider all round: a gate's rim depends on its neighbours)
+  // (and the first-paint tiles still queued: a few milliseconds' worth)
   flush() {
     for (let k = 0; k < 2 && this.slow.length; k++) this.dirty.push(this.slow.pop());
     for (const [rx0, ry0, rx1, ry1] of this.dirty) {
-      const x0 = Math.max(0, rx0 - 1), y0 = Math.max(0, ry0 - 1);
-      const x1 = Math.min(WORLD_W - 1, rx1 + 1), y1 = Math.min(WORLD_H - 1, ry1 + 1);
-      const w = x1 - x0 + 1, h = y1 - y0 + 1;
-      const img = this.terCtx.createImageData(w, h);
-      const d = img.data;
-      for (let y = y0; y <= y1; y++) {
-        for (let x = x0; x <= x1; x++) {
-          const mat = T.m[y * WORLD_W + x];
-          if (mat === M_AIR) continue;
-          const i = y * WORLD_W + x;
-          const c = matColor(mat, x, y, pxHash(x, y), y - T.bgSurf[x],
-            TOUGH(mat) ? T.wear.get(i) : 0, mat === M_GATE && gateRim(x, y));
-          const o = ((y - y0) * w + (x - x0)) * 4;
-          d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
-        }
-      }
-      this.terCtx.putImageData(img, x0, y0);
+      this.paint(Math.max(0, rx0 - 1), Math.max(0, ry0 - 1),
+        Math.min(WORLD_W - 1, rx1 + 1), Math.min(WORLD_H - 1, ry1 + 1), false);
     }
     this.dirty.length = 0;
+    if (this.pending.length) {
+      const until = performance.now() + 5;
+      do this.paint(...this.pending.pop(), true);
+      while (this.pending.length && performance.now() < until);
+    }
   },
 };
 
