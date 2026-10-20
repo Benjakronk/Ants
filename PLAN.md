@@ -59,7 +59,7 @@ The red ants become a real `Colony` with a queen, brood, foragers and raids
 that march out from their own nest. This is also the foundation for versus.
 
 ### Online modes
-- **Match:** lobby + room code, 1–4 players co-op, one year (about an hour), ends
+- **Match:** lobby + room code, 1–8 players co-op (4v4 versus), one year (about an hour), ends
   with a victory or defeat screen. Later: versus, black vs red with players on each side.
 - **Persistent world:** a named world on the server that players drop into.
   Seasons cycle year after year; each nuptial flight banks legacy points. If the
@@ -183,3 +183,29 @@ that march out from their own nest. This is also the foundation for versus.
    https://maur.lektorensrud.no (pm2 `maur`, port 3006, worlds in
    `/srv/maur/data`, nightly backup). `deploy/README.md` has how it was done
    and how to update; the shared runbook in `../../VPS-deploy` lists the service.
+6. **Eight players.** Rooms of up to 8 (`MAX_PLAYERS`, default 8; versus
+   at most half a side, 4v4), eight player colours, spawn spots along the
+   mound, a two-column lobby, name tags only on screen and never over one
+   another, **A NEW WORKER** for a joiner (or a dead player) with no free
+   ant. **Balance by player count**: `G.playerSlots` = *n* (co-op: the
+   starting players; versus: the bigger side, both sides alike; a
+   persistent world: the most connected at once -- `notePlayers` only
+   ever raises it), saved (save v8; older saves: their `playerCount`, or
+   1). Each player beyond the first: the played colony's caps +1.5 pop
+   and +10 food (co-op players' ants are extra workers, so the queen still
+   lays at the start with 8); the milestones more hands make easier
+   (raise, food100, mound, contested, stockpile, centipedes) x(1 + 0.15
+   (n - 1)), pop25 +2 a player, on top of the year's growth; in co-op the
+   AI rival's household, caps (pop, food, brood), raid threshold,
+   raid size and its cap all x(1 + 0.1 (n - 1)) (8 players: x1.7, up to
+   17 raiders; not its laying pace -- with that, and +15%, idle 8-player
+   colonies were raided flat in spring). n = 1 is exactly the old game.
+   Load (netload's crowded 80-ant room, `--bots N`, back to back on one
+   machine): 4 bots before 3.09 ms/tick (+0.26 snapshots), 25% of a core,
+   6.5 KB/s a client; after 3.26 ms (+0.27), 24%, 6.2 KB/s; **8 bots 3.38
+   ms (+0.31), 26%, ~7.8 KB/s** -- the sim step barely moves (the bots stay
+   near the nest), each client adds ~0.01 ms of snapshots. In process, 8
+   players spread over the map (defeating the far-NPC throttle) cost ~25%
+   more than 8 at the nest; nothing near the 6 ms mark, so no new
+   optimisation, and `CPU_BUDGET_MS` stays 10. Production's `server/.env`
+   still says `MAX_PLAYERS=4` until edited (see deploy/README.md).

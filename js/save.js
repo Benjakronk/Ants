@@ -13,9 +13,10 @@ const SAVE_PREFIX = 'maur_world_';
 // brood's colony, the contested food site. v6: each colony's ledger of
 // who wounded its queen lately (the red-queen bonus needs a real hand in
 // her death). v7: the world's mode (a persistent world on the server),
-// its legacy points, history and generation.
-// restoreWorld still loads v2-v6 saves (missing fields get defaults).
-const SAVE_VERSION = 7;
+// its legacy points, history and generation. v8: the players the world is
+// balanced for (G.playerSlots; older saves: their player count).
+// restoreWorld still loads v2-v7 saves (missing fields get defaults).
+const SAVE_VERSION = 8;
 
 // run-length encode the terrain bytes: [val, lo(count), hi(count)] triplets
 function rleEncode(arr) {
@@ -141,7 +142,7 @@ function serializeWorld() {
     day: G.day,
     mode: G.mode,
     legacy: G.legacy, history: G.history, gen: G.gen,
-    playerCount: G.players.length,
+    playerCount: G.players.length, slots: playerSlots(),
     terrain: rleEncode(T.m),
     colonies: G.colonies.map(serializeColony),
     lastFlightYear: G.lastFlightYear,

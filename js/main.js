@@ -1083,24 +1083,33 @@ const Labels = {
 // online: the other players' ants carry their names, in their colours
 // (placed first, so the chamber labels keep clear of them)
 // (on a dark plate, kept on the screen, and lifted clear of every player's
-// chevron -- the local one's too -- and of each other)
+// chevron -- the local one's too -- and of each other. Only for ants on
+// screen; nearest the local ant first, and a tag with no clear spot left
+// (a crowd of players) is left out rather than drawn over another)
 function drawNameTags(camx, camy, vw, vh) {
   const hit = (r, list) => list.some(o => r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h);
   const keep = [];
-  for (const p of G.players) {
-    if (!p || !p.ant) continue;
-    const a = p.ant;
-    keep.push({ x: Math.round(a.x - camx) - 5, y: Math.round(a.y - camy) - Math.round(a.hh) - 12, w: 11, h: 8 });
-  }
+  const shown = [];
   for (let i = 0; i < G.players.length; i++) {
     const p = G.players[i];
-    if (i === LOCAL || !p || !p.ant || !p.name) continue;
+    if (!p || !p.ant) continue;
+    const a = p.ant;
+    const sx = Math.round(a.x - camx), sy = Math.round(a.y - camy);
+    if (sx < -8 || sx > vw + 8 || sy < -8 || sy > vh + 8) continue;
+    keep.push({ x: sx - 5, y: sy - Math.round(a.hh) - 12, w: 11, h: 8 });
+    if (i !== LOCAL && p.name && sx >= 0 && sx < vw && sy >= 0 && sy < vh) shown.push(i);
+  }
+  const me = localAnt();
+  if (me) shown.sort((i, j) => dist2(G.players[i].ant.x, G.players[i].ant.y, me.x, me.y) - dist2(G.players[j].ant.x, G.players[j].ant.y, me.x, me.y));
+  for (const i of shown) {
+    const p = G.players[i];
     const a = p.ant;
     const w = textWidth(p.name) + 4;
     let ex = Math.round(a.x - camx), ey = Math.round(a.y - camy) - Math.round(a.hh) - 21;
-    if (ex < -40 || ex > vw + 40 || ey < -10 || ey > vh) continue;
     ex = Math.max((w >> 1) + 1, Math.min(vw - (w >> 1) - 1, ex));
-    for (let n = 0; n < 3 && hit({ x: ex - (w >> 1), y: ey - 1, w, h: 10 }, keep); n++) ey -= 10;
+    ey = Math.max(1, ey);
+    for (let n = 0; n < 2 && hit({ x: ex - (w >> 1), y: ey - 1, w, h: 10 }, keep); n++) ey -= 10;
+    if (ey < 1 || hit({ x: ex - (w >> 1), y: ey - 1, w, h: 10 }, keep)) continue;
     const r = { x: ex - (w >> 1), y: ey - 1, w, h: 10 };
     ctx.fillStyle = 'rgba(16,8,4,0.7)';
     ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -2096,7 +2105,7 @@ function drawTakeover() {
   for (let i = 0; i < tk.types.length; i++) {
     const t = tk.types[i];
     const sel = i === tk.sel;
-    const label = casteName(t.caste) + '  X' + t.count;
+    const label = t.fresh ? L('ui_freshWorker') : casteName(t.caste) + '  X' + t.count;
     if (sel) drawText(ctx, '\x06', 92, 84 + dy + i * 12, '#ffe040');
     drawText(ctx, label, 104, 84 + dy + i * 12, sel ? '#ffe040' : '#c8b890');
   }
@@ -2513,35 +2522,72 @@ function lobbySides() {
   return n;
 }
 
+// the lobby's player list: two columns of LOBBY_ROWS (co-op: the first four
+// players on the left, the rest on the right; versus: black left, red right),
+// the empty places dimmed
+const LOBBY_ROWS = 4, LOBBY_Y = 104, LOBBY_COL = [10, 166];
+function lobbyPlaces() {
+  const vs = Net.mode === 'versus';
+  const out = [];
+  const fill = [0, 0];
+  Net.players.forEach((pl, i) => {
+    if (!pl) return;
+    const c = vs ? (pl.f === 'red' ? 1 : 0) : Math.min(1, Math.floor(fill[0] / LOBBY_ROWS));
+    const r = vs ? fill[c]++ : fill[0]++ % LOBBY_ROWS;
+    if (r < LOBBY_ROWS) out.push({ pl, i, x: LOBBY_COL[c], y: LOBBY_Y + r * 10 });
+  });
+  return out;
+}
+
 function drawLobby() {
   const vs = Net.mode === 'versus';
   netBackdrop(L(vs ? 'ui_modeVersus' : 'ui_modeCoop'));
   drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, 32, '#b09060');
   drawTextCS(ctx, Net.code || '----', VIEW_W / 2, 42, '#ffe040', 4);
   drawTextC(ctx, L('ui_shareCode'), VIEW_W / 2, 72, '#806e58');
-  drawTextC(ctx, L(Net.pub ? 'ui_lobbyPub' : 'ui_lobbyPriv'), VIEW_W / 2, 82, Net.pub ? '#a8e8a0' : '#a09070');
+  // (the head count and public/private on one line)
   const n = Net.players.filter(Boolean).length;
-  drawTextC(ctx, L('ui_lobbyPlayers', n, Net.max), VIEW_W / 2, 94, '#c8b890');
+  const pc = L('ui_lobbyPlayers', n, Net.max), pv = L(Net.pub ? 'ui_lobbyPub' : 'ui_lobbyPriv');
+  const px = Math.round(VIEW_W / 2 - (textWidth(pc) + 18 + textWidth(pv)) / 2);
+  drawText(ctx, pc, px, 82, '#c8b890');
+  drawText(ctx, pv, px + textWidth(pc) + 18, 82, Net.pub ? '#a8e8a0' : '#a09070');
+  // versus: a heading over each side's column
+  const side = vs ? lobbySides() : null;
+  const sideMax = Math.min(LOBBY_ROWS, Math.ceil(Net.max / 2));
+  if (vs) {
+    drawTextC(ctx, L('ui_black') + ' ' + side[0] + '/' + sideMax, LOBBY_COL[0] + 73, 93, '#d8d4e4');
+    drawTextC(ctx, L('ui_red') + ' ' + side[1] + '/' + sideMax, LOBBY_COL[1] + 73, 93, '#ff7060');
+  }
+  // the empty places, then the players
+  for (let c = 0; c < 2; c++) {
+    const have = vs ? side[c] : Math.max(0, Math.min(LOBBY_ROWS, n - c * LOBBY_ROWS));
+    const room = vs ? sideMax : Math.max(0, Math.min(LOBBY_ROWS, Net.max - c * LOBBY_ROWS));
+    for (let r = have; r < room; r++) {
+      const x = LOBBY_COL[c], y = LOBBY_Y + r * 10;
+      ctx.fillStyle = '#2a1e14';
+      ctx.fillRect(x + 1, y - 1, 9, 9);
+      ctx.fillStyle = '#0c0805';
+      ctx.fillRect(x + 2, y, 7, 7);
+    }
+  }
   const host = Net.you === Net.host && Net.roomState === 'lobby';
-  let y = 105;
-  Net.players.forEach((pl, i) => {
-    if (!pl) return;
+  for (const { pl, i, x, y } of lobbyPlaces()) {
     const col = PLAYER_COLORS[i % PLAYER_COLORS.length];
     // (the host's cursor, for a kick)
-    if (host && i === G.lobbySel && i !== Net.you) drawText(ctx, '\x06', 56, y, '#ffe040');
+    if (host && i === G.lobbySel && i !== Net.you) drawText(ctx, '\x06', x - 9, y, '#ffe040');
     ctx.fillStyle = '#000000';
-    ctx.fillRect(67, y - 1, 9, 9);
+    ctx.fillRect(x + 1, y - 1, 9, 9);
     ctx.fillStyle = pl.on ? col : '#4a3826';
-    ctx.fillRect(68, y, 7, 7);
-    drawText(ctx, pl.n, 82, y, pl.on ? col : '#706050');
+    ctx.fillRect(x + 2, y, 7, 7);
+    drawText(ctx, pl.n, x + 14, y, pl.on ? col : '#706050');
+    // (short tags, right-aligned in the column; an offline player is dimmed)
     const tags = [];
-    if (vs) tags.push(L(pl.f === 'red' ? 'ui_red' : 'ui_black'));
     if (i === Net.host) tags.push(L('ui_host'));
     if (i === Net.you) tags.push(L('ui_you'));
     if (!pl.on) tags.push(L('ui_offline'));
-    if (tags.length) drawText(ctx, '(' + tags.join(', ') + ')', 160, y, !pl.on ? '#806e58' : vs ? (pl.f === 'red' ? '#ff7060' : '#d8d4e4') : '#a09070');
-    y += 10;
-  });
+    const tg = tags.join(' ');
+    if (tg) drawText(ctx, tg, x + 146 - textWidth(tg), y, !pl.on ? '#806e58' : '#a09070');
+  }
   let note = Net.you === Net.host ? L('ui_hostStart') : L('ui_waitHost');
   if (Net.roomState === 'play') note = L('ui_inProgress');
   else if (vs && lobbySides().some(k => !k)) note = L('ui_needSides');

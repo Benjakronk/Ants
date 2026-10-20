@@ -23,7 +23,7 @@ const Net = {
   listT: 0,
   // the room (worldName: a persistent world's; faction: ours in versus;
   // pub: listed under OPEN MATCHES)
-  code: null, token: null, you: -1, host: -1, roomState: null, players: [], max: 4, mode: 'coop',
+  code: null, token: null, you: -1, host: -1, roomState: null, players: [], max: 8, mode: 'coop',
   worldName: null, faction: 'black', pub: false,
   reborn: false,      // the last world was ours starting over (see world())
   // the match
@@ -240,7 +240,7 @@ const Net = {
   lobby(m) {
     const back = this.status === 'lost';
     this.code = m.code; this.token = m.token; this.you = m.you; this.host = m.host;
-    this.players = m.players || []; this.max = m.max || 4; this.mode = m.mode;
+    this.players = m.players || []; this.max = m.max || 8; this.mode = m.mode;
     this.worldName = m.name || null; this.faction = m.faction === 'red' ? 'red' : 'black'; this.pub = !!m.pub;
     this.roomState = m.state;
     this.status = 'open';
@@ -458,10 +458,10 @@ const Net = {
       if (i === LOCAL) G.colIdx = p.col || 0;
       // tell the others who came, went, dropped out and came back
       if (i !== LOCAL && this.ready) {
-        if (v && !was.name) { pushMsg(L('m_netJoined', v.n), PLAYER_COLORS[i % 4]); Sfx.play('select'); }
+        if (v && !was.name) { pushMsg(L('m_netJoined', v.n), PLAYER_COLORS[i % PLAYER_COLORS.length]); Sfx.play('select'); }
         else if (!v && was.name) { pushMsg(L('m_netLeft', was.name), '#c0a080'); Sfx.play('menu'); }
         else if (v && was.on && !v.on) { pushMsg(L('m_netDropped', v.n), '#c0a080'); Sfx.play('menu'); }
-        else if (v && !was.on && v.on) { pushMsg(L('m_netBack', v.n), PLAYER_COLORS[i % 4]); Sfx.play('select'); }
+        else if (v && !was.on && v.on) { pushMsg(L('m_netBack', v.n), PLAYER_COLORS[i % PLAYER_COLORS.length]); Sfx.play('select'); }
       }
     }
     G.players.length = Math.max(list.length, LOCAL + 1);

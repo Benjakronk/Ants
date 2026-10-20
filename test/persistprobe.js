@@ -133,7 +133,7 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   A.send({ t: 'list' });
   const list = await A.wait(m => m.t === 'list');
   const lw = list && list.worlds.find(w => w.name === 'MAURTUA');
-  check('the room browser lists the worlds (players, year, season, legacy)', lw && lw.players === 0 && lw.max === 4 &&
+  check('the room browser lists the worlds (players, year, season, legacy)', lw && lw.players === 0 && lw.max === 8 &&
     lw.year === 1 && lw.season === 0 && lw.legacy === 0 && list.worlds.length === 2, list && list.worlds);
   A.send({ t: 'enter', name: 'maurtua' });
   const wm = await A.wait(m => m.t === 'world', 15000);
@@ -156,9 +156,9 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   await sleep(4200);
   const files = fs.readdirSync(DATA).sort();
   let saveOk = false, bakOk = false;
-  try { saveOk = readSave().v === 7 && readSave().mode === 'world'; } catch (e) { /* bad */ }
+  try { saveOk = readSave().v === 8 && readSave().mode === 'world'; } catch (e) { /* bad */ }
   try { bakOk = !!JSON.parse(fs.readFileSync(FILE + '.bak', 'utf8')).terrain; } catch (e) { /* bad */ }
-  check('a running world autosaves (AUTOSAVE_MS), a whole v7 save with a .bak and no temp file left',
+  check('a running world autosaves (AUTOSAVE_MS), a whole v8 save with a .bak and no temp file left',
     /saved \(autosave/.test(srvLog) && fs.statSync(FILE).mtimeMs > m0 && saveOk && bakOk && !files.some(f => f.endsWith('.tmp')), files);
 
   // ---- a nuptial flight banks legacy, and the colony carries on --------------------

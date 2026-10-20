@@ -1,9 +1,9 @@
-// Online load: one room, 4 bot players sending random input for ~2 minutes
+// Online load: one room, 4 (or --bots N, up to 8) bot players sending random input for ~2 minutes
 // on a mid-game colony; reports the server's ms per tick (the sim's step
 // averaged over the whole run, and the snapshots on top), its CPU use, the
 // load the server's guard sees (/api/health), and the bytes per second each
 // client receives (JSON, and on the wire after permessage-deflate).
-//   node test/netload.js [seconds=120] [--natural]
+//   node test/netload.js [seconds=120] [--natural] [--bots N]
 // (--natural: the colony as a day of play left it, ~35 ants; by default it
 // is crowded up to a busy summer nest, 45 black + 35 red)
 const { spawn } = require('child_process');
@@ -13,8 +13,9 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const WebSocket = require(path.join(ROOT, 'server', 'node_modules', 'ws'));
 
-const SECONDS = Number(process.argv[2]) || 120;
+const SECONDS = Number(process.argv[2]) || 120;   // (a number first: --bots N alone keeps 120)
 const NATURAL = process.argv.includes('--natural');
+const BOTS = Math.max(1, Math.min(8, Number(process.argv[process.argv.indexOf('--bots') + 1]) || 4));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fails = [];
 const check = (name, ok, info) => {
@@ -94,7 +95,7 @@ function bot(port, name, idx) {
   srv.stderr.on('data', d => { log += d; });
   for (let i = 0; i < 50; i++) { await sleep(100); try { await getJson(port, '/api/health'); break; } catch (e) { /* not yet */ } }
 
-  const bots = [0, 1, 2, 3].map(i => bot(port, 'BOT' + (i + 1), i));
+  const bots = Array.from({ length: BOTS }, (_, i) => bot(port, 'BOT' + (i + 1), i));
   await Promise.all(bots.map(b => b.open));
   for (const b of bots) b.send({ t: 'hello', v: 1, name: b.name });
   bots[0].send({ t: 'create' });
@@ -148,7 +149,7 @@ function bot(port, name, idx) {
   const avgStep = (room.stepMs - r0.stepMs) / Math.max(1, room.ticks - r0.ticks);
   const avgSnap = ((room.busyMs - r0.busyMs) - (room.stepMs - r0.stepMs)) / Math.max(1, room.ticks - r0.ticks);
   const health = await getJson(port, '/api/health');
-  console.log('\nRESULTS over ' + secs.toFixed(0) + ' s, ' + room.ants + ' ants:');
+  console.log('\nRESULTS over ' + secs.toFixed(0) + ' s, ' + BOTS + ' bots, ' + room.ants + ' ants:');
   console.log('  server: ' + avgStep.toFixed(3) + ' ms/tick (sim step, the whole run; EWMA now ' + room.msTick + '), slowest ' + maxTick +
     ' ms, snapshots ' + avgSnap.toFixed(3) + ' ms/tick, ' + (ticks / secs).toFixed(1) + ' ticks/s, CPU ' + cpu.toFixed(1) +
     '% of a core, RSS ' + s1.rssMB + ' MB, guard load ' + health.load + ' of ' + health.budget + ' ms/frame');

@@ -110,3 +110,9 @@ restart maur`. Running matches are lost on a restart; the persistent worlds
 are saved on the way down and loaded on the way up (players in them
 reconnect into the reloaded world: their old place is gone, they pick a
 new ant). Saves from older builds load (the save format is versioned).
+
+Rooms of 8 (from 2026-10-20): a `server/.env` made from an older
+`.env.example` still says `MAX_PLAYERS=4`, and the update never touches
+it -- set `MAX_PLAYERS=8` there (or delete the line: 8 is the default)
+and `pm2 restart maur`. An 8-player room costs more CPU than a 4-player
+one (see PLAN.md); `CPU_BUDGET_MS` still guards the box.

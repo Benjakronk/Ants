@@ -227,7 +227,9 @@ function bot(port, name) {
   const port = await freePort();
   const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'maur-vs-'));
   const srv = spawn(process.execPath, [path.join(ROOT, 'server', 'server.js')], {
-    env: Object.assign({}, process.env, { PORT: String(port), HOST: '127.0.0.1', MAUR_DEV: '1', PERSIST_WORLDS: '0', DATA_DIR: DATA }),
+    env: Object.assign({}, process.env, { PORT: String(port), HOST: '127.0.0.1', MAUR_DEV: '1', PERSIST_WORLDS: '0', DATA_DIR: DATA,
+      // (rooms of 4: at most 2 a side -- 4v4 in rooms of 8 is test/eightprobe.js's)
+      MAX_PLAYERS: '4' }),
   });
   let srvLog = '';
   srv.stdout.on('data', d => { srvLog += d; });

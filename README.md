@@ -30,7 +30,7 @@ cd server && npm install && npm start    # listening on 127.0.0.1:3006
 ```
 
 Then open <http://localhost:3006> (the server serves the game too) in up to
-four browsers or tabs. A page opened from disk (`file://`) connects to
+eight browsers or tabs. A page opened from disk (`file://`) connects to
 `ws://localhost:3006/ws`; `?server=ws://host:port/ws` points it elsewhere,
 and `?lag=100` adds an artificial 100 ms round trip for testing. The public
 server will be `https://maur.lektorensrud.no` (see `deploy/README.md`).
@@ -42,7 +42,7 @@ Settings come from the environment or `server/.env` (see
 |---|---|---|
 | `PORT`, `HOST` | `3006`, `127.0.0.1` | where the server listens |
 | `MAX_ROOMS` | `4` | matches at once (lobbies included; the persistent worlds come on top) |
-| `MAX_PLAYERS` | `4` | players per room |
+| `MAX_PLAYERS` | `8` | players per room, 1-8 (versus: at most half of them a side, so 4v4) |
 | `CPU_BUDGET_MS` | `10` | the CPU every running room together may use, in ms per 16.7 ms frame (about 60% of a core); above it new matches and joins are refused with SERVER FULL |
 | `PERSIST_WORLDS` | `1` | persistent worlds: a count (the first of `MAURTUA`, `ENGA`, `SKOGEN`, `LYNGEN`) or a comma-separated list of names; `0` for none |
 | `DATA_DIR` | `server/data` | where the worlds are saved (JSON, one file per world plus a `.bak`; gitignored). Must be writable, and backed up |
@@ -85,7 +85,7 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 offers four ways in:
 
 - **PERSISTENT WORLDS** -- the server's named worlds (`MAURTUA`, ...), each
-  listed with its players (up to 4), year and season, and its legacy.
+  listed with its players (up to 8), year and season, and its legacy.
   `Enter` drops you in at any time; you pick an ant (**JOIN THE COLONY**).
   A world sleeps while nobody is in it (its colony can't die unattended)
   and is saved on the server. Its seasons cycle year after year: the
@@ -95,20 +95,24 @@ offers four ways in:
   into a bigger next year. A queen who dies with a princess is succeeded;
   a colony lost with no heir starts the world over -- a new seed, a fresh
   colony -- with its legacy and history kept. Always co-op.
-- **CREATE A MATCH** -- **co-op** (1-4 players, one colony, one year; the
+- **CREATE A MATCH** -- **co-op** (1-8 players, one colony, one year; the
   end screen has no CONTINUE) or **versus**, **public** (listed under OPEN
   MATCHES) or **private** (by code only). You get a four-letter **room
   code** (no I or O, case doesn't matter).
 - **JOIN WITH A CODE** -- any match, public or private.
 - **OPEN MATCHES** -- public matches still in their lobby with room to spare.
 
-The lobby lists everyone in their colours. The host presses `Enter` to
-start, `Tab` to make the match public or private, and `Up`/`Down` + `X` to
-kick a player (who is told so). Someone who joins a match already under way
-picks an ant from the colony (**JOIN THE COLONY**). When the server is busy
+The lobby lists everyone in their colours, in two columns of four (versus:
+black on the left, red on the right; a player who dropped out is dimmed).
+The host presses `Enter` to start, `Tab` to make the match public or
+private, and `Up`/`Down` + `X` to kick a player (who is told so). Someone
+who joins a match already under way picks an ant from the colony (**JOIN
+THE COLONY**); if every ant is already played (or none of a playable caste
+is left), **A NEW WORKER** comes out of the entrance for them -- the same
+after a death with no ant free. When the server is busy
 (too many matches, or its CPU budget used up) it says **SERVER FULL**.
 
-**Versus**: black against red, 1-2 players a side (`Left`/`Right` in the
+**Versus**: black against red, 1-4 players a side (`Left`/`Right` in the
 lobby picks yours; the host can start once both sides have a player). Each
 side plays its own colony -- its own ants to take over (never the queen),
 its own milestones, crystals and upgrades, its own HUD, map, `O` screen
@@ -124,8 +128,10 @@ spring of year 2 decides it: more stars wins, then more princesses flown,
 then more ants. No hints in versus. The end screen shows both sides.
 
 The keys are the same as solo. Each player plays its own ant -- a coloured
-chevron over it, the others' names over theirs, and the same colours on the
-map -- and `Tab` or a death hands you any ant no other player has. The
+chevron over it (eight colours), the others' names over theirs while they
+are on screen (the nearest first; a tag with no room left in a crowd is
+left out), and the same colours on the map -- and `Tab` or a death hands
+you any ant no other player has. The
 milestones, the crystals and the upgrades (`O`, any player may buy) belong
 to the colony; the hints and the guide arrow are your own. Nothing pauses:
 `Esc` opens a menu with **RESUME** and **LEAVE MATCH** (**LEAVE WORLD**, back
@@ -135,6 +141,23 @@ place is kept and your ant carries on as one of the colony until you are
 back. When a match's year ends (the nuptial flight, or the colony lost)
 everyone sees the same end screen. Matches are not saved; persistent
 worlds are (on the server).
+
+**More players, the same challenge.** A world is balanced for its number
+of players, *n*: a co-op match for the players who start it, versus for
+the bigger side (both sides alike), a persistent world for the most
+players ever in it at once (it never gets easier when they leave; saved
+with it). Co-op players' ants are workers on top of the colony's own
+household, so each player beyond the first gives the colony room for 1.5
+more ants and 10 more food, and the queen can still lay with eight at the
+mound. The milestones that more hands make easier grow by 15% a player
+beyond the first, on top of the yearly growth -- new ants raised, food
+stored, the mound, the contested fruit, the winter stockpile, centipedes
+killed -- and the colony size by 2 ants a player; the rest (a second
+storage, the royal chamber, a princess, the seal, the queen) stay as they
+are. In co-op the red rival grows to match: its household, caps and
+brood room, the colony it needs before it raids and the size of its
+raids all by 10% a player beyond the first (8 players: x1.7, up to 17
+raiders; its queen lays at her usual pace). One player plays exactly the game as it was.
 
 ### Getting started
 
@@ -409,7 +432,7 @@ terrain as a deflated diff against what the seed generates, checked by a
 hash), then snapshots: entity records as integer arrays, the ids gone, the
 colony state that changed, its own events (messages, sounds, particles)
 and the terrain rects edited (run-length packed). A mid-game colony with
-four players costs each client about 3-7 KB/s on the wire.
+four to eight players costs each client about 3-8 KB/s on the wire.
 
 Headless tests (require `npm install` for Playwright):
 
@@ -466,10 +489,22 @@ node test/versusprobe.js  # versus: the sim alone (equal nests on every
                           # colony, each side's HUD/milestones/crystals and
                           # nothing private of the enemy's, messages that
                           # stay on their side, the enemy queen slain
-node test/netload.js      # one room, 4 bots, 2 minutes on a busy colony:
-                          # server ms/tick (the whole run's average), CPU,
-                          # the guard's load, bytes/s per client
-                          # (--natural: an uncrowded day-1 colony)
+node test/eightprobe.js   # rooms of 8 and the balance by player count: the
+                          # sim alone (1 player keeps the old caps, targets
+                          # and red rival; 8 get room for the queen to lay,
+                          # scaled targets, a bigger rival; spawn spots;
+                          # the count only rising; v8 saves + older ones
+                          # migrated; a fresh worker when no ant is free),
+                          # then raw clients (8 in co-op, the 9th refused,
+                          # versus 4v4 and a 5th on a side refused, a
+                          # mid-match joiner's fresh worker, a persistent
+                          # world) and a page: the lobby of 8 (co-op and
+                          # versus) and name tags, as screenshots
+                          # (--no-browser skips the page)
+node test/netload.js      # one room, 4 bots (--bots N: up to 8), 2 minutes
+                          # on a busy colony: server ms/tick (the whole
+                          # run's average), CPU, the guard's load, bytes/s
+                          # per client (--natural: an uncrowded day-1 colony)
 ```
 
 © 2026 Lektor Ensrud

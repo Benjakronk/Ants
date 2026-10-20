@@ -43,7 +43,7 @@ module.exports = {
   PORT: num('PORT', 3006),
   HOST: process.env.HOST || '127.0.0.1',
   MAX_ROOMS: num('MAX_ROOMS', 4),                    // matches (lobbies included); the persistent worlds come on top
-  MAX_PLAYERS: Math.max(1, Math.min(4, num('MAX_PLAYERS', 4))),
+  MAX_PLAYERS: Math.max(1, Math.min(8, num('MAX_PLAYERS', 8))),   // players per room (versus: at most 4 a side)
   ROOM_IDLE_MS: num('ROOM_IDLE_MS', 60000),          // an empty room closes after this
   ROOM_OVER_MS: num('ROOM_OVER_MS', 5 * 60000),      // ...and an ended match after this
   RECONNECT_MS: num('RECONNECT_MS', 2 * 60000),      // a lost player's slot is kept this long

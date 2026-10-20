@@ -121,6 +121,21 @@ const RAID_HOME_T = 9000;    // ticks the retreat may take before stragglers dro
 // rescue) means it lost the thread and is no longer one
 const RAID_STATES = ['raid', 'fight', 'flee', 'idle', 'home', 'return'];
 
+// more players (G.playerSlots, see playerSlots in game.js): each one beyond
+// the first gives a played colony room for another ant and a bit (co-op
+// players' ants are workers on top of the household) and more storage, and
+// makes the AI rival in co-op that much bigger -- its household, its caps,
+// how many it needs before it raids and how many it sends (not how fast its
+// queen lays: a bigger household already fills the bigger nest, and a
+// faster queen had it raiding in spring) (versus has no AI rival: both sides play by the same rules). The
+// milestones grow too (see OBJECTIVES). With one player every factor is 1.
+const SLOT_POP = 1.5;        // population cap per extra player...
+const SLOT_FOOD = 10;        // ...and food cap
+const SLOT_RIVAL = 0.1;      // the AI rival: +10% per extra player (its raids already
+                             // grow each day, and NPC defenders don't grow with the players)
+const SLOT_OBJ = 0.15;       // a scaled milestone's target: +15% per extra player
+function slotScale(k) { return 1 + k * (playerSlots() - 1); }
+
 // the red queen slain: the rival colony is defeated
 const RIVAL_SCORE = 1000, RIVAL_CRYSTALS = 5;
 const SLAIN_T = 1200;        // ticks a queen's last wound counts toward who slew her (old saves)
@@ -354,6 +369,9 @@ class Colony {
   recalcChambers() {
     const sum = { storage: 0, nursery: 0, barracks: 0, royal: 0, fungus: 0 };
     let royalMax = 0;
+    // (room for more players, or an AI rival grown to match them)
+    const extra = this.player ? playerSlots() - 1 : 0;
+    const rs = this.player ? 1 : slotScale(SLOT_RIVAL);
     for (const ch of this.chambers) {
       const room = this.areaAt(ch.x, ch.y, ch);
       if (!(ch.claimed >= 0)) ch.claimed = room;
@@ -363,9 +381,9 @@ class Colony {
     }
     this.caps = {
       // never below what the queen needs to keep laying (eggs need 30)
-      food: Math.max(40, Math.round(20 + sum.storage * 0.1)),
-      brood: 1 + Math.floor(sum.nursery / 200),
-      pop: Math.max(10, Math.floor((sum.nursery + sum.barracks) / 75)),
+      food: Math.round(Math.max(40, Math.round(20 + sum.storage * 0.1)) * rs) + SLOT_FOOD * extra,
+      brood: Math.round((1 + Math.floor(sum.nursery / 200)) * rs),
+      pop: Math.floor(Math.max(10, Math.floor((sum.nursery + sum.barracks) / 75)) * rs) + Math.round(SLOT_POP * extra),
       // ticks between eggs: a roomier royal chamber, a busier queen
       eggT: Math.round(2700 * Math.max(0.5, Math.min(2.5, 1550 / Math.max(1, sum.royal)))),
       soldiers: 0.1 + Math.min(0.3, sum.barracks / 10000),  // soldier share
@@ -959,19 +977,21 @@ class Colony {
       return;
     }
     if (G.isWinter() || G.day < 2 || G.day <= this.lastRaidDay) return;
-    if (pop < RAID_POP || this.food < RAID_FOOD) return;
+    // (against more players: a bigger colony before it goes, a bigger party)
+    const rs = slotScale(SLOT_RIVAL);
+    if (pop < Math.round(RAID_POP * rs) || this.food < RAID_FOOD) return;
     const yearDay = G.day % YEAR_DAYS;
     const bold = RAID_BOLD[G.season] * (G.year >= 2 ? 1.5 : 1);
     if (Math.random() >= RAID_CHANCE * bold) return;
     const enemy = this.enemy();
-    if (enemy) this.startRaid(enemy, 4 + Math.floor(yearDay / 2) + (G.year >= 2 ? 2 : 0), pop);
+    if (enemy) this.startRaid(enemy, Math.round((4 + Math.floor(yearDay / 2) + (G.year >= 2 ? 2 : 0)) * rs), pop);
   }
 
   // send out up to n raiders (soldiers first, one kept home; half of them
   // workers to carry off the loot). Returns the number sent.
   startRaid(enemy, n, pop) {
     if (pop === undefined) pop = this.members().length;
-    n = Math.max(3, Math.min(RAID_MAX, n, Math.floor(pop * 0.4)));
+    n = Math.max(3, Math.min(Math.round(RAID_MAX * slotScale(SLOT_RIVAL)), n, Math.floor(pop * 0.4)));
     const fit = a => a.colony === this && a.hp > a.maxHp * 0.6 && a.playerIdx < 0 && !a.raiding && !a.carry;
     const soldiers = G.ants.filter(a => fit(a) && a.caste === 'soldier');
     const workers = G.ants.filter(a => fit(a) && a.caste === 'worker');
@@ -1250,22 +1270,27 @@ function dropSitePieces(n) {
 // ends the game -- it only costs stars at the nuptial flight. `grow`: what
 // the need rises by each later year (the nest is bigger by then, and a goal
 // met last year shouldn't tick itself off the moment its season starts).
+// More players make some of them easier: `scale` ones grow by SLOT_OBJ per
+// player beyond the first, `perSlot` ones by that much per player (pop25:
+// co-op players' ants are on top of the household). The rest -- a count of
+// chambers, the royal chamber (one chamber can't grow past its disk), the
+// seal, the queen, a princess -- stay as they are.
 // ---------------------------------------------------------------------------
 const SEAL_NEED = 45;   // winter recounts (8 s apart) with the entrance shut
 const OBJECTIVES = [
   // spring: establish the nest
-  [{ id: 'storage2', kind: 'level', need: 2, grow: 1 }, { id: 'raise', kind: 'count', need: 5 },
-    { id: 'food100', kind: 'level', need: 100, grow: 50 }],
+  [{ id: 'storage2', kind: 'level', need: 2, grow: 1 }, { id: 'raise', kind: 'count', need: 5, scale: true },
+    { id: 'food100', kind: 'level', need: 100, grow: 50, scale: true }],
   // summer: expand, and contest the fallen fruit with the rival
-  [{ id: 'mound', kind: 'level', need: 250, grow: 150 }, { id: 'pop25', kind: 'level', need: 25, grow: 10 },
-    { id: 'contested', kind: 'count', need: 8, grow: 4 }],
+  [{ id: 'mound', kind: 'level', need: 250, grow: 150, scale: true }, { id: 'pop25', kind: 'level', need: 25, grow: 10, perSlot: 2 },
+    { id: 'contested', kind: 'count', need: 8, grow: 4, scale: true }],
   // autumn: prepare for winter and the next generation
-  [{ id: 'stockpile', kind: 'end', need: 150, grow: 50 },
+  [{ id: 'stockpile', kind: 'end', need: 150, grow: 50, scale: true },
     { id: 'royal', kind: 'level', need: PRINCESS_ROYAL, grow: 600 },
     { id: 'princess', kind: 'count', need: 1 }],
   // winter: survive
   [{ id: 'queen', kind: 'end', need: 1 }, { id: 'sealed', kind: 'count', need: SEAL_NEED, pct: true },
-    { id: 'centipedes', kind: 'count', need: 3 }],
+    { id: 'centipedes', kind: 'count', need: 3, scale: true }],
 ];
 const OBJ_SCORE = 200, OBJ_CRYSTALS = 2;   // reward per milestone
 
@@ -1274,9 +1299,18 @@ function newObjectives(year, season, yearDone) {
     year, season,
     yearDone: yearDone || 0,   // milestones done this year (stars)
     list: OBJECTIVES[season].map(o => ({
-      id: o.id, n: 0, need: o.need + (o.grow || 0) * Math.max(0, year - 1), done: false,
+      id: o.id, n: 0, need: objNeed(o, year), done: false,
     })),
   };
+}
+
+// what milestone o asks for in `year`, for the players the world is
+// balanced for (see OBJECTIVES)
+function objNeed(o, year) {
+  const need = o.need + (o.grow || 0) * Math.max(0, year - 1);
+  const extra = playerSlots() - 1;
+  if (o.scale) return Math.round(need * (1 + SLOT_OBJ * extra));
+  return need + (o.perSlot || 0) * extra;
 }
 
 function objDef(id) {

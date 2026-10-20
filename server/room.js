@@ -1,9 +1,9 @@
 // MAUR server -- a room: a lobby with a code, then a match; or a persistent
 // world. In a match the room runs its own simulation at 60 Hz and sends each
 // player 20 snapshots a second. Modes:
-//   'coop'    one colony, 1-4 players, one year
+//   'coop'    one colony, 1-8 players, one year
 //   'versus'  black against red: every player slot has a faction, picked in
-//             the lobby (1-2 a side); each side plays its own colony
+//             the lobby (1-4 a side); each side plays its own colony
 //   'world'   a persistent world (server/server.js makes them at boot from
 //             PERSIST_WORLDS): no lobby, players drop in and out, the sim
 //             sleeps while nobody is in it and is saved to disk (store.js)
@@ -23,7 +23,7 @@ const SNAP_TICKS = 3;        // a snapshot every 3 ticks: 20 Hz
 const CATCH_UP = 5;          // ticks a late loop may run at once
 const MODES = ['coop', 'versus'];   // (what a player may create; 'world' is the server's)
 const FACTIONS = ['black', 'red'];  // by colony index
-const SIDE_MAX = 2;          // versus: players a side at most
+const SIDE_MAX = Math.ceil(cfg.MAX_PLAYERS / 2);   // versus: players a side at most (4 of 8)
 const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark' };
 
 // a uniform random 32-bit seed / an unguessable reconnect token
@@ -73,6 +73,13 @@ class Room {
     for (const s of this.slots) if (s) n[this.colOf(s)]++;
     return n;
   }
+  // the players the sim is to be balanced for (see playerSlots in
+  // game.js): versus the bigger side (both colonies alike), else everyone
+  // with a slot (a persistent world: everyone connected to it now)
+  balanceFor() {
+    if (this.mode === 'versus') return Math.max(1, ...this.sides());
+    return Math.max(1, this.world ? this.connectedSlots().length : this.playerCount());
+  }
 
   // a new player asks to join. Returns an error key, or null (joined).
   join(cl) {
@@ -103,6 +110,8 @@ class Room {
       const p = this.sim.ensurePlayer(idx);
       p.name = slot.name;
       p.col = this.colOf(slot);
+      // (more players than the world was balanced for: it grows to match)
+      if (this.sim.notePlayers(this.balanceFor())) this.log(`room ${this.label()}: now balanced for ${this.sim.playerSlots()} players`);
       this.sendWorld(cl);
     }
     this.broadcastLobby();
@@ -124,6 +133,7 @@ class Room {
     if (this.state === 'play') {
       if (slot.antId) this.sim.reclaimAnt(slot.idx, slot.antId);
       slot.antId = 0;
+      this.sim.notePlayers(this.balanceFor());
       this.sendWorld(cl);
     } else if (this.state === 'over') {
       cl.send({ t: 'over', over: this.sim.G.over });
@@ -267,7 +277,7 @@ class Room {
     const sim = createSim();
     const seed = randSeed();
     // (versus: the players take workers their colonies already have)
-    sim.newWorld(seed, vs ? 0 : this.slots.length, this.mode);
+    sim.newWorld(seed, vs ? 0 : this.slots.length, this.mode, this.balanceFor());
     this.base = new Uint8Array(sim.T.m);
     sim.T.onEdit = (x0, y0, x1, y1) => { this.dirty.push([x0, y0, x1, y1]); };
     this.sim = sim;

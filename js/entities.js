@@ -36,8 +36,11 @@ const BLACK_RIM = '#8e8698', BLACK_SHINE = '#d8d4e4', BLACK_LEG = '#6e645e';
 const LOAD_CAP = 100;
 
 // each player's colour (by player index): the chevron over its ant, its
-// name tag and map dot online, its messages
-const PLAYER_COLORS = ['#ffe080', '#80d0ff', '#ff9ec8', '#a8f080'];
+// name tag and map dot online, its messages. Light enough to read on the
+// dark tunnels, saturated enough to stand out from the sky, and none of
+// them the rival's scarlet or the HUD's gold.
+const PLAYER_COLORS = ['#ffe080', '#80d0ff', '#ff9ec8', '#a8f080',
+  '#ffa448', '#c4a0ff', '#f4f4f4', '#40e8c8'];
 
 const ITEM_DEF = {
   seed:     { value: 5,  food: true },

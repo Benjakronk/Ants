@@ -490,9 +490,9 @@ function bot(port, name) {
   x.send({ t: 'create' });
   const lb = await x.wait(m => m.t === 'lobby');
   check('after junk the server still works (and names are cleaned)', lb && lb.players[0].n === 'SCRIPTALERT1', lb && lb.players[0]);
-  // fill the room: 4 players, the 5th is turned away
+  // fill the room: 8 players, the 9th is turned away
   const others = [];
-  for (const n of ['Y', 'Z', 'W', 'V']) {
+  for (const n of ['Y', 'Z', 'W', 'V', 'U', 'T', 'S', 'R']) {
     const o = bot(port, n);
     await o.open;
     o.send({ t: 'hello', v: 1, name: n });
@@ -500,8 +500,8 @@ function bot(port, name) {
     others.push(o);
   }
   await sleep(400);
-  check('a room takes 4 players and turns the 5th away', others.slice(0, 3).every(o => o.msgs.some(m => m.t === 'lobby')) &&
-    others[3].msgs.some(m => m.t === 'error' && m.key === 'e_full'));
+  check('a room takes 8 players and turns the 9th away', others.slice(0, 7).every(o => o.msgs.some(m => m.t === 'lobby')) &&
+    others[7].msgs.some(m => m.t === 'error' && m.key === 'e_full'));
   // in a running match, junk input is clamped and a flood is cut off
   x.send({ t: 'start' });
   await x.wait(m => m.t === 's', 15000);

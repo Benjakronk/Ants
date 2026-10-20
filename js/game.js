@@ -29,6 +29,9 @@ const G = {
   legacy: 0,          // a persistent world's legacy points, banked by each nuptial flight
   history: [],        // ...and its story: { gen, year, out, stars, flown, legacy }
   gen: 1,             // ...and how many colonies it has seen (a lost one starts it over)
+  // the players the world is balanced for (1-MAX_SLOTS, see playerSlots):
+  // set by newWorld, raised by notePlayers, never lowered (saved)
+  playerSlots: 1,
   // whose eyes G.colony / G.rival / G.objectives see through: 0 in the sim
   // (the players' black colony, the red rival); a red player's client in
   // versus sets 1, and its HUD, map and arrow take the red colony's side
@@ -202,6 +205,36 @@ function playerColony(pIdx) {
 }
 
 // ---------------------------------------------------------------------------
+// the player count the world is balanced for (G.playerSlots): co-op the
+// players who started it, versus the bigger side, a persistent world the
+// most who were ever in it at once. Each player beyond the first gives the
+// colonies room (their caps), raises the milestones a little, and in co-op
+// makes the red rival bigger and bolder (see SLOT_* in colony.js). It only
+// ever rises -- a world doesn't get easier when players leave -- and with
+// one player every factor is exactly 1.
+// ---------------------------------------------------------------------------
+const MAX_SLOTS = 8;
+function playerSlots() { return Math.max(1, Math.min(MAX_SLOTS, Math.floor(G.playerSlots) || 1)); }
+
+// n players are in the world now: balance it for that many, if more than
+// before (the season's open milestones grow with it)
+function notePlayers(n) {
+  n = Math.max(1, Math.min(MAX_SLOTS, Math.floor(n) || 1));
+  if (n <= playerSlots()) return false;
+  G.playerSlots = n;
+  for (const c of G.colonies) {
+    c.recalcChambers();
+    const ob = c.objectives;
+    if (!ob) continue;
+    for (const o of ob.list) {
+      const def = objDef(o.id);
+      if (def && !o.done) o.need = objNeed(def, ob.year);
+    }
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // world setup
 // ---------------------------------------------------------------------------
 function resetWorldState(world, seed) {
@@ -282,24 +315,56 @@ function equalizeNests() {
   for (const c of G.colonies) c.recalcChambers();
 }
 
-function newWorld(seed, playerCount, mode) {
+// where a new player's ant starts on colony c's mound: the k-th spot of
+// SPAWN_DX beside the entrance (the next free one if it's no good), lifted
+// clear of any earth there and with ground not far below -- not over the
+// open shaft, never inside the terrain. used: x's already taken.
+const SPAWN_DX = [-8, 8, -16, 16, -24, 24, -32, 32, -40, 40, -48, 48];
+function spawnSpot(c, k, hw, hh, used) {
+  const e = c.entrance;
+  for (let j = 0; j < SPAWN_DX.length; j++) {
+    const x = e.x + SPAWN_DX[(k + j) % SPAWN_DX.length];
+    if (used && used.includes(x)) continue;
+    let y = e.y - 8;
+    for (let up = 0; up < 32 && T.boxSolid(x, y, hw, hh); up++) y--;
+    if (T.boxSolid(x, y, hw, hh)) continue;
+    let ground = false;
+    for (let d = 1; d <= 40 && !ground; d++) ground = T.boxSolid(x, y + d, hw, hh);
+    if (ground) return { x, y };
+  }
+  return { x: e.x + SPAWN_DX[k % SPAWN_DX.length], y: e.y - 8 };
+}
+
+// seed: the world; playerCount: the players' ants to add at the entrance
+// (co-op and solo: extra workers; versus and persistent worlds: none, their
+// players take ants the colony has); slots: the players it is balanced for
+// (default playerCount, at least 1 -- see playerSlots)
+function newWorld(seed, playerCount, mode, slots) {
   const world = genWorld(seed);
   resetWorldState(world, seed);
   setupFactions(mode);
   G.legacy = 0; G.history = []; G.gen = 1;
+  G.playerSlots = slots || playerCount || 1;
+  G.playerSlots = playerSlots();
   G.tick = Math.floor(DAY_LEN * 0.08); // start in the morning
   ENT_ID = 1;
 
   const c = G.colonies[0];
   const vs = G.mode === 'versus';
   // the royal households: ours, and the rival's across the forest (in
-  // versus the same household on both sides)
+  // versus the same household on both sides; in co-op a rival grown to
+  // match the players, see SLOT_RIVAL)
   populateColony(c, BLACK_WORKERS, BLACK_SOLDIERS);
-  populateColony(G.colonies[1], vs ? BLACK_WORKERS : RED_WORKERS, vs ? BLACK_SOLDIERS : RED_SOLDIERS);
+  const rx = n => n + Math.round(n * (slotScale(SLOT_RIVAL) - 1));
+  populateColony(G.colonies[1], vs ? BLACK_WORKERS : rx(RED_WORKERS), vs ? BLACK_SOLDIERS : rx(RED_SOLDIERS));
 
   // player ants, side by side at the entrance
+  const used = [];
   for (let p = 0; p < playerCount; p++) {
-    const a = new Ant(c.entrance.x + [-8, 8, -16, 16][p % 4], c.entrance.y - 8, 'worker');
+    const a = new Ant(c.entrance.x, c.entrance.y - 8, 'worker');
+    const s = spawnSpot(c, p, a.hw, a.hh, used);
+    a.x = s.x; a.y = s.y;
+    used.push(s.x);
     a.playerIdx = p;
     G.ants.push(a);
     G.players.push(newPlayer(a));
@@ -350,10 +415,11 @@ const HISTORY_MAX = 40;
 function rebirthWorld(seed) {
   const o = G.over || {};
   const keep = {
-    legacy: G.legacy, gen: G.gen, names: G.players.map(p => p.name),
+    legacy: G.legacy, gen: G.gen, names: G.players.map(p => p.name), slots: playerSlots(),
     history: G.history.concat([{ gen: G.gen, year: G.year, out: 'lost', reason: o.reason || 'r_extinct', legacy: 0 }]),
   };
-  newWorld(seed, 0, 'world');
+  // (balanced for as many players as the old colony was)
+  newWorld(seed, 0, 'world', keep.slots);
   G.legacy = keep.legacy;
   G.gen = keep.gen + 1;
   G.history = keep.history.slice(-HISTORY_MAX);
@@ -379,6 +445,9 @@ function restoreWorld(d, playerCount) {
   G.legacy = Math.max(0, Math.floor(Number(d.legacy) || 0));
   G.history = Array.isArray(d.history) ? d.history.filter(h => h && typeof h === 'object').slice(-HISTORY_MAX) : [];
   G.gen = Math.max(1, Math.floor(Number(d.gen) || 1));
+  // v8: the players it is balanced for (older: as many as it had players)
+  G.playerSlots = v >= 8 ? Number(d.slots) || 1 : Number(d.playerCount) || 1;
+  G.playerSlots = playerSlots();
   // v3 and older had no calendar: their colony starts the year now, on the
   // first day of spring (keeping the time of day)
   G.tick = v >= 4 ? d.tick : d.tick % DAY_LEN;
@@ -977,7 +1046,20 @@ function takeoverOptions(pIdx) {
   for (const a of G.ants) {
     if (a.hp > 0 && a.playerIdx < 0 && a.colony === col && PLAYABLE(a.caste)) counts[a.caste] = (counts[a.caste] || 0) + 1;
   }
-  return CASTE_ORDER.filter(c => counts[c]).map(c => ({ caste: c, count: counts[c] }));
+  const out = CASTE_ORDER.filter(c => counts[c]).map(c => ({ caste: c, count: counts[c] }));
+  // (no free ant at all for a player without one -- a newcomer to a colony
+  // whose ants are all played, or one whose ant died: a new worker)
+  if (!out.length && canFresh(pIdx || 0)) out.push({ caste: 'worker', count: 0, fresh: true });
+  return out;
+}
+
+// may player pIdx have a fresh worker? Only with no living ant of its own
+// and none free in its colony (the caller checks that), and while the
+// colony lives on (its queen or a princess; with no ant left it is lost)
+function canFresh(pIdx) {
+  const p = G.players[pIdx], col = playerColony(pIdx);
+  if (!col || G.over || (p && p.ant && p.ant.hp > 0)) return false;
+  return G.ants.some(a => a.hp > 0 && a.colony === col && (a.caste === 'queen' || a.caste === 'princess'));
 }
 
 // player pIdx takes the free ant of `caste` nearest (refX, refY). A living
@@ -990,6 +1072,13 @@ function takeOver(pIdx, caste, refX, refY) {
     if (c.hp <= 0 || c.playerIdx >= 0 || c.caste !== caste || c.colony !== col) continue;
     const d = dist2(c.x, c.y, refX, refY);
     if (d < bd) { bd = d; a = c; }
+  }
+  // nobody free at all: a fresh worker comes out of the entrance for it
+  if (!a && caste === 'worker' && takeoverOptions(pIdx).some(o => o.fresh)) {
+    a = new Ant(col.entrance.x, col.entrance.y - 8, 'worker', col);
+    const s = spawnSpot(col, pIdx, a.hw, a.hh);
+    a.x = s.x; a.y = s.y;
+    G.ants.push(a);
   }
   if (!a) return null;
   const p = G.players[pIdx];
