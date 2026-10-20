@@ -1,7 +1,8 @@
 // Online load: one room, 4 bot players sending random input for ~2 minutes
-// on a mid-game colony; reports the server's ms per tick, its CPU use, and
-// the bytes per second each client receives (JSON, and on the wire after
-// permessage-deflate).
+// on a mid-game colony; reports the server's ms per tick (the sim's step
+// averaged over the whole run, and the snapshots on top), its CPU use, the
+// load the server's guard sees (/api/health), and the bytes per second each
+// client receives (JSON, and on the wire after permessage-deflate).
 //   node test/netload.js [seconds=120] [--natural]
 // (--natural: the colony as a day of play left it, ~35 ants; by default it
 // is crowded up to a busy summer nest, 45 black + 35 red)
@@ -86,7 +87,7 @@ function bot(port, name, idx) {
 (async () => {
   const port = await freePort();
   const srv = spawn(process.execPath, [path.join(ROOT, 'server', 'server.js')], {
-    env: Object.assign({}, process.env, { PORT: String(port), MAUR_DEV: '1' }),
+    env: Object.assign({}, process.env, { PORT: String(port), MAUR_DEV: '1', PERSIST_WORLDS: '0' }),
   });
   let log = '';
   srv.stdout.on('data', d => { log += d; });
@@ -141,12 +142,16 @@ function bot(port, name, idx) {
     wireKBs: +((b.ws._socket.bytesRead - w0[i].wire) / secs / 1024).toFixed(1),
     snapsPerSec: +((b.snaps - w0[i].snaps) / secs).toFixed(1),
   }));
-  const room = s1.rooms[0];
+  const room = s1.rooms[0], r0 = s0.rooms[0];
   const cpu = ((s1.cpuUserMs + s1.cpuSystemMs) - (s0.cpuUserMs + s0.cpuSystemMs)) / (secs * 1000) * 100;
-  const ticks = room.tick - s0.rooms[0].tick;
+  const ticks = room.tick - r0.tick;
+  const avgStep = (room.stepMs - r0.stepMs) / Math.max(1, room.ticks - r0.ticks);
+  const avgSnap = ((room.busyMs - r0.busyMs) - (room.stepMs - r0.stepMs)) / Math.max(1, room.ticks - r0.ticks);
+  const health = await getJson(port, '/api/health');
   console.log('\nRESULTS over ' + secs.toFixed(0) + ' s, ' + room.ants + ' ants:');
-  console.log('  server: ' + room.msTick + ' ms/tick (EWMA), slowest ' + maxTick + ' ms, snapshot build ' + room.msSnap +
-    ' ms, ' + (ticks / secs).toFixed(1) + ' ticks/s, CPU ' + cpu.toFixed(1) + '% of a core, RSS ' + s1.rssMB + ' MB');
+  console.log('  server: ' + avgStep.toFixed(3) + ' ms/tick (sim step, the whole run; EWMA now ' + room.msTick + '), slowest ' + maxTick +
+    ' ms, snapshots ' + avgSnap.toFixed(3) + ' ms/tick, ' + (ticks / secs).toFixed(1) + ' ticks/s, CPU ' + cpu.toFixed(1) +
+    '% of a core, RSS ' + s1.rssMB + ' MB, guard load ' + health.load + ' of ' + health.budget + ' ms/frame');
   for (const p of per) console.log(`  ${p.name}: ${p.jsonKBs} KB/s JSON, ${p.wireKBs} KB/s on the wire, ${p.snapsPerSec} snapshots/s`);
   check('the room keeps 60 ticks a second', ticks / secs > 57, +(ticks / secs).toFixed(1));
   check('every client gets ~20 snapshots a second', per.every(p => p.snapsPerSec > 18), per.map(p => p.snapsPerSec));

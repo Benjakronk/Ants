@@ -130,7 +130,7 @@ that march out from their own nest. This is also the foundation for versus.
      To Phase 3: raid/rival balance against active players, red
      princesses and a red nuptial flight, raid warnings in the HUD/arrow.
 3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing. **Done** (7-hint spring tutorial, guide arrow `G`, regrouped HUD + plurals, charcoal-vs-scarlet factions and enemy health bars, raid banner + FOOD STOLEN, map icons + nest inset, readable labels/gates/shelters/fruit, idle colonies grow past the pop-cap stall, ~80% less mound erosion, soldier rally escort, red queen 1.5x and a wound-ledger bonus, save v6).
-4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus.
+4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus. **Done.**
    - **4a done:** `server/` (Node 22 + `ws`, one process: static files,
      `/api/health`, the WebSocket on `/ws`; `MAX_ROOMS`, 4 players a room,
      rooms close 60 s empty or 5 min after the match), each room its own
@@ -149,14 +149,35 @@ that march out from their own nest. This is also the foundation for versus.
      an 80-ant colony: ~5.3 ms/tick, ~42% of a core, ~6.3 KB/s per client on
      the wire; on a natural 39-ant colony 2.8 ms, 22%, 3.6 KB/s). No save
      version change (online matches aren't saved).
-   - **4b (next):** persistent named worlds (saved on the server as JSON,
-     with backups), hibernation while nobody is connected, legacy points per
-     nuptial flight, a fallen colony's princess founding a new nest; versus
-     (`room.mode` 'versus', players with `faction` 'red' playing the rival
-     colony: `p.col` 1, the red colony's milestones/tasks/messages, takeover
-     and upgrades for it); a lobby list of open worlds. Also worth a look
-     before the VPS: the sim's cost grows with the ants (4.5 ms/tick at 80
-     ants), e.g. throttling far NPC thinking. Still carried over from
-     Phase 3: red princesses and a red nuptial flight, a raid-defence hint,
-     and the ~7% slower early foraging that came with the erosion fix.
-5. **Deploy to the VPS.**
+   - **4b done:** capacity: far NPCs think less often (every 4 ticks past
+     900 px from every player ant, every 2 off screen, every tick within
+     260 px or while fighting/fleeing/raiding/rescuing/escorting/burrowing;
+     physics every tick, timers count the ticks passed), a cheaper ground
+     test, one nursery-danger scan per tick, cheaper pheromone ageing:
+     netload's 80-ant room 4.46 -> 3.00 ms/tick (CPU 33% -> 24% of a
+     core), nodesim 1.10 -> 0.74 ms/tick, economy within the noise floor;
+     a server-wide guard (rolling CPU per frame over all rooms against
+     `CPU_BUDGET_MS`, default 10; `MAX_ROOMS` 4) refusing new matches and
+     joins with SERVER FULL, the load in `/api/health`. Persistent worlds
+     (`PERSIST_WORLDS`, `DATA_DIR`): booted from JSON saves (save.js shared
+     with the server, save v7: mode, legacy, history, generation), asleep
+     with nobody in them, autosaved (2 min, on sleep, on SIGINT/SIGTERM or
+     pm2's shutdown message) atomically with a .bak; flights bank legacy
+     (stars x 100 + princesses x 50) and the years go on; a colony lost
+     with no heir restarts the world (new seed, legacy and history kept).
+     Room browser (PERSISTENT WORLDS, CREATE co-op/versus public/private,
+     JOIN WITH CODE, OPEN MATCHES), kick, public toggle. Versus: sides
+     picked in the lobby (1-2 each), both colonies played (own takeover,
+     milestones, crystals, upgrades, HUD via `G.colIdx`, messages tagged
+     by colony), nests equalized from the seed (paired chambers capped to
+     the smaller claim, same household), own-side ant gates (`T.gateSplit`),
+     equal queens, **no AI raids** in versus, queen slain = instant win,
+     else the year-2 flight (stars, princesses, ants); the enemy's private
+     numbers never sent. Tests: persistprobe, versusprobe, netprobe
+     extended. Not reached: the ~2.5 ms/tick target in netload's worst
+     case (all four bots at one nest). Moved to later: red princesses and
+     a red nuptial flight, a raid-defence hint (both from Phase 3), a
+     "fallen colony's princess founds a new nest" variant (succession stays
+     as before; a lost colony restarts the world).
+5. **Deploy to the VPS.** (Next: what remains. `deploy/README.md` has the
+   layout, the data dir and its nightly backup, `deploy/backup-maur.sh`.)

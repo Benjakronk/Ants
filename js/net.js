@@ -15,11 +15,17 @@ const NET_SNAP = 24;         // a predicted ant this far off the server's is put
 const Net = {
   ws: null,
   status: 'off',       // off | connecting | open | lost
-  intent: null,        // what to do once connected: { t: 'create' } / { t: 'join', code } / { t: 'resume' }
+  intent: null,        // what to do once connected: { t: 'create' } / { t: 'join', code } / { t: 'enter', name } / { t: 'list' } / { t: 'resume' }
   name: '',
   err: null,           // lang key of the last error, shown by the menus
-  // the room
+  welcomed: false,     // the server has said hello on this connection
+  list: null,          // the room browser: { worlds, matches, full } as the server last said
+  listT: 0,
+  // the room (worldName: a persistent world's; faction: ours in versus;
+  // pub: listed under OPEN MATCHES)
   code: null, token: null, you: -1, host: -1, roomState: null, players: [], max: 4, mode: 'coop',
+  worldName: null, faction: 'black', pub: false,
+  reborn: false,      // the last world was ours starting over (see world())
   // the match
   inMatch: false, seed: null, base: null, ready: false, awaitFirst: false,
   ents: { a: new Map(), b: new Map(), u: new Map(), i: new Map() },
@@ -56,6 +62,7 @@ const Net = {
 
   connect() {
     this.status = 'connecting';
+    this.welcomed = false;
     let ws;
     try { ws = new WebSocket(this.serverUrl()); } catch (e) { this.onDown(); return; }
     this.ws = ws;
@@ -95,7 +102,27 @@ const Net = {
     this.ws = null;
     if (ws) { ws.onclose = null; try { ws.close(); } catch (e) { /* gone */ } }
     this.status = 'off';
+    this.welcomed = false;
     this.queue = [];
+  },
+
+  // do `intent` on the connection already open (the room browser's), or
+  // open one for it
+  request(intent) {
+    if (this.ws && this.status === 'open' && this.welcomed) {
+      this.intent = intent;
+      this.err = null;
+      this.send(intent);
+    } else this.start(intent);
+  },
+
+  // the room browser: the list now and then (every 2 s while it's shown)
+  askList() {
+    const now = performance.now();
+    if (this.status === 'open' && this.welcomed && now - this.listT > 2000) {
+      this.listT = now;
+      this.send({ t: 'list' });
+    }
   },
 
   // the socket went down: in a room we keep trying to get back in
@@ -181,9 +208,12 @@ const Net = {
   async handle(m) {
     switch (m.t) {
       case 'welcome':
+        this.welcomed = true;
+        if (this.intent.t === 'list') this.listT = performance.now();
         if (this.intent.t === 'resume') this.send({ t: 'resume', code: this.code, token: this.token });
         else this.send(this.intent);
         return;
+      case 'list': this.list = m; return;
       case 'lobby': return this.lobby(m);
       case 'world': return this.world(m);
       case 's': return this.snap(m);
@@ -211,6 +241,7 @@ const Net = {
     const back = this.status === 'lost';
     this.code = m.code; this.token = m.token; this.you = m.you; this.host = m.host;
     this.players = m.players || []; this.max = m.max || 4; this.mode = m.mode;
+    this.worldName = m.name || null; this.faction = m.faction === 'red' ? 'red' : 'black'; this.pub = !!m.pub;
     this.roomState = m.state;
     this.status = 'open';
     this.remember();
@@ -240,10 +271,19 @@ const Net = {
     // a fresh world unless this is a reconnect into the match G still holds
     // (not after solo play in between, which replaced G)
     const fresh = regen || !G.online || G.seed !== m.seed || !G.colonies.length;
+    // (a new seed for the persistent world we're playing in: it started over)
+    this.reborn = fresh && G.online && G.mode === 'world' && m.mode === 'world' && G.colonies.length > 0 &&
+      this.worldName === (m.name || null) && G.seed !== m.seed;
     if (fresh) {
       const world = this.genWorld || genWorld(m.seed);
       world.m = tm;
       resetWorldState(world, m.seed);
+      // (who plays which colony; versus: each side's own ant gates)
+      setupFactions(m.mode === 'versus' || m.mode === 'world' ? m.mode : 'coop');
+      // (a world swapped in mid-play -- a persistent world starting over --
+      // isn't drawn or played until its first snapshot links the players)
+      this.ready = false;
+      netOnWorldSwap();
       this.genWorld = null;
       this.matchSeed = m.seed;
     } else {
@@ -254,6 +294,8 @@ const Net = {
     G.tick = m.tick;
     LOCAL = m.you;
     this.you = m.you;
+    this.mode = m.mode || this.mode;
+    this.worldName = m.name || null;
     this.resetModel();
     this.latest = this.prevTick = m.tick;
     this.clock = null;
@@ -365,7 +407,7 @@ const Net = {
     if (this.evq.length > 300) this.evq.splice(0, this.evq.length - 300);
     if (m.ed) for (const ed of m.ed) this.edit(ed);
     this.reconcile();
-    if (this.awaitFirst && G.colonies[0] && G.colonies[0].caps) {
+    if (this.awaitFirst && G.colony && G.colony.caps) {   // (our own colony: versus hides the enemy's caps)
       this.awaitFirst = false;
       this.ready = true;
       netOnWorldReady(this.newMatch);
@@ -388,6 +430,8 @@ const Net = {
     if (key === 'g') {
       G.lastFlightYear = v.lfy || 0;
       G.contested = v.cs;
+      // (a persistent world's legacy and story)
+      G.legacy = v.leg || 0; G.gen = v.gen || 1; G.history = v.hist || [];
     } else if (key === 'p') {
       this.playersView(v);
     } else {
@@ -408,8 +452,10 @@ const Net = {
         p.name = null; p.online = false; p.antId = 0; p.deathPos = null;
       } else {
         p.name = v.n; p.online = !!v.on; p.antId = v.a; p.buildMat = v.bm;
-        p.soil = v.so; p.thatch = v.th; p.deathPos = v.dp;
+        p.soil = v.so; p.thatch = v.th; p.deathPos = v.dp; p.col = v.c || 0;
       }
+      // (versus: a red player sees through the red colony's eyes)
+      if (i === LOCAL) G.colIdx = p.col || 0;
       // tell the others who came, went, dropped out and came back
       if (i !== LOCAL && this.ready) {
         if (v && !was.name) { pushMsg(L('m_netJoined', v.n), PLAYER_COLORS[i % 4]); Sfx.play('select'); }

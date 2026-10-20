@@ -41,6 +41,24 @@ const path = require('path');
   check('font has glyphs for every UI string', missing.length === 0);
   if (missing.length) console.log('  missing glyphs:', JSON.stringify(missing));
 
+  // the online strings of Phase 4b (persistent worlds, versus, the room
+  // browser, SERVER FULL): both languages, different words, and they fit
+  // the 320 px screen (with a long number in place of each {n})
+  const online = await page.evaluate(() => {
+    const keys = Object.keys(STR).filter(k => /^(ui_(worlds|openMatches|.*Note|listing|noWorlds|noOpen|asleep|legacy|worldColony|serverFull|mode|hostIs|cr|public|private|lobbyP|lobbyH|sideKeys|needSides|black|red$|leaveWorld|history|noHistory|histNote|enemy|vs)|m_(vs|worldWelcome|legacy|reborn|queenFoundVs)|h_|r_vs|lg_enemy|e_(kicked|sides|sideFull|noWorld|busy|mode|notHost|started))/.test(k));
+    const bad = [];
+    for (const k of keys) {
+      const [en, no] = STR[k];
+      if (!en || !no) bad.push(k + ': missing');
+      for (const s of [en, no]) if (textWidth(String(s).replace(/\{\d+\}/g, '8888')) > 316) bad.push(k + ': too wide: ' + s);
+    }
+    return { n: keys.length, bad, same: keys.filter(k => STR[k][0] === STR[k][1] && !/\{/.test(STR[k][0])) };
+  });
+  check('the new online strings: English and Norwegian, and they fit the screen', online.n >= 60 && !online.bad.length,
+    online.n + ' strings');
+  if (online.bad.length) console.log('  ', JSON.stringify(online.bad));
+  if (online.same.length) console.log('  (same in both languages: ' + online.same.join(', ') + ')');
+
   // title menu: 5th item toggles language
   check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'PLAY SOLO'));
   for (let i = 0; i < 5; i++) { // down to LANGUAGE

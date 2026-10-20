@@ -25,7 +25,8 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 // client-side state, layered onto the simulation's G
 Object.assign(G, {
   state: 'title',     // title | slots | intro | help | play | pause | gameover
-                      // online: netname | netmenu | netjoin | netwait | lobby
+                      // online: netname | netmenu | networlds | netcreate |
+                      // netopen | netjoin | netwait | lobby
   online: false,      // in an online match: the server runs the sim (net.js)
   slot: 1,
   msgs: [],           // on-screen messages { text, color, t }
@@ -50,6 +51,11 @@ Object.assign(G, {
   gatesT: 0,
   nameBuf: lsGet('maur_name') || '',   // the online name being typed
   codeBuf: '',        // the room code being typed
+  browseSel: 0,       // the room browser's selected row
+  crSel: 0, crMode: 'coop', crPub: false,   // CREATE A MATCH: the row, the mode, public or not
+  lobbySel: 0,        // the lobby's selected player (the host kicks)
+  sidesWarnT: 0,      // versus lobby: the 'a player on each side' note flashes red until this frame
+  rebornNote: null,   // a persistent world started over under us: { gen, reason } for JOIN THE COLONY
 });
 
 // an overlay that owns the screen: the HUD toasts wait (their timers stop)
@@ -228,6 +234,9 @@ function listenDist(x, y) {
 
 function drainEvents() {
   for (const e of G.events) {
+    // (offline a colony's messages and sounds are for its players only;
+    // online the server already sorted them)
+    if (e.col >= 0 && G.colony && e.col !== G.colony.idx) continue;
     if (e.t === 'msg') {
       if (e.to < 0 || e.to === LOCAL) {
         pushMsg(msgText(e), e.color);
@@ -484,7 +493,7 @@ function updateCamera() {
 // world keeps running underneath -- online it can't pause for one player.
 // ---------------------------------------------------------------------------
 function openTakeover(refX, refY, live) {
-  const types = takeoverOptions();
+  const types = takeoverOptions(LOCAL);
   if (types.length === 0) return false;
   G.takeover = { types, sel: 0, refX, refY, live };
   Sfx.play('menu');
@@ -494,7 +503,7 @@ function openTakeover(refX, refY, live) {
 function updateTakeover() {
   const tk = G.takeover;
   // refresh against ants that died (or got taken) while the menu was open
-  tk.types = takeoverOptions();
+  tk.types = takeoverOptions(LOCAL);
   if (tk.types.length === 0) {
     // nobody free right now; a dead player waits (the sim ends the world
     // if the whole colony is gone)
@@ -521,17 +530,19 @@ function updateTakeover() {
 // crystal upgrades. Like the switch overlay it never pauses the world; a
 // purchase goes to the sim through the input struct (input.buy).
 // ---------------------------------------------------------------------------
+// (a persistent world has a third page: its history)
+function objPages() { return G.mode === 'world' ? 3 : 2; }
+
 function updateObjScreen() {
   const os = G.objScreen;
   if (tookAction('obj') || tookPress('Escape')) { G.objScreen = null; Sfx.play('menu'); return; }
-  if (tookPress('ArrowLeft') || tookPress('KeyA') || tookPress('ArrowRight') || tookPress('KeyD')) {
-    os.page = 1 - os.page;
-    Sfx.play('menu');
-  }
+  const n = objPages();
+  if (tookPress('ArrowLeft') || tookPress('KeyA')) { os.page = (os.page + n - 1) % n; Sfx.play('menu'); }
+  if (tookPress('ArrowRight') || tookPress('KeyD')) { os.page = (os.page + 1) % n; Sfx.play('menu'); }
   if (os.page !== 1) return;
-  const n = UPGRADE_IDS.length;
-  if (tookPress('ArrowUp') || tookPress('KeyW')) { os.sel = (os.sel + n - 1) % n; Sfx.play('menu'); }
-  if (tookPress('ArrowDown') || tookPress('KeyS')) { os.sel = (os.sel + 1) % n; Sfx.play('menu'); }
+  const u = UPGRADE_IDS.length;
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { os.sel = (os.sel + u - 1) % u; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { os.sel = (os.sel + 1) % u; Sfx.play('menu'); }
   if (tookPress('Enter') || tookPress('Space')) G.players[LOCAL].input.buy = UPGRADE_IDS[os.sel];
 }
 
@@ -562,11 +573,11 @@ function drawObjScreen() {
     ctx.fillRect(PX - 2, PY - 2, PW + 4, PH + 4);
   }
   bevelPanel(PX, PY, PW, PH);
-  const title = os.page === 0 ? L('ui_objectives') : L('ui_upgrades');
+  const title = L(['ui_objectives', 'ui_upgrades', 'ui_history'][os.page]);
   drawTextCS(ctx, title, VIEW_W / 2, PY + 6, '#ffa040');
   drawText(ctx, '<', 18, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
   drawText(ctx, '>', 297, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
-  drawText(ctx, (os.page + 1) + '/2', 270, PY + 6, '#706050');
+  drawText(ctx, (os.page + 1) + '/' + objPages(), 270, PY + 6, '#706050');
   const R = 300;   // right edge of the text column
 
   if (os.page === 0) {
@@ -604,19 +615,46 @@ function drawObjScreen() {
     rowL(L('ui_crystals', col.crystals), 121, '#80e0ff');
     rowR(L('ui_milestones', G.objectives.yearDone), 121, '#ffe040');
     rowL(L('ui_score', col.score), 131, '#a0c8a0');
-    // the rival: a rough head count (nobody counts red ants one by one)
+    // versus: our own queen's health (her fall with no heir loses the match)
+    const oq = G.mode === 'versus' ? col.queen() : null;
+    if (oq) rowR(L('ui_ourQueen', Math.max(1, Math.round(oq.hp / oq.maxHp * 100))), 131, oq.hp < oq.maxHp * 0.5 ? '#ff5040' : '#a8e8a0');
+    // the rival: a rough head count (nobody counts red ants one by one;
+    // in versus it is just the enemy, whichever side we're on)
     const r = G.rival;
     if (r) {
+      // (versus: to the nearest 2 -- the sides start even, and should read so)
+      const vs = G.mode === 'versus', step = vs ? 2 : 5;
       const rs = r.defeated ? L(r.slain ? 'ui_rivalSlain' : 'ui_rivalDied')
-        : L('ui_rival', Math.max(5, Math.round(r.members().length / 5) * 5));
+        : L(vs ? 'ui_enemy' : 'ui_rival', Math.max(step, Math.round(r.members().length / step) * step));
       rowL(rs, 141, r.defeated ? '#80ff80' : '#ff7060');
       // once found, how her health stands (the bonus is a long campaign)
       const q = !r.defeated && r.queenSeen ? r.queen() : null;
       if (q) rowR(L('ui_rivalQueen', Math.max(1, Math.round(q.hp / q.maxHp * 100))), 141, '#ff9080');
     }
     // the next flight: this spring's if it hasn't flown yet, else next year's
+    // (a persistent world: with its legacy so far; versus: the match's goal)
     const flightYear = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year ? G.year : G.year + 1;
-    drawTextC(ctx, L('ui_yearGoal', flightYear), VIEW_W / 2, 153, '#ff90e0');
+    const goal = G.mode === 'world' ? L('ui_legacyLine', G.legacy, G.gen, flightYear)
+      : G.mode === 'versus' ? L('ui_vsGoal', 2) : L('ui_yearGoal', flightYear);
+    drawTextC(ctx, goal, VIEW_W / 2, 153, '#ff90e0');
+    drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
+  } else if (os.page === 2) {
+    // a persistent world's story: each year's flight (or the colony lost),
+    // the newest first, with the legacy it banked
+    drawTextC(ctx, L('ui_legacyN', G.legacy) + '   ' + L('ui_worldColony', G.gen), VIEW_W / 2, 26, '#ff90e0');
+    const hist = G.history.slice().reverse().slice(0, 9);
+    if (!hist.length) drawTextC(ctx, L('ui_noHistory'), VIEW_W / 2, 70, '#806e58');
+    let y = 42;
+    for (const h of hist) {
+      drawText(ctx, L('h_when', h.gen || 1, h.year), 20, y, '#c8b890');
+      const fl = h.out === 'flight';
+      const out = fl ? L('h_flight') + ' ' + '\x15'.repeat(h.stars || 0) : L(h.out === 'lost' ? 'h_lost' : 'h_noFlight');
+      drawText(ctx, out, 160, y, fl ? '#ff90e0' : h.out === 'lost' ? '#ff7060' : '#a09070');
+      if (h.legacy) { const s = '+' + h.legacy; drawText(ctx, s, R - textWidth(s), y, '#ffe040'); }
+      y += 11;
+    }
+    groove(18, 143, 284);
+    drawTextC(ctx, L('ui_histNote'), VIEW_W / 2, 150, '#806e58');
     drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
   } else {
     drawText(ctx, '\x13 ' + L('ui_crystals', col.crystals), 20, 26, '#80e0ff');
@@ -1269,7 +1307,8 @@ function drawTaskAndMsgs() {
   }
   // the season's next milestone, one line (O shows them all), with the key
   // that opens the full list where it fits
-  const o = G.objectives && G.objectives.list.find(o => !o.done);
+  // (versus: not while the deciding flight flies -- there's no next year)
+  const o = !(G.mode === 'versus' && (G.flight || G.lastFlightYear >= 2)) && G.objectives && G.objectives.list.find(o => !o.done);
   if (o) {
     let str = '\x06' + objName(o) + ' ' + objProgress(o);
     if (4 + textWidth(str + ' (O)') < VIEW_W - 8) str += ' (O)';
@@ -1609,11 +1648,12 @@ function drawMinimap() {
   }
   for (const g of G.gates) { const [gx, gy] = P(g.x, g.y); mapGate(gx, gy); }
   for (const sh of col.shelters) { const [hx, hy] = P(sh.x, sh.y); mapDome(hx, hy, '#8cc85a'); }
-  // the rival nests: a red flag over each entrance (grey once its queen fell)
+  // the rival nests: a flag in its colours over each entrance (grey once
+  // its queen fell)
   for (const c of G.colonies) {
     if (c === col) continue;
     const [fx, fy] = P(c.entrance.x, c.entrance.y);
-    mapFlag(fx, fy - 2, c.defeated ? '#706050' : '#e03828');
+    mapFlag(fx, fy - 2, c.defeated ? '#706050' : enemyFlag(c));
   }
   // this summer's fallen fruit between the nests
   const cs = G.contested;
@@ -1635,8 +1675,13 @@ function drawMinimap() {
   drawMapLegend(mx + 156, my + mh + 6);
 }
 
-// the ants as dots: players blink, the queen pink, rivals red (a rival queen
-// gets her own marker once found); clipped to the world box (wx0, wy0)-(wx1, wy1)
+// an enemy colony's colours on the map: its flag, its ants
+function enemyFlag(c) { return c.faction === 'red' ? '#e03828' : '#c8c0d8'; }
+function enemyDot(c) { return c.faction === 'red' ? '#ff6050' : '#b8b0c8'; }
+
+// the ants as dots: players blink, the queen pink, rivals in their colours
+// (a rival queen gets her own marker once found); clipped to the world box
+// (wx0, wy0)-(wx1, wy1)
 function drawMapAnts(mx, my, sx, sy, wx0, wy0, wx1, wy1) {
   for (const a of G.ants) {
     if (a.hp <= 0 || a.x < wx0 || a.x > wx1 || a.y < wy0 || a.y > wy1) continue;
@@ -1648,7 +1693,7 @@ function drawMapAnts(mx, my, sx, sy, wx0, wy0, wx1, wy1) {
       ctx.fillRect(x - 1, y, 2, 2);
     }
     ctx.fillStyle = a.playerIdx >= 0 ? PLAYER_COLORS[a.playerIdx % PLAYER_COLORS.length]
-      : red ? '#ff6050' : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
+      : red ? enemyDot(a.colony) : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
     const sz = a.playerIdx >= 0 && (G.tick >> 3) % 2 ? 3 : 2;
     ctx.fillRect(x - 1, y - 1, sz, sz);
   }
@@ -1701,7 +1746,7 @@ function drawMapLegend(x, y) {
     [() => mapGate(x + 72 + 2, y + 13), 'lg_gate'],
     [() => mapDome(x + 72 + 2, y + 24, '#d8b860'), 'lg_mound'],
     [() => mapFruit(x + 72 + 2, y + 33), 'lg_fruit'],
-    [() => mapFlag(x + 72 + 1, y + 48, '#e03828'), 'lg_red'],
+    [() => mapFlag(x + 72 + 1, y + 48, G.rival ? enemyFlag(G.rival) : '#e03828'), G.mode === 'versus' ? 'lg_enemy' : 'lg_red'],
   ];
   for (let i = 0; i < items.length; i++) {
     items[i][0]();
@@ -1940,7 +1985,7 @@ function updateHelp() {
 
 function pauseItems() {
   // (online nothing pauses: the menu just covers the running world)
-  if (G.online) return [{ id: 'resume', label: L('ui_resume') }, { id: 'leave', label: L('ui_leaveMatch') }];
+  if (G.online) return [{ id: 'resume', label: L('ui_resume') }, { id: 'leave', label: L(G.mode === 'world' ? 'ui_leaveWorld' : 'ui_leaveMatch') }];
   const items = [
     { id: 'resume', label: L('ui_resume') },
     { id: 'save', label: L('ui_saveGame') },
@@ -2000,7 +2045,8 @@ function updatePause() {
         G.state = 'title'; G.menuSel = 0;
         break;
       case 'leave':
-        leaveOnline('title');
+        // (a persistent world: back to the world list, for another one)
+        leaveOnline(G.mode === 'world' ? 'networlds' : 'title');
         break;
     }
   }
@@ -2021,18 +2067,23 @@ function drawTakeover() {
   } else if (G.online && !G.players[LOCAL].deathPos) {
     // (just joined, or back from a lost connection with the old ant gone)
     drawTextCS(ctx, L('ui_joinColony'), VIEW_W / 2, 38, pcol, 2);
-    drawTextC(ctx, L('ui_pickAnt'), VIEW_W / 2, 58, '#c8b890');
+    if (G.rebornNote) {
+      drawTextC(ctx, L(G.rebornNote.reason), VIEW_W / 2, 57, '#ff7060');
+      drawTextC(ctx, L('ui_rebornNote', G.rebornNote.gen), VIEW_W / 2, 67, '#ffb040');
+    } else drawTextC(ctx, L('ui_pickAnt'), VIEW_W / 2, 58, '#c8b890');
   } else {
     drawTextCS(ctx, L('ui_youDied'), VIEW_W / 2, 38, '#ff5040', 2);
     drawTextC(ctx, L('ui_colonyLives'), VIEW_W / 2, 58, '#c8b890');
   }
-  drawTextC(ctx, L('ui_continueAs'), VIEW_W / 2, 70, pcol);
+  // (the rebirth note's second line pushes the list down)
+  const dy = !tk.live && G.online && !G.players[LOCAL].deathPos && G.rebornNote ? 12 : 0;
+  drawTextC(ctx, L('ui_continueAs'), VIEW_W / 2, 70 + dy, pcol);
   for (let i = 0; i < tk.types.length; i++) {
     const t = tk.types[i];
     const sel = i === tk.sel;
     const label = casteName(t.caste) + '  X' + t.count;
-    if (sel) drawText(ctx, '\x06', 92, 84 + i * 12, '#ffe040');
-    drawText(ctx, label, 104, 84 + i * 12, sel ? '#ffe040' : '#c8b890');
+    if (sel) drawText(ctx, '\x06', 92, 84 + dy + i * 12, '#ffe040');
+    drawText(ctx, label, 104, 84 + dy + i * 12, sel ? '#ffe040' : '#c8b890');
   }
   drawTextC(ctx, tk.live ? L('ui_switchKeys') : L('ui_takeOver'),
     VIEW_W / 2, 160, '#a09070');
@@ -2051,6 +2102,7 @@ function drawGameOver() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const s = G.gameOverStats;
+  if (s && s.versus) { drawVersusOver(s); return; }
   if (s && s.canContinue) {
     // the year's end: a nuptial flight (or none)
     if (s.win) {
@@ -2098,6 +2150,40 @@ function drawGameOver() {
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
   }
   if (G.online) drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 164, '#a09070');
+  if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
+}
+
+// a versus match's end: victory, defeat or a draw, how it was decided, and
+// both sides' numbers side by side
+function drawVersusOver(s) {
+  const me = Net.faction === 'red' ? 1 : 0;
+  const won = s.winner === me, draw = s.winner < 0;
+  drawTextCS(ctx, L(draw ? 'ui_vsDraw' : won ? 'ui_vsWin' : 'ui_vsLose'), VIEW_W / 2, 12, draw ? '#e0c080' : won ? '#80ff80' : '#ff5040', 2);
+  if (!draw) drawTextC(ctx, L('ui_vsWinner' + s.winner), VIEW_W / 2, 34, s.winner ? '#ff7060' : '#d8d4e4');
+  const lost = 1 - s.winner;
+  const reason = s.reason === 'r_vsQueen' || s.reason === 'r_vsExtinct' ? s.reason + lost : s.reason;
+  drawTextC(ctx, L(reason), VIEW_W / 2, 46, '#c8b890');
+  const sides = s.sides || [];
+  const X = [196, 266], head = ['ui_black', 'ui_red'], hc = ['#d8d4e4', '#ff7060'];
+  groove(30, 60, 260);
+  for (let i = 0; i < 2; i++) {
+    drawTextC(ctx, L(head[i]), X[i], 66, hc[i]);
+    if (i === me) drawText(ctx, '\x06', X[i] - textWidth(L(head[i])) / 2 - 10, 66, '#ffe040');
+  }
+  const rows = [
+    ['ui_vsStars', sd => '\x15'.repeat(sd.stars || 0) || '-'],
+    ['ui_vsFlown', sd => String(sd.flown || 0)],
+    ['ui_vsAnts', sd => String(sd.pop || 0)],
+    ['ui_vsMiles', sd => String(sd.milestones || 0)],
+    ['w_score', sd => String(sd.score || 0)],
+  ];
+  let y = 80;
+  for (const [key, fmt] of rows) {
+    drawText(ctx, L(key), 40, y, '#a09070');
+    for (let i = 0; i < 2; i++) if (sides[i]) drawTextC(ctx, fmt(sides[i]), X[i], y, i === s.winner ? '#ffe040' : '#c8b890');
+    y += 12;
+  }
+  drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 164, '#a09070');
   if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
 }
 
@@ -2163,7 +2249,7 @@ function drawEntry(text, y, w) {
 
 function drawNetName() {
   netBackdrop(L('ui_onlineTitle'));
-  drawTextC(ctx, L('ui_coopNote'), VIEW_W / 2, 40, '#b09060');
+  drawTextC(ctx, L('ui_onlineNote'), VIEW_W / 2, 40, '#b09060');
   drawTextCS(ctx, L('ui_yourName'), VIEW_W / 2, 70, '#ffe080');
   drawEntry(G.nameBuf, 84, 110);
   drawNetErr(120);
@@ -2188,7 +2274,13 @@ function updateNetName() {
 }
 
 function netMenuItems() {
-  return [{ id: 'create', label: L('ui_create') }, { id: 'join', label: L('ui_joinCode') }, { id: 'back', label: L('ui_back') }];
+  return [
+    { id: 'worlds', label: L('ui_worlds'), note: 'ui_worldsNote' },
+    { id: 'create', label: L('ui_create'), note: 'ui_createNote' },
+    { id: 'join', label: L('ui_joinCode'), note: 'ui_joinNote' },
+    { id: 'open', label: L('ui_openMatches'), note: 'ui_openNote' },
+    { id: 'back', label: L('ui_back') },
+  ];
 }
 
 function drawNetMenu() {
@@ -2196,12 +2288,13 @@ function drawNetMenu() {
   drawTextC(ctx, G.nameBuf, VIEW_W / 2, 40, '#ffe080');
   const items = netMenuItems();
   for (let i = 0; i < items.length; i++) {
-    const sel = i === G.menuSel, y = 72 + i * 14;
+    const sel = i === G.menuSel, y = 62 + i * 14;
     if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i].label) / 2 - 12, y, '#ffe040');
     drawTextCS(ctx, items[i].label, VIEW_W / 2, y, sel ? '#ffe040' : '#c8b890');
   }
-  drawNetErr(130);
-  drawTextC(ctx, L('ui_coopNote'), VIEW_W / 2, 176, '#706050');
+  const it = items[G.menuSel];
+  if (it && it.note) drawTextC(ctx, L(it.note), VIEW_W / 2, 140, '#a09070');
+  drawNetErr(156);
 }
 
 function updateNetMenu() {
@@ -2210,11 +2303,17 @@ function updateNetMenu() {
   if (!menuNav(items.length)) return;
   Sfx.play('select');
   Net.err = null;
+  Net.name = G.nameBuf;
   switch (items[G.menuSel].id) {
+    case 'worlds': case 'open':
+      // the room browser: a connection that asks for the list now and then
+      Net.list = null;
+      Net.request({ t: 'list' });
+      G.state = items[G.menuSel].id === 'worlds' ? 'networlds' : 'netopen';
+      G.browseSel = 0;
+      break;
     case 'create':
-      Net.name = G.nameBuf;
-      Net.start({ t: 'create', mode: 'coop' });
-      G.state = 'netwait';
+      G.state = 'netcreate'; G.crSel = 0;
       break;
     case 'join':
       G.state = 'netjoin'; G.codeBuf = ''; Net.err = null;
@@ -2222,6 +2321,130 @@ function updateNetMenu() {
     case 'back':
       G.state = 'title'; G.menuSel = 1;
       break;
+  }
+}
+
+// ---- the room browser: the persistent worlds, the open matches -----------------
+// a list panel row: the selection frame
+// (two lines of text: at y and y + 9, the frame clear of both)
+function browseRow(y, sel) {
+  bevelPanel(24, y - 4, 272, 22);
+  if (!sel) return;
+  ctx.fillStyle = '#ffe040';
+  ctx.fillRect(24, y - 4, 272, 1); ctx.fillRect(24, y + 17, 272, 1);
+  ctx.fillRect(24, y - 4, 1, 22); ctx.fillRect(295, y - 4, 1, 22);
+  drawText(ctx, '\x06', 14, y + 3, '#ffe040');
+}
+
+// the list as the server last sent it (null: still asking)
+function browseList(kind) { return Net.list ? Net.list[kind] || [] : null; }
+
+// shared keys: up/down, Enter on a row, Esc back to the menu (the
+// connection closes). Returns the row chosen, or null.
+function browseNav(rows) {
+  Net.poll();
+  Net.askList();
+  if (tookPress('Escape')) { Net.close(); G.state = 'netmenu'; Net.err = null; Sfx.play('menu'); return null; }
+  const n = rows ? rows.length : 0;
+  if (!n) return null;
+  G.browseSel = Math.min(G.browseSel, n - 1);
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { G.browseSel = (G.browseSel + n - 1) % n; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { G.browseSel = (G.browseSel + 1) % n; Sfx.play('menu'); }
+  return tookPress('Enter') || tookPress('Space') ? rows[G.browseSel] : null;
+}
+
+function drawBrowseFoot(empty, list) {
+  if (!list) drawTextCS(ctx, L('ui_listing'), VIEW_W / 2, 80, (G.frame >> 4) % 2 ? '#ffe080' : '#c8b890');
+  // (no open match to join, and none can be made: just the server-full line)
+  else if (!list.length && !(Net.list.full && empty === 'ui_noOpen')) drawTextC(ctx, L(empty), VIEW_W / 2, 80, '#a09070');
+  if (Net.list && Net.list.full) drawTextC(ctx, L('ui_serverFull'), VIEW_W / 2, 150, '#ff9040');
+  drawNetErr(160);
+  drawTextC(ctx, L('ui_codeKeys'), VIEW_W / 2, 178, '#a09070');
+}
+
+function drawNetWorlds() {
+  netBackdrop(L('ui_worlds'));
+  const list = browseList('worlds');
+  (list || []).slice(0, 4).forEach((w, i) => {
+    const y = 40 + i * 28, sel = i === G.browseSel;
+    browseRow(y, sel);
+    drawText(ctx, w.name, 32, y, sel ? '#ffe040' : '#e8e0c8');
+    const pl = w.players + '/' + w.max;
+    drawText(ctx, pl, 288 - textWidth(pl), y, w.players >= w.max ? '#ff9040' : '#80d0ff');
+    const yr = SEASON_ICON[w.season] + ' ' + L('ui_seasonYear', seasonName(w.season), w.year);
+    drawText(ctx, yr, 32, y + 9, SEASON_COLOR[w.season]);
+    const lg = L('ui_legacyN', w.legacy) + (w.gen > 1 ? '  ' + L('ui_worldColony', w.gen) : '');
+    drawText(ctx, lg, 288 - textWidth(lg), y + 9, '#ff90e0');
+    if (w.sleeping && !w.players) drawText(ctx, L('ui_asleep'), 160 - textWidth(L('ui_asleep')) / 2, y, '#706050');
+  });
+  drawBrowseFoot('ui_noWorlds', list);
+}
+
+function updateNetWorlds() {
+  const w = browseNav(browseList('worlds'));
+  if (!w) return;
+  Net.request({ t: 'enter', name: w.name });
+  G.state = 'netwait';
+  Sfx.play('select');
+}
+
+function drawNetOpen() {
+  netBackdrop(L('ui_openMatches'));
+  const list = browseList('matches');
+  (list || []).slice(0, 4).forEach((m, i) => {
+    const y = 40 + i * 28, sel = i === G.browseSel;
+    browseRow(y, sel);
+    drawText(ctx, m.code, 32, y, sel ? '#ffe040' : '#e8e0c8');
+    drawText(ctx, L(m.mode === 'versus' ? 'ui_modeVersus' : 'ui_modeCoop'), 80, y, m.mode === 'versus' ? '#ff9080' : '#a8e8a0');
+    const pl = m.players + '/' + m.max;
+    drawText(ctx, pl, 288 - textWidth(pl), y, '#80d0ff');
+    drawText(ctx, L('ui_hostIs', m.host), 32, y + 9, '#a09070');
+  });
+  drawBrowseFoot('ui_noOpen', list);
+}
+
+function updateNetOpen() {
+  const m = browseNav(browseList('matches'));
+  if (!m) return;
+  Net.request({ t: 'join', code: m.code });
+  G.state = 'netwait';
+  Sfx.play('select');
+}
+
+// ---- CREATE A MATCH: co-op or versus, public or private -------------------------
+function drawNetCreate() {
+  netBackdrop(L('ui_create'));
+  const rows = [
+    L('ui_crMode', L(G.crMode === 'versus' ? 'ui_modeVersus' : 'ui_modeCoop')),
+    L('ui_crVis', L(G.crPub ? 'ui_public' : 'ui_private')),
+    L('ui_crGo'),
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    const sel = i === G.crSel, y = 56 + i * 16;
+    const lr = i < 2 && sel ? '< ' + rows[i] + ' >' : rows[i];
+    if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(lr) / 2 - 12, y, '#ffe040');
+    drawTextCS(ctx, lr, VIEW_W / 2, y, sel ? '#ffe040' : '#c8b890');
+  }
+  drawTextC(ctx, L(G.crMode === 'versus' ? 'ui_versusNote' : 'ui_coopNote'), VIEW_W / 2, 118, '#a09070');
+  drawTextC(ctx, L(G.crPub ? 'ui_pubNote' : 'ui_privNote'), VIEW_W / 2, 130, '#a09070');
+  drawNetErr(152);
+  drawTextC(ctx, L('ui_crKeys'), VIEW_W / 2, 178, '#a09070');
+}
+
+function updateNetCreate() {
+  if (tookPress('Escape')) { G.state = 'netmenu'; G.menuSel = 1; Sfx.play('menu'); return; }
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { G.crSel = (G.crSel + 2) % 3; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { G.crSel = (G.crSel + 1) % 3; Sfx.play('menu'); }
+  const lr = tookPress('ArrowLeft') || tookPress('KeyA') || tookPress('ArrowRight') || tookPress('KeyD');
+  const go = tookPress('Enter') || tookPress('Space');
+  if ((lr || go) && G.crSel === 0) { G.crMode = G.crMode === 'versus' ? 'coop' : 'versus'; Sfx.play('menu'); }
+  else if ((lr || go) && G.crSel === 1) { G.crPub = !G.crPub; Sfx.play('menu'); }
+  else if (go && G.crSel === 2) {
+    Net.err = null;
+    Net.name = G.nameBuf;
+    Net.start({ t: 'create', mode: G.crMode, pub: G.crPub });
+    G.state = 'netwait';
+    Sfx.play('select');
   }
 }
 
@@ -2268,44 +2491,81 @@ function updateNetWait() {
   if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); }
 }
 
+// versus: the players on each side
+function lobbySides() {
+  const n = [0, 0];
+  for (const pl of Net.players) if (pl) n[pl.f === 'red' ? 1 : 0]++;
+  return n;
+}
+
 function drawLobby() {
-  netBackdrop(L('ui_onlineTitle'));
-  drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, 34, '#b09060');
-  drawTextCS(ctx, Net.code || '----', VIEW_W / 2, 45, '#ffe040', 4);
-  drawTextC(ctx, L('ui_shareCode'), VIEW_W / 2, 77, '#806e58');
+  const vs = Net.mode === 'versus';
+  netBackdrop(L(vs ? 'ui_modeVersus' : 'ui_modeCoop'));
+  drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, 32, '#b09060');
+  drawTextCS(ctx, Net.code || '----', VIEW_W / 2, 42, '#ffe040', 4);
+  drawTextC(ctx, L('ui_shareCode'), VIEW_W / 2, 72, '#806e58');
+  drawTextC(ctx, L(Net.pub ? 'ui_lobbyPub' : 'ui_lobbyPriv'), VIEW_W / 2, 82, Net.pub ? '#a8e8a0' : '#a09070');
   const n = Net.players.filter(Boolean).length;
-  drawTextC(ctx, L('ui_lobbyPlayers', n, Net.max), VIEW_W / 2, 92, '#c8b890');
-  let y = 104;
+  drawTextC(ctx, L('ui_lobbyPlayers', n, Net.max), VIEW_W / 2, 94, '#c8b890');
+  const host = Net.you === Net.host && Net.roomState === 'lobby';
+  let y = 105;
   Net.players.forEach((pl, i) => {
     if (!pl) return;
     const col = PLAYER_COLORS[i % PLAYER_COLORS.length];
+    // (the host's cursor, for a kick)
+    if (host && i === G.lobbySel && i !== Net.you) drawText(ctx, '\x06', 56, y, '#ffe040');
     ctx.fillStyle = '#000000';
-    ctx.fillRect(83, y - 1, 9, 9);
+    ctx.fillRect(67, y - 1, 9, 9);
     ctx.fillStyle = pl.on ? col : '#4a3826';
-    ctx.fillRect(84, y, 7, 7);
-    drawText(ctx, pl.n, 98, y, pl.on ? col : '#706050');
+    ctx.fillRect(68, y, 7, 7);
+    drawText(ctx, pl.n, 82, y, pl.on ? col : '#706050');
     const tags = [];
+    if (vs) tags.push(L(pl.f === 'red' ? 'ui_red' : 'ui_black'));
     if (i === Net.host) tags.push(L('ui_host'));
     if (i === Net.you) tags.push(L('ui_you'));
     if (!pl.on) tags.push(L('ui_offline'));
-    if (tags.length) drawText(ctx, '(' + tags.join(', ') + ')', 176, y, pl.on ? '#a09070' : '#806e58');
-    y += 11;
+    if (tags.length) drawText(ctx, '(' + tags.join(', ') + ')', 160, y, !pl.on ? '#806e58' : vs ? (pl.f === 'red' ? '#ff7060' : '#d8d4e4') : '#a09070');
+    y += 10;
   });
-  const host = Net.you === Net.host;
-  let note = host ? L('ui_hostStart') : L('ui_waitHost');
+  let note = Net.you === Net.host ? L('ui_hostStart') : L('ui_waitHost');
   if (Net.roomState === 'play') note = L('ui_inProgress');
+  else if (vs && lobbySides().some(k => !k)) note = L('ui_needSides');
   const up = Net.status === 'open';
-  drawTextC(ctx, note, VIEW_W / 2, 160, !up ? '#706050' : host && Net.roomState === 'lobby' && (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
-  drawTextC(ctx, L('ui_lobbyLeave'), VIEW_W / 2, 176, '#706050');
-  drawNetErr(148);
+  // (a start refused for an empty side: the note itself flashes red)
+  const warn = G.frame < G.sidesWarnT || Net.err === 'e_sides';
+  drawTextC(ctx, note, VIEW_W / 2, 152, !up ? '#706050' : warn ? '#ff5040' : host && (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
+  const keys = [vs && Net.roomState === 'lobby' ? L('ui_sideKeys') : null, host ? L('ui_lobbyHostKeys') : null].filter(Boolean);
+  keys.forEach((k, i) => drawTextC(ctx, k, VIEW_W / 2, 163 + i * 9, '#806e58'));
+  drawTextC(ctx, L('ui_lobbyLeave'), VIEW_W / 2, 182, '#706050');
+  if (Net.err !== 'e_sides') drawNetErr(144);
   if (Net.status === 'lost') drawNetLost();
 }
 
 function updateLobby() {
   Net.poll();
   if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); return; }
-  if (Net.you === Net.host && Net.roomState === 'lobby' && Net.status === 'open' && tookPress('Enter')) {
+  if (Net.roomState !== 'lobby' || Net.status !== 'open') return;
+  // versus: pick a side
+  if (Net.mode === 'versus') {
+    const l = tookPress('ArrowLeft') || tookPress('KeyA'), r = tookPress('ArrowRight') || tookPress('KeyD');
+    if (l || r) { Net.err = null; Net.send({ t: 'side', f: l ? 'black' : 'red' }); Sfx.play('menu'); }
+  }
+  if (Net.you !== Net.host) return;
+  // the host: start, kick the selected player, public or private
+  const n = Net.players.length;
+  if (n) {
+    if (tookPress('ArrowUp') || tookPress('KeyW')) { G.lobbySel = (G.lobbySel + n - 1) % n; Sfx.play('menu'); }
+    if (tookPress('ArrowDown') || tookPress('KeyS')) { G.lobbySel = (G.lobbySel + 1) % n; Sfx.play('menu'); }
+    G.lobbySel = Math.min(G.lobbySel, n - 1);
+  }
+  if (tookPress('KeyX') && G.lobbySel !== Net.you && Net.players[G.lobbySel]) {
+    Net.send({ t: 'kick', idx: G.lobbySel });
+    Sfx.play('kill');
+  }
+  if (tookPress('Tab')) { Net.send({ t: 'pub', on: !Net.pub }); Sfx.play('menu'); }
+  if (tookPress('Enter')) {
     Net.err = null;
+    if (Net.mode === 'versus' && lobbySides().some(k => !k)) { G.sidesWarnT = G.frame + 90; Sfx.play('menu'); return; }
     Net.send({ t: 'start' });
     Sfx.play('select');
   }
@@ -2316,13 +2576,30 @@ function leaveOnline(state) {
   Net.leave();
   G.online = false; G.running = false;
   G.takeover = null; G.objScreen = null; G.showMap = false;
-  LOCAL = 0;
+  LOCAL = 0; G.colIdx = 0; G.mode = 'solo';
+  G.rebornNote = null;
   G.state = state; G.menuSel = state === 'title' ? 1 : 0;
+  if (state === 'networlds') {
+    // (a fresh connection for the list; the menu under it is the online one)
+    Net.list = null;
+    Net.request({ t: 'list' });
+    G.browseSel = 0;
+  }
 }
 
 // ---- what net.js reports ------------------------------------------------------
 function netOnLobby() {
+  // (the lobby changed: a refusal shown for an older state of it is stale)
+  if (G.state === 'lobby') Net.err = null;
   if (G.state === 'netwait' || G.state === 'lobby') G.state = Net.roomState === 'over' ? 'netwait' : 'lobby';
+}
+
+// a new world replaces the one being played (a persistent world started
+// over): LOADING until its first snapshot, then netOnWorldReady
+function netOnWorldSwap() {
+  if (G.state !== 'play' && G.state !== 'pause') return;
+  G.takeover = null; G.objScreen = null; G.showMap = false;
+  G.state = 'netwait';
 }
 
 // the world and its first snapshot are in: play (or, back from a lost
@@ -2332,10 +2609,24 @@ function netOnWorldReady(fresh) {
   G.online = true;
   G.running = true;
   enterWorld('net');
-  if (fresh) {
+  G.rebornNote = null;
+  if (fresh && Net.reborn) {
+    // our persistent world started over (its colony lost): no welcome, no
+    // tutorial again -- JOIN THE COLONY says what happened, the sim's
+    // messages (why, then the new colony) follow once an ant is picked
+    const h = G.history[G.history.length - 1];
+    G.rebornNote = { gen: G.gen, reason: h && h.reason === 'r_queen' ? 'r_queen' : 'r_extinct' };
+  } else if (fresh) {
     Tut.start(true);
-    const n = Net.players.filter(Boolean).length;
-    pushMsg(Ln('m_coopStart', n), '#80ff80');
+    if (G.mode === 'versus') {
+      // (no tutorial in versus: both sides know the game)
+      Tut.step = TUT_STEPS.length;
+      pushMsg(L(G.colIdx ? 'm_vsRed' : 'm_vsBlack'), G.colIdx ? '#ff7060' : '#d8d4e4');
+    } else if (G.mode === 'world') {
+      pushMsg(L('m_worldWelcome', Net.worldName || '', G.gen, G.year), '#80ff80');
+    } else {
+      pushMsg(Ln('m_coopStart', Net.players.filter(Boolean).length), '#80ff80');
+    }
     if (!Tut.active()) pushMsg(L('m_objHint'), '#ffd890');
   }
   if (!wasPlaying) { G.state = 'play'; Sfx.play('select'); }
@@ -2343,9 +2634,17 @@ function netOnWorldReady(fresh) {
 
 function netOnError(key) {
   Net.err = key;
-  if (G.state === 'netwait' || G.state === 'lobby') {
-    G.state = ['e_noRoom', 'e_full', 'e_over'].includes(key) ? 'netjoin' : 'netmenu';
-    G.menuSel = 0;
+  const t = Net.intent && Net.intent.t;
+  if (G.state === 'netwait') {
+    // (back where the attempt came from: the world list, the open matches,
+    // the code, the menu)
+    const from = Net.list && t === 'enter' ? 'networlds' : Net.list && t === 'join' ? 'netopen' : null;
+    G.state = from || (['e_noRoom', 'e_full', 'e_over'].includes(key) ? 'netjoin' : 'netmenu');
+    // (the menu's cursor on the item that failed)
+    G.menuSel = t === 'create' ? 1 : t === 'join' ? 2 : 0;
+  } else if (G.state === 'lobby') {
+    // (a refused side or start: the lobby stays, with the reason)
+    if (!['e_sides', 'e_sideFull', 'e_notHost', 'e_busy', 'e_started'].includes(key)) { G.state = 'netmenu'; G.menuSel = 0; }
   } else if (G.online) {
     pushMsg(errText(key), '#ff5040');
   }
@@ -2359,12 +2658,13 @@ function netOnClosed(key) {
   if (['play', 'pause', 'lobby', 'netwait'].includes(G.state)) {
     G.online = false; G.running = false;
     G.takeover = null; G.objScreen = null; G.showMap = false;
-    LOCAL = 0;
+    LOCAL = 0; G.colIdx = 0; G.mode = 'solo';
     G.state = 'netmenu'; G.menuSel = 0;
   }
 }
 
-// the match is over: everyone gets the year's end screen
+// the match is over: everyone gets the year's end screen (versus: each
+// side its own victory or defeat)
 function netOnOver(over) {
   // (online even when no world came first: a reload after the end)
   G.online = true;
@@ -2373,7 +2673,8 @@ function netOnOver(over) {
   G.overSel = 0;
   G.takeover = null; G.objScreen = null; G.showMap = false;
   G.state = 'gameover';
-  Sfx.play(over && over.win ? 'task' : 'die');
+  const won = over && (over.versus ? over.winner === (Net.faction === 'red' ? 1 : 0) : over.win);
+  Sfx.play(won ? 'task' : 'die');
 }
 
 // ---------------------------------------------------------------------------
@@ -2410,6 +2711,9 @@ function frame(now) {
       case 'gameover': updateGameOver(); break;
       case 'netname': updateNetName(); break;
       case 'netmenu': updateNetMenu(); break;
+      case 'networlds': updateNetWorlds(); break;
+      case 'netopen': updateNetOpen(); break;
+      case 'netcreate': updateNetCreate(); break;
       case 'netjoin': updateNetJoin(); break;
       case 'netwait': updateNetWait(); break;
       case 'lobby': updateLobby(); break;
@@ -2430,6 +2734,9 @@ function frame(now) {
     case 'gameover': drawGameOver(); break;
     case 'netname': drawNetName(); break;
     case 'netmenu': drawNetMenu(); break;
+    case 'networlds': drawNetWorlds(); break;
+    case 'netopen': drawNetOpen(); break;
+    case 'netcreate': drawNetCreate(); break;
     case 'netjoin': drawNetJoin(); break;
     case 'netwait': drawNetWait(); break;
     case 'lobby': drawLobby(); break;

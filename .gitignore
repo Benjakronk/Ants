@@ -2,3 +2,5 @@ node_modules/
 # (the root one is the test tooling's; server/package-lock.json is kept)
 /package-lock.json
 .env
+# the persistent worlds' save files
+/server/data/

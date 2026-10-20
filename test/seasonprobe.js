@@ -330,7 +330,7 @@ const path = require('path');
       princess: G.ants.filter(a => a.caste === 'princess').length,
       ages: G.items.filter(i => i.kind === 'seed' && i.age >= 4990).length };
   });
-  check('save is version 6', saved.ok && saved.v === 6);
+  check('save is version 7', saved.ok && saved.v === 7);
   check('calendar round-trips (via the tick)', loaded.ok && loaded.season === saved.season && loaded.year === saved.year);
   check('crystals and upgrades round-trip', loaded.crystals === 7 && loaded.upg.mandibles === 2 &&
     loaded.upg.digging === 1 && loaded.upg.carry === 3, loaded.upg);
@@ -536,9 +536,7 @@ const path = require('path');
       const many = rival === 'big' ? G.colony.members().length + 5 : 2;
       for (let i = 0; i < many; i++) G.ants.push(new Ant(G.rival.junction.x, G.rival.junction.y, 'worker', G.rival));
       G.lastFlightYear = 0;
-      startFlight(ms);
-      const s = G.flight.stars; G.flight = null;
-      return s;
+      return startFlight(G.colony, ms).stars;
     };
     const ok = t(1, 0, 'big') === 1 && t(3, 0, 'big') === 2 && t(1, 8, 'big') === 2 && t(0, 12, 'dead') === 0 &&
       t(3, 8, 'big') === 2 && t(1, 0, 'small') === 2 && t(1, 0, 'dead') === 2 && t(3, 8, 'small') === 3;

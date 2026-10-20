@@ -2,6 +2,10 @@
 // nginx serves them in production), GET /api/health, and the WebSocket on
 // /ws where the rooms live. Every room runs its own authoritative
 // simulation; clients send inputs and draw the snapshots they get back.
+// The persistent worlds (PERSIST_WORLDS) are rooms too, made at boot from
+// their saves in DATA_DIR, asleep while nobody is in them; the CPU every
+// running room uses is watched, and over CPU_BUDGET_MS new matches and
+// joins are turned away.
 //   cd server && npm install && npm start      (PORT 3006, HOST 127.0.0.1)
 'use strict';
 
@@ -10,15 +14,36 @@ const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const cfg = require('./config');
-const { Room, STEP_MS, MODES } = require('./room');
+const { Room, STEP_MS, MODES, FACTIONS } = require('./room');
+const store = require('./store');
 const P = require(path.join(cfg.JS_DIR, 'netproto.js'));
 
 const started = Date.now();
 const log = msg => console.log(new Date().toISOString().slice(0, 19).replace('T', ' ') + '  ' + msg);
 
-const rooms = new Map();   // code -> Room
+const rooms = new Map();   // code -> Room (the matches and the persistent worlds)
+const worlds = [];         // the persistent worlds, in PERSIST_WORLDS order
 const conns = new Set();   // every live connection (client objects)
 let nextConnId = 1;
+
+// the server's load: the CPU the running rooms spent, in ms per 16.7 ms
+// frame, summed over the rooms and smoothed over a few seconds
+const load = { ms: 0, busy: new Map(), at: Date.now() };
+setInterval(() => {
+  const now = Date.now(), frames = (now - load.at) / STEP_MS;
+  load.at = now;
+  let ms = 0;
+  for (const r of rooms.values()) {
+    const b = r.stats.busyMs, was = load.busy.has(r) ? load.busy.get(r) : b;
+    load.busy.set(r, b);
+    if (frames > 0) ms += (b - was) / frames;
+  }
+  for (const r of load.busy.keys()) if (!rooms.has(r.code) || rooms.get(r.code) !== r) load.busy.delete(r);
+  load.ms = load.ms * 0.6 + ms * 0.4;
+}, 1000).unref();
+// over the budget: no new matches, no newcomers (players coming back are let in)
+const serverFull = () => load.ms > cfg.CPU_BUDGET_MS;
+const matchCount = () => [...rooms.values()].filter(r => !r.world).length;
 
 // ---------------------------------------------------------------------------
 // HTTP: health, dev stats, static files (only the game's own: index.html, js/)
@@ -44,14 +69,19 @@ const server = http.createServer((req, res) => {
   const p = url.pathname;
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
   if (p === '/api/health') {
-    sendJson(res, 200, { ok: true, rooms: rooms.size, players: countPlayers(), uptime: Math.round((Date.now() - started) / 1000) });
+    sendJson(res, 200, {
+      ok: true, rooms: matchCount(), players: countPlayers(), uptime: Math.round((Date.now() - started) / 1000),
+      load: +load.ms.toFixed(2), budget: cfg.CPU_BUDGET_MS, full: serverFull(),
+      worlds: worlds.filter(w => !w.closed).map(w => Object.assign({ tick: w.sim ? w.sim.G.tick : 0 }, w.listing())),
+    });
     return;
   }
   if (p === '/api/stats' && cfg.DEV) {
     const cpu = process.cpuUsage();
     sendJson(res, 200, {
       uptime: (Date.now() - started) / 1000, cpuUserMs: cpu.user / 1000, cpuSystemMs: cpu.system / 1000,
-      rssMB: Math.round(process.memoryUsage().rss / 1048576), rooms: [...rooms.values()].map(r => r.info()),
+      rssMB: Math.round(process.memoryUsage().rss / 1048576), load: load.ms,
+      rooms: [...rooms.values()].filter(r => !r.world).map(r => r.info()), worlds: worlds.map(w => w.info()),
       conns: [...conns].map(c => ({ id: c.id, room: c.room ? c.room.code : null, sentBytes: c.sentBytes,
         wireBytes: c.ws._socket ? c.ws._socket.bytesWritten : 0, msgs: c.sentMsgs })),
     });
@@ -156,6 +186,17 @@ function newCode() {
 
 function fail(cl, key) { cl.send({ t: 'error', key }); }
 
+// the room browser: the persistent worlds, and the public matches still
+// in their lobby with room to spare
+function listing() {
+  return {
+    // (full: no new match can be made -- the CPU budget, or MAX_ROOMS)
+    t: 'list', full: serverFull() || matchCount() >= cfg.MAX_ROOMS ? 1 : 0,
+    worlds: worlds.filter(w => !w.closed).map(w => w.listing()),
+    matches: [...rooms.values()].filter(r => r.open()).map(r => r.listing()),
+  };
+}
+
 // one client message (already parsed; every field still untrusted)
 function handle(cl, m) {
   const room = cl.room, slot = cl.slot;
@@ -174,17 +215,20 @@ function handle(cl, m) {
   if (!cl.hello) { fail(cl, 'e_hello'); return; }
 
   switch (m.t) {
+    case 'list':
+      cl.send(listing());
+      return;
     case 'create': {
       if (room) { fail(cl, 'e_inRoom'); return; }
       const mode = typeof m.mode === 'string' ? m.mode : 'coop';
       if (!MODES.includes(mode)) { fail(cl, 'e_mode'); return; }
-      if (rooms.size >= cfg.MAX_ROOMS) { fail(cl, 'e_busy'); return; }
+      if (matchCount() >= cfg.MAX_ROOMS || serverFull()) { fail(cl, 'e_busy'); return; }
       const code = newCode();
       if (!code) { fail(cl, 'e_busy'); return; }
-      const r = new Room(code, mode, log);
+      const r = new Room(code, mode, log, { pub: bool(m.pub) });
       rooms.set(code, r);
       r.join(cl);
-      log(`room ${code}: created by ${cl.name} (${rooms.size} room(s))`);
+      log(`room ${code}: ${mode} (${r.pub ? 'public' : 'private'}) created by ${cl.name} (${matchCount()} match(es))`);
       return;
     }
     case 'join': {
@@ -192,7 +236,20 @@ function handle(cl, m) {
       const code = P.normCode(m.code);
       const r = code && rooms.get(code);
       if (!r || r.closed) { fail(cl, 'e_noRoom'); return; }
+      // (a match under way, or a sleeping world, would add to the load)
+      if (serverFull() && (r.state === 'play' || r.world)) { fail(cl, 'e_busy'); return; }
       const err = r.join(cl);
+      if (err) fail(cl, err);
+      return;
+    }
+    case 'enter': {
+      // a persistent world, by name
+      if (room) { fail(cl, 'e_inRoom'); return; }
+      const w = typeof m.name === 'string' && worlds.find(x => !x.closed && x.name === m.name.toUpperCase());
+      if (!w) { fail(cl, 'e_noWorld'); return; }
+      if (w.connectedSlots().length >= cfg.MAX_PLAYERS) { fail(cl, 'e_full'); return; }
+      if (serverFull()) { fail(cl, 'e_busy'); return; }
+      const err = w.join(cl);
       if (err) fail(cl, err);
       return;
     }
@@ -222,7 +279,23 @@ function handle(cl, m) {
 
   switch (m.t) {
     case 'leave': room.leave(slot); cl.send({ t: 'left' }); return;
-    case 'start': { const err = room.start(cl); if (err) fail(cl, err); return; }
+    case 'start': {
+      const err = room.state === 'lobby' && serverFull() ? 'e_busy' : room.start(cl);
+      if (err) fail(cl, err);
+      return;
+    }
+    // the lobby: a side (versus), public or private, a kick (the host's)
+    case 'side': {
+      const err = typeof m.f === 'string' && FACTIONS.includes(m.f) ? room.setFaction(slot, m.f) : null;
+      if (err) fail(cl, err);
+      return;
+    }
+    case 'pub': { const err = room.setPublic(cl, bool(m.on)); if (err) fail(cl, err); return; }
+    case 'kick': {
+      const err = Number.isInteger(m.idx) ? room.kick(cl, m.idx) : null;
+      if (err) fail(cl, err);
+      return;
+    }
     case 'full':  // the client's world from the seed didn't match: all of it, then
       if (room.state === 'play' && cl.ready) room.sendWorld(cl, true);
       return;
@@ -267,23 +340,45 @@ function loop() {
     let keep = false;
     try { keep = r.update(now, dt); } catch (e) { log(`room ${code}: update failed: ${e && e.stack || e}`); r.close('e_crash'); }
     if (!keep) { rooms.delete(code); continue; }
-    if (r.state === 'play') wait = Math.min(wait, Math.max(1, Math.floor(STEP_MS - r.acc)));
+    if (r.state === 'play' && !r.hibernating) wait = Math.min(wait, Math.max(1, Math.floor(STEP_MS - r.acc)));
   }
   setTimeout(loop, wait);
 }
 
 process.on('uncaughtException', e => log('uncaught: ' + (e && e.stack || e)));
 
+// the persistent worlds, from their saves (asleep until someone comes)
+function bootWorlds() {
+  for (const name of cfg.PERSIST_WORLDS) {
+    const code = newCode();
+    let w;
+    try {
+      w = new Room(code, 'world', log, { name, data: store.loadWorld(cfg.DATA_DIR, name, log) });
+    } catch (e) { log(`world ${name}: failed to start: ${e && e.stack || e}`); continue; }
+    rooms.set(code, w);
+    worlds.push(w);
+  }
+}
+
 server.listen(cfg.PORT, cfg.HOST, () => {
   log(`maur listening on ${cfg.HOST}:${cfg.PORT} (static ${cfg.STATIC_DIR}${cfg.DEV ? ', DEV hooks on' : ''})`);
+  bootWorlds();
+  if (worlds.length) log(`${worlds.length} persistent world(s) in ${cfg.DATA_DIR}: ${worlds.map(w => w.name).join(', ')}`);
   setTimeout(loop, 10);
 });
 
-function shutdown() {
-  log('shutting down');
+// a graceful stop (pm2 restart, Ctrl+C): every persistent world is saved
+// (synchronously) before the process goes
+let stopping = false;
+function shutdown(why) {
+  if (stopping) return;
+  stopping = true;
+  log('shutting down (' + why + ')');
   for (const r of rooms.values()) r.close('e_closed');
   server.close();
   setTimeout(() => process.exit(0), 300).unref();
 }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+// (Windows has no signals: pm2 there -- and the tests -- send a message instead)
+process.on('message', m => { if (m === 'shutdown') shutdown('shutdown message'); });

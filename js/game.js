@@ -18,15 +18,27 @@ const G = {
   colonies: [],       // [the players' black colony, the rival red one] (colony.js)
   events: [],         // outgoing: { t: 'msg'|'sfx'|'fx', ... }, drained by the client
   over: null,         // set when the year ends: { win, reason, stars, day, score, stats, ... }
-  flight: null,       // the nuptial flight under way: { t, n, stars, milestones, pop, rival, rivalDead }
+  flight: null,       // the nuptial flights under way: { t, res: [per played colony
+                      // { col, n, stars, milestones, pop, rival, rivalDead }] }
   lastFlightYear: 0,  // the year of the last nuptial flight (one per spring)
   contested: null,    // this summer's contested food site (colony.js)
+  // 'solo' (this browser), 'coop' (an online match), 'versus' (an online
+  // match, black against red: both colonies played) or 'world' (a
+  // persistent world on the server: the years go on, flights bank legacy)
+  mode: 'solo',
+  legacy: 0,          // a persistent world's legacy points, banked by each nuptial flight
+  history: [],        // ...and its story: { gen, year, out, stars, flown, legacy }
+  gen: 1,             // ...and how many colonies it has seen (a lost one starts it over)
+  // whose eyes G.colony / G.rival / G.objectives see through: 0 in the sim
+  // (the players' black colony, the red rival); a red player's client in
+  // versus sets 1, and its HUD, map and arrow take the red colony's side
+  colIdx: 0,
 
-  // the players' colony, the rival, and the players' milestones
-  get colony() { return this.colonies[0] || null; },
-  get rival() { return this.colonies[1] || null; },
-  get objectives() { return this.colonies[0] ? this.colonies[0].objectives : null; },
-  set objectives(v) { if (this.colonies[0]) this.colonies[0].objectives = v; },
+  // the (viewer's) colony, its rival, and its milestones
+  get colony() { return this.colonies[this.colIdx] || this.colonies[0] || null; },
+  get rival() { return this.colonies[this.colIdx ? 0 : 1] || null; },
+  get objectives() { const c = this.colony; return c ? c.objectives : null; },
+  set objectives(v) { const c = this.colony; if (c) c.objectives = v; },
 
   get day() { return Math.floor(this.tick / DAY_LEN); },
   tod() { return (this.tick % DAY_LEN) / DAY_LEN; },
@@ -38,25 +50,31 @@ const G = {
   isWinter() { return this.season === WINTER; },
 
   // a message by string key (translated by the client). args may hold name
-  // tokens like { caste } or { bug }. `to` = a player index, or omit for all.
-  msg(key, args, color, to) {
-    this.events.push({ t: 'msg', key, args: args || [], color: color || null, to: to == null ? -1 : to });
+  // tokens like { caste } or { bug }. `to` = a player index, or omit for all;
+  // `col` = a colony index: only that colony's players (versus) get it.
+  msg(key, args, color, to, col) {
+    this.events.push({ t: 'msg', key, args: args || [], color: color || null, to: to == null ? -1 : to, col: col == null ? -1 : col });
   },
-  // a sound; with x,y it is only heard by players within range r
-  sfx(k, x, y, r) {
-    this.events.push({ t: 'sfx', k, x: x == null ? null : x, y, r: r || 300 });
+  // a sound; with x,y it is only heard by players within range r (with
+  // `col` only by that colony's players)
+  sfx(k, x, y, r, col) {
+    this.events.push({ t: 'sfx', k, x: x == null ? null : x, y, r: r || 300, col: col == null ? -1 : col });
   },
-  // a cosmetic particle burst ('dirt', 'blood', 'sparkle', 'clank')
-  fx(k, x, y, n) {
-    this.events.push({ t: 'fx', k, x, y, n });
+  // a cosmetic particle burst ('dirt', 'blood', 'sparkle', 'clank'), or a
+  // colony's nuptial flight ('flight', for `col`'s players)
+  fx(k, x, y, n, col) {
+    this.events.push({ t: 'fx', k, x, y, n, col: col == null ? -1 : col });
   },
 
   makeItem(kind, x, y, value) { return new Item(kind, x, y, value); },
 
-  nearPlayer(x, y) {
+  // the distance to the nearest player's ant (col: only that colony's
+  // players -- a colony's own news mustn't leak to the other side in versus)
+  nearPlayer(x, y, col) {
     let best = Infinity;
     for (const p of this.players) {
       if (!p.ant || p.ant.hp <= 0) continue;
+      if (col && p.ant.colony !== col) continue;
       const d = Math.hypot(p.ant.x - x, p.ant.y - y);
       if (d < best) best = d;
     }
@@ -189,6 +207,7 @@ function playerColony(pIdx) {
 function resetWorldState(world, seed) {
   T.init(world);
   G.seed = seed;
+  G.colIdx = 0;
   G.trees = world.trees;
   // both nests from the generator: the players' and the rival's (the rival
   // nest's storage, nursery and royal chamber become the red colony's)
@@ -220,17 +239,63 @@ function populateColony(c, workers, soldiers) {
 
 // the rival's starting numbers (its soldiers are its nest's defenders)
 const RED_WORKERS = 6, RED_SOLDIERS = 3;
+const BLACK_WORKERS = 7, BLACK_SOLDIERS = 2;
 
-function newWorld(seed, playerCount) {
+// who plays which colony in `mode` (see G.mode). In versus both colonies
+// are played -- tasks, milestones and messages for each, no AI raids or AI
+// growth -- and an ant gate belongs to the nest it was built nearer to: a
+// colony's ants pass only their own side's gates (Colony.gates 1 or 2, see
+// T.gateOpen). Otherwise the players' colony passes every gate.
+function setupFactions(mode) {
+  G.mode = mode || 'solo';
+  const vs = G.mode === 'versus';
+  for (const c of G.colonies) {
+    c.player = c.idx === 0 || vs;
+    c.gates = vs ? c.idx + 1 : c.idx === 0;
+  }
+  T.gateSplit = vs && G.colonies[1] ? Math.round((G.colonies[0].x + G.colonies[1].x) / 2) : null;
+}
+
+// the colony whose nest is nearest x
+function nestNearest(x) {
+  let best = G.colonies[0];
+  for (const c of G.colonies) if (Math.abs(c.x - x) < Math.abs(best.x - x)) best = c;
+  return best;
+}
+
+// versus: both nests come from the same generator, but caves cut into one
+// or the other at random. Each chamber of one nest is paired with the other
+// nest's chamber of the same type, and both count only the smaller one's
+// room (the claim, see Colony.recalcChambers): the same capacities on
+// either side, from the seed alone. A chamber with no partner counts for
+// nothing until it is dug out further.
+function equalizeNests() {
+  const [a, b] = G.colonies;
+  for (const type of CH_TYPES) {
+    const ca = a.chambers.filter(ch => ch.type === type), cb = b.chambers.filter(ch => ch.type === type);
+    for (let i = 0; i < Math.max(ca.length, cb.length); i++) {
+      const m = ca[i] && cb[i] ? Math.min(ca[i].claimed, cb[i].claimed) : 0;
+      if (ca[i]) ca[i].claimed = m;
+      if (cb[i]) cb[i].claimed = m;
+    }
+  }
+  for (const c of G.colonies) c.recalcChambers();
+}
+
+function newWorld(seed, playerCount, mode) {
   const world = genWorld(seed);
   resetWorldState(world, seed);
+  setupFactions(mode);
+  G.legacy = 0; G.history = []; G.gen = 1;
   G.tick = Math.floor(DAY_LEN * 0.08); // start in the morning
   ENT_ID = 1;
 
-  const c = G.colony;
-  // the royal households: ours, and the rival's across the forest
-  populateColony(c, 7, 2);
-  populateColony(G.rival, RED_WORKERS, RED_SOLDIERS);
+  const c = G.colonies[0];
+  const vs = G.mode === 'versus';
+  // the royal households: ours, and the rival's across the forest (in
+  // versus the same household on both sides)
+  populateColony(c, BLACK_WORKERS, BLACK_SOLDIERS);
+  populateColony(G.colonies[1], vs ? BLACK_WORKERS : RED_WORKERS, vs ? BLACK_SOLDIERS : RED_SOLDIERS);
 
   // player ants, side by side at the entrance
   for (let p = 0; p < playerCount; p++) {
@@ -263,8 +328,40 @@ function newWorld(seed, playerCount) {
   }
 
   for (const col of G.colonies) col.recalcChambers();
-  G.objectives = newObjectives(G.year, G.season, 0);
+  if (vs) equalizeNests();
+  for (const col of G.colonies) col.objectives = col.player ? newObjectives(G.year, G.season, 0) : null;
   G.running = true;
+}
+
+// player pIdx joins colony colIdx and plays one of its workers (versus: a
+// worker the colony already has, so a side's numbers don't depend on how
+// many play it). Returns the ant (or null).
+function joinColony(pIdx, colIdx) {
+  const p = ensurePlayer(pIdx);
+  p.col = colIdx;
+  const e = G.colonies[colIdx].entrance;
+  return takeOver(pIdx, 'worker', e.x, e.y);
+}
+
+// a persistent world whose colony was lost starts over: a new seed and a
+// fresh colony. Its legacy, its history (the loss written into it) and its
+// players (who pick new ants) carry over.
+const HISTORY_MAX = 40;
+function rebirthWorld(seed) {
+  const o = G.over || {};
+  const keep = {
+    legacy: G.legacy, gen: G.gen, names: G.players.map(p => p.name),
+    history: G.history.concat([{ gen: G.gen, year: G.year, out: 'lost', reason: o.reason || 'r_extinct', legacy: 0 }]),
+  };
+  newWorld(seed, 0, 'world');
+  G.legacy = keep.legacy;
+  G.gen = keep.gen + 1;
+  G.history = keep.history.slice(-HISTORY_MAX);
+  keep.names.forEach((n, i) => { ensurePlayer(i).name = n; });
+  // (why, then what now: the players read them in that order)
+  G.msg(o.reason === 'r_queen' ? 'r_queen' : 'r_extinct', [], '#ff7060');
+  G.msg('m_reborn', [G.gen, G.legacy], '#ffb040');
+  G.sfx('task');
 }
 
 
@@ -277,6 +374,11 @@ function restoreWorld(d, playerCount) {
   world.m = rleDecode(d.terrain, WORLD_W * WORLD_H);
   resetWorldState(world, d.seed);
   const v = d.v || 2;
+  // v7: a persistent world's mode, legacy and history (older: a solo world)
+  setupFactions(d.mode === 'world' ? 'world' : 'solo');
+  G.legacy = Math.max(0, Math.floor(Number(d.legacy) || 0));
+  G.history = Array.isArray(d.history) ? d.history.filter(h => h && typeof h === 'object').slice(-HISTORY_MAX) : [];
+  G.gen = Math.max(1, Math.floor(Number(d.gen) || 1));
   // v3 and older had no calendar: their colony starts the year now, on the
   // first day of spring (keeping the time of day)
   G.tick = v >= 4 ? d.tick : d.tick % DAY_LEN;
@@ -300,6 +402,8 @@ function restoreWorld(d, playerCount) {
   for (const c of G.colonies) if (!c.player) c.objectives = null;
   G.lastFlightYear = d.lastFlightYear || 0;
   G.flight = d.flight || null;
+  // (v6 and older: one colony's flight under way, not a list of them)
+  if (G.flight && !Array.isArray(G.flight.res)) G.flight = { t: G.flight.t, res: [Object.assign({ col: 0 }, G.flight)] };
   const cs = d.contested;
   G.contested = cs && typeof cs.x === 'number' ? Object.assign({ got: [] }, cs) : null;
   // the surface line as dug and built (v2 saves: the generated one). Older
@@ -925,12 +1029,14 @@ function stepSim() {
       if (a.carry) { a.carry.carried = null; a.carry = null; }
       G.items.push(G.makeItem('corpse', a.x, a.y));
       a.colony.stats.antsDied++;
+      // (versus: every ant down is a rival slain for the other side)
+      if (G.mode === 'versus') for (const o of G.colonies) if (o !== a.colony) o.stats.rivalsSlain = (o.stats.rivalsSlain || 0) + 1;
       if (a.playerIdx >= 0) {
         const pIdx = a.playerIdx;
         G.sfx('die', a.x, a.y, 9999);
         for (let q = 0; q < G.players.length; q++) {
           if (q === pIdx) G.msg('m_youDied', [], '#ff5040', q);
-          else G.msg('m_pDied', [{ player: pIdx }], '#ff5040', q);
+          else if (playerColony(q) === a.colony) G.msg('m_pDied', [{ player: pIdx }], '#ff5040', q);
         }
         G.players[pIdx].ant = null;
         G.players[pIdx].deathPos = { x: a.x, y: a.y };
@@ -940,10 +1046,10 @@ function stepSim() {
         G.colony.stats.rivalsSlain = (G.colony.stats.rivalsSlain || 0) + 1;
         if (a.caste !== 'queen' && G.nearPlayer(a.x, a.y) < 300) G.sfx('kill', a.x, a.y);
       } else if (a.caste === 'queen') {
-        G.msg('m_queenDead', [], '#ff4030');
-        G.sfx('danger');
-      } else if (G.nearPlayer(a.x, a.y) < 300) {
-        G.msg('m_antDied', [], '#c08070');
+        a.colony.say('m_queenDead', [], '#ff4030');
+        a.colony.sfx('danger');
+      } else if (G.nearPlayer(a.x, a.y, a.colony) < 300) {
+        a.colony.say('m_antDied', [], '#c08070');
         G.sfx('kill', a.x, a.y);
       }
     }
@@ -969,9 +1075,11 @@ function stepSim() {
       const it = G.makeItem(b.predator || b.kind === 'worm' ? 'bigcorpse' : 'corpse', b.x, b.y, BUG_DEF[b.kind].corpse);
       G.items.push(it);
       G.fx('blood', b.x, b.y, 8);
-      if (b.kind === 'centipede') objEvent('centipedes', 1);
+      // (versus: the kill counts for the nest it was nearer to)
+      const by = G.mode === 'versus' ? nestNearest(b.x) : G.colonies[0];
+      if (b.kind === 'centipede') objEvent('centipedes', 1, by);
       if (b.predator) {
-        G.colony.stats.predatorsSlain++;
+        by.stats.predatorsSlain++;
         G.msg('m_slain', [{ bug: b.kind }], '#ffe040');
         G.sfx('kill');
       } else {
@@ -985,8 +1093,10 @@ function stepSim() {
   for (const it of G.items) if (!it.dead) it.update();
   G.items = G.items.filter(i => !i.dead);
 
-  // pheromone trails from laden ants
+  // pheromone trails from laden ants (cosmetic: they fade 8 ticks at a time)
   if (G.tick % 8 === 0) {
+    for (const ph of G.pheromones) ph.t -= 8;
+    if (G.tick % 32 === 0) G.pheromones = G.pheromones.filter(p => p.t > 0);
     for (const a of G.ants) {
       if (a.carry && a.hp > 0) {
         G.pheromones.push({ x: a.x, y: a.y + 2, t: 900 });
@@ -994,16 +1104,19 @@ function stepSim() {
     }
     if (G.pheromones.length > 700) G.pheromones.splice(0, G.pheromones.length - 700);
   }
-  for (const ph of G.pheromones) ph.t--;
-  if (G.tick % 30 === 0) G.pheromones = G.pheromones.filter(p => p.t > 0);
 
   for (const c of G.colonies) c.update();
   worldSpawns();
   updateYear();
   updateContested();   // (after the year: summer's news comes before the fruit's)
 
-  // extinction: the players' colony is gone to its last ant
-  if (!G.over && !G.ants.some(a => a.hp > 0 && a.colony === G.colony)) gameOver(false, 'r_extinct');
+  // extinction: the players' colony is gone to its last ant (versus:
+  // either side's, and the other side has won)
+  for (const c of G.colonies) {
+    if (G.over || !c.player || G.ants.some(a => a.hp > 0 && a.colony === c)) continue;
+    if (G.mode === 'versus') { c.defeated = true; versusOver(1 - c.idx, 'r_vsExtinct'); }
+    else gameOver(false, 'r_extinct');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,12 +1128,27 @@ const SEASON_COLOR = ['#a0e070', '#ffe060', '#e09040', '#c0e0ff'];
 
 // the world's story ends (for now): the client shows the end screen
 function gameOver(win, reason, extra) {
+  const c = G.colonies[0];
   G.over = Object.assign({
     win, reason, day: G.day, year: G.year, season: G.season,
-    score: G.colony.score, stats: Object.assign({}, G.colony.stats),
-    stars: 0, flown: 0, milestones: G.objectives ? G.objectives.yearDone : 0,
+    score: c.score, stats: Object.assign({}, c.stats),
+    stars: 0, flown: 0, milestones: c.objectives ? c.objectives.yearDone : 0,
     canContinue: false,
   }, extra || {});
+}
+
+// a versus match is decided: `winner` is the winning colony's index (-1: a
+// draw). Both sides' numbers go on the end screen (each client reads its
+// own side's win from it); res: the nuptial flights, when they decided it.
+function versusOver(winner, reason, res) {
+  gameOver(false, reason, {
+    versus: true, winner,
+    sides: G.colonies.map((c, i) => ({
+      faction: c.faction, score: c.score, pop: c.members().length, defeated: !!c.defeated,
+      milestones: c.objectives ? c.objectives.yearDone : 0, stats: Object.assign({}, c.stats),
+      stars: res && res[i] ? res[i].stars : 0, flown: res && res[i] ? res[i].n : 0,
+    })),
+  });
 }
 
 // after a nuptial flight the colony may carry on into the next year
@@ -1029,23 +1157,35 @@ function continueYear() {
 }
 
 function updateYear() {
-  // a new season (or a jump in time): judge the old milestones, set the new
-  const ob = G.objectives;
+  // a new season (or a jump in time): every played colony judges its old
+  // milestones and sets the new (they all turn together)
+  const ob = G.colonies[0].objectives;
   if (ob.year !== G.year || ob.season !== G.season) {
-    closeObjectives(G.colony);
-    G.msg('m_season', [{ key: 'season_' + SEASON_KEYS[G.season] }, G.year], SEASON_COLOR[G.season]);
-    G.sfx('task');
-    if (G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year) startFlight(ob.yearDone);
-    G.objectives = newObjectives(G.year, G.season, ob.year === G.year ? ob.yearDone : 0);
+    const obs = G.colonies.map(c => c.objectives);
+    for (const c of G.colonies) if (c.objectives) closeObjectives(c);
+    const flight = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year;
+    // (versus: that flight decides the match -- no new year to announce)
+    if (!(flight && G.mode === 'versus')) {
+      G.msg('m_season', [{ key: 'season_' + SEASON_KEYS[G.season] }, G.year], SEASON_COLOR[G.season]);
+      G.sfx('task');
+    }
+    if (flight) {
+      const res = [];
+      for (const c of G.colonies) if (obs[c.idx]) res.push(startFlight(c, obs[c.idx].yearDone));
+      G.lastFlightYear = G.year;
+      G.flight = { t: FLIGHT_T, res };
+    }
+    for (const c of G.colonies) {
+      const o = obs[c.idx];
+      if (o) c.objectives = newObjectives(G.year, G.season, o.year === G.year ? o.yearDone : 0);
+    }
   }
 
-  // the flight plays out, then the year's end screen
+  // the flight plays out, then the year's end
   if (G.flight && --G.flight.t <= 0) {
-    const f = G.flight;
+    const res = G.flight.res;
     G.flight = null;
-    gameOver(f.n > 0, f.n > 1 ? 'r_flight' : f.n === 1 ? 'r_flight1' : 'r_noFlight',
-      { stars: f.stars, flown: f.n, milestones: f.milestones, pop: f.pop, rival: f.rival,
-        rivalDead: !!f.rivalDead, canContinue: true });
+    endFlight(res);
   }
 
   // winter: the surface is deadly cold, except within a thatched mound
@@ -1073,10 +1213,40 @@ function updateYear() {
     const heir = G.ants.find(a => a.caste === 'princess' && a.hp > 0 && a.colony === c);
     if (heir) crown(heir);
     else if (!G.brood.some(b => b.royal && !b.dead && b.colony === c)) {
-      if (c.player) gameOver(false, 'r_queen');
+      if (c.player && G.mode !== 'versus') gameOver(false, 'r_queen');
       else defeatColony(c);
     }
   }
+}
+
+// the year's nuptial flights have flown (res: one per played colony)
+function endFlight(res) {
+  if (G.mode === 'versus') {
+    // the side with more stars wins; then more princesses flown, then more ants
+    const [a, b] = res;
+    let w = -1;
+    for (const k of ['stars', 'n', 'pop']) if (a[k] !== b[k]) { w = a[k] > b[k] ? a.col : b.col; break; }
+    versusOver(w, w < 0 ? 'r_vsDraw' : 'r_vsFlight', res);
+    return;
+  }
+  const f = res[0];
+  if (G.mode === 'world') { bankLegacy(f); return; }
+  gameOver(f.n > 0, f.n > 1 ? 'r_flight' : f.n === 1 ? 'r_flight1' : 'r_noFlight',
+    { stars: f.stars, flown: f.n, milestones: f.milestones, pop: f.pop, rival: f.rival,
+      rivalDead: !!f.rivalDead, canContinue: true });
+}
+
+// a persistent world's flight: the year's stars and princesses flown become
+// legacy points, and the colony carries on into its next year (whose
+// milestones are bigger, see newObjectives)
+const LEGACY_STAR = 100, LEGACY_FLOWN = 50;
+function bankLegacy(f) {
+  const pts = f.stars * LEGACY_STAR + f.n * LEGACY_FLOWN;
+  G.legacy += pts;
+  G.history.push({ gen: G.gen, year: G.year - 1, out: f.n > 0 ? 'flight' : 'noFlight', stars: f.stars, flown: f.n, legacy: pts });
+  if (G.history.length > HISTORY_MAX) G.history.splice(0, G.history.length - HISTORY_MAX);
+  G.msg('m_legacy', [pts, G.legacy], '#ff90e0');
+  G.sfx('task');
 }
 
 // a princess becomes her colony's new queen
@@ -1088,7 +1258,7 @@ function crown(a) {
   a.state = 'idle'; a.stateT = 60; a.nav = null; a.target = null;
   a.colony.queenDmg = {};   // (a new queen's wounds are her own)
   a.colony.say('m_newQueen', [], '#ff90e0');
-  G.sfx('task');
+  a.colony.sfx('task');
 }
 
 // the rival's queen is dead with no heir: its colony falls apart. Its ants
@@ -1099,6 +1269,8 @@ function crown(a) {
 // the very end, a bite long faded), nobody does.
 function defeatColony(c) {
   c.defeated = true;
+  // versus: the other side has won, at once
+  if (G.mode === 'versus') { c.slain = true; versusOver(1 - c.idx, 'r_vsQueen'); return; }
   c.slain = playersSlew(c);
   if (c.raid) c.raid.phase = 'retreat';
   for (const a of G.ants) {
@@ -1147,8 +1319,7 @@ function rivalBeaten(c) {
 // Stars (none without a princess flown): one for a princess flown; one for
 // 3+ princesses or 8+ of the year's 12 milestones; one for the rival
 // status -- the red queen slain, or more ants than the red colony.
-function startFlight(milestones) {
-  const c = G.colony;
+function startFlight(c, milestones) {
   const flyers = G.ants.filter(a => a.caste === 'princess' && a.hp > 0 && a.colony === c);
   G.ants = G.ants.filter(a => !flyers.includes(a));
   const n = flyers.length;
@@ -1159,9 +1330,8 @@ function startFlight(milestones) {
   if (n > 0) stars = 1 + (n >= 3 || milestones >= 8 ? 1 : 0) + (rival ? 1 : 0);
   c.stats.flown = (c.stats.flown || 0) + n;
   c.score += n * 500;
-  G.lastFlightYear = G.year;
-  G.flight = { t: FLIGHT_T, n, stars, milestones, pop, rival, rivalDead };
-  if (n > 0) G.fx('flight', c.entrance.x, c.entrance.y - 4, n);
-  G.msg(n > 1 ? 'm_flight' : n === 1 ? 'm_flight1' : 'm_noFlight', [n], '#ff90e0');
-  G.sfx(n > 0 ? 'task' : 'starve');
+  if (n > 0) G.fx('flight', c.entrance.x, c.entrance.y - 4, n, c.idx);
+  c.say(n > 1 ? 'm_flight' : n === 1 ? 'm_flight1' : 'm_noFlight', [n], '#ff90e0');
+  c.sfx(n > 0 ? 'task' : 'starve');
+  return { col: c.idx, n, stars, milestones, pop, rival, rivalDead };
 }

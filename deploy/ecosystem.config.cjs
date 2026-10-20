@@ -11,6 +11,9 @@ module.exports = {
     exec_mode: 'fork',
     autorestart: true,
     max_restarts: 10,
-    env: { NODE_ENV: 'production', PORT: '3006', HOST: '127.0.0.1' },
+    // a stop/restart sends SIGINT: the server saves every persistent world
+    // (synchronously, ~50 ms each) before it exits -- give it time
+    kill_timeout: 5000,
+    env: { NODE_ENV: 'production', PORT: '3006', HOST: '127.0.0.1', DATA_DIR: '/srv/maur/data' },
   }],
 };

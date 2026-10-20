@@ -16,6 +16,7 @@ const SEASON_FOOD = [1.0, 1.25, 0.5, 0];
 const FORAGE_R = 900;
 const SEED_RATE = 0.005, SEED_RATE_LEAN = 0.014; // chance per tick (lean: < 8 food items in reach)
 const SEED_CAP = 14;                              // loose seeds in reach
+const QUEEN_WARN_T = 600;  // ticks between 'our queen is under attack' warnings
 
 // chambers: marked cavities whose dug-out area sets the colony's capacity
 // (a fungus garden instead turns leaves into food)
@@ -261,15 +262,32 @@ class Colony {
     for (const b of G.brood) if (!b.dead && b.colony === this) n++;
     return n;
   }
-  // a message for this colony's players (an AI colony keeps quiet)
-  say(key, args, color) { if (this.player) G.msg(key, args, color); }
+  // the nearest armed foe within r of the nursery (every tending nurse asks,
+  // every tick: one look per tick and radius serves them all)
+  nurseryFoe(r) {
+    if (this.nfT !== G.tick) { this.nfT = G.tick; this.nf = {}; }
+    if (!(r in this.nf)) this.nf[r] = G.nearestFoe(this.nursery.x, this.nursery.y, r, this, true);
+    return this.nf[r];
+  }
+
+  // a message (or a sound heard anywhere) for this colony's players only
+  // (an AI colony keeps quiet)
+  say(key, args, color) { if (this.player) G.msg(key, args, color, null, this.idx); }
+  sfx(k) { if (this.player) G.sfx(k, null, null, null, this.idx); }
 
   // log a wound to this colony's queen in the ledger (ci: the colony that
   // dealt it, -1 for hunger, cold, bugs -- anything that isn't an ant)
+  // An enemy ant's bite also warns this colony's players (now and then: the
+  // queen dying with no heir loses it all)
   woundQueen(ci, dmg) {
     if (!(dmg > 0)) return;
     const qd = this.queenDmg || (this.queenDmg = {});
     qd[ci] = (qd[ci] || 0) + dmg;
+    if (ci >= 0 && ci !== this.idx && this.player && !(G.tick - (this.queenWarnT || -1e9) < QUEEN_WARN_T)) {
+      this.queenWarnT = G.tick;
+      this.say('m_queenAttacked', [], '#ff4030');
+      this.sfx('danger');
+    }
   }
   // the colony this one fights: the nearest other one still standing
   enemy() {
@@ -509,13 +527,13 @@ class Colony {
     if (cost === Infinity) { G.msg('m_upgMax', [], '#ff8040', pIdx); return false; }
     if (this.crystals < cost) {
       G.msg('m_noCrystals', [cost], '#ff8040', pIdx);
-      G.sfx('clank');
+      this.sfx('clank');
       return false;
     }
     this.crystals -= cost;
     this.upg[id] = (this.upg[id] || 0) + 1;
-    G.msg('m_upgraded', [{ key: 'up_' + id }, this.upg[id]], '#80e0ff');
-    G.sfx('task');
+    this.say('m_upgraded', [{ key: 'up_' + id }, this.upg[id]], '#80e0ff');
+    this.sfx('task');
     return true;
   }
 
@@ -613,8 +631,8 @@ class Colony {
       if (who && who.playerIdx >= 0) {
         G.msg('m_storageFull', [], '#ff8040', who.playerIdx);
         G.sfx('drop', who.x, who.y);
-      } else if (this.player && this.fullMsgT <= 0 && G.nearPlayer(this.storage.x, this.storage.y) < 400) {
-        G.msg('m_storageFullNpc', [], '#ff8040');
+      } else if (this.player && this.fullMsgT <= 0 && G.nearPlayer(this.storage.x, this.storage.y, this) < 400) {
+        this.say('m_storageFullNpc', [], '#ff8040');
         this.fullMsgT = 3600;
       }
       return false;
@@ -633,7 +651,7 @@ class Colony {
       this.progress('crystal', 1);
       objEvent('crystals', 1, this);
       this.say('m_crystal', [this.crystals], '#80e0ff');
-      if (this.player) G.sfx('task');
+      this.sfx('task');
     } else if (item.kind === 'leaf' && who && who.playerIdx < 0 &&
                this.gardenNear(this.storage.x, this.storage.y, 1e5)) {
       // the colony passes a forager's leaf on to the fungus garden
@@ -674,7 +692,7 @@ class Colony {
       this.stats.princesses++;
       objEvent('princess', 1, this);
       this.say('m_princess', [], '#ff90e0');
-      if (this.player) G.sfx('task');
+      this.sfx('task');
     } else {
       objEvent('raise', 1, this);
       this.say('m_emerged', [{ caste }]);
@@ -724,7 +742,7 @@ class Colony {
       }
       if (this.starveMsgT <= 0) {
         this.say('m_starving', [], '#ff6040');
-        if (this.player) G.sfx('starve');
+        this.sfx('starve');
         this.starveMsgT = 1800;
       }
     }
@@ -770,7 +788,7 @@ class Colony {
         if (this.player && this.food >= 30 && broodCount < caps.brood && pop + broodCount >= caps.pop &&
             this.nestFullT <= 0) {
           this.nestFullT = DAY_LEN;
-          G.msg('m_nestFull', [], '#ff9040');
+          this.say('m_nestFull', [], '#ff9040');
         }
       }
     }
@@ -784,13 +802,15 @@ class Colony {
     // the special structures
     this.updateShelters();
     this.updateGardens();
+    if (!this.defeated) this.spotQueen(queen);
 
     if (this.player) {
       if (G.tick % 60 === 0) updateObjectives(this);
       if (!this.defeated) this.updateExpansion(pop);
       // tasks
       this.taskT--;
-      if (this.taskT <= 0) {
+      // (versus: the deciding flight is flying -- no new tasks to hand out)
+      if (this.taskT <= 0 && !(G.flight && G.mode === 'versus')) {
         this.taskT = 180;
         this.generateTasks();
       }
@@ -798,25 +818,29 @@ class Colony {
       for (const t of this.tasks) if (t.done && t.doneT > 0) t.doneT--;
       this.tasks = this.tasks.filter(t => !t.done || t.doneT > 0);
     } else if (!this.defeated) {
-      this.updateAI(pop, queen);
+      this.updateAI(pop);
     }
 
     this.forageSpawns();
   }
 
-  // ---- the AI colony: growth, raids, its queen found -------------------------
-  updateAI(pop, queen) {
-    // a player who gets close to the queen finds her: the map marks her
-    if (queen && !this.queenSeen && G.tick % 30 === 0) {
-      for (const p of G.players) {
-        if (p.ant && p.ant.hp > 0 && dist2(p.ant.x, p.ant.y, queen.x, queen.y) < 140 * 140) {
-          this.queenSeen = true;
-          G.msg('m_queenFound', [], '#ff6050');
-          G.sfx('danger');
-          break;
-        }
+  // a player of another colony who gets close to the queen finds her: the
+  // map marks her (for that player's colony; a versus side finds the other's)
+  spotQueen(queen) {
+    if (!queen || this.queenSeen || G.tick % 30 !== 0) return;
+    for (const p of G.players) {
+      const a = p.ant;
+      if (a && a.hp > 0 && a.colony !== this && dist2(a.x, a.y, queen.x, queen.y) < 140 * 140) {
+        this.queenSeen = true;
+        a.colony.say(G.mode === 'versus' ? 'm_queenFoundVs' : 'm_queenFound', [], '#ff6050');
+        a.colony.sfx('danger');
+        break;
       }
     }
+  }
+
+  // ---- the AI colony: growth, raids -------------------------------------------
+  updateAI(pop) {
     this.updateExpansion(pop);
     this.updateRaid(pop);
   }
@@ -906,7 +930,7 @@ class Colony {
         if (!r.warned && near < 600) {
           r.warned = true;
           target.say('m_raid', [], '#ff5040');
-          if (target.player) G.sfx('danger');
+          target.sfx('danger');
         }
         // the thieves all laden: what the raid came for is won
         const thieves = raiders.filter(a => a.raidRole === 'steal');
@@ -995,12 +1019,12 @@ class Colony {
 
     if (this.food < 25 && !this.active('gather')) {
       tasks.push({ type: 'gather', n: 0, need: 5, reward: 50 });
-      G.msg('m_newTask', [{ key: 't_gather' }], '#80ff80');
+      this.say('m_newTask', [{ key: 't_gather' }], '#80ff80');
     }
     const hungry = G.brood.filter(b => b.kind === 'larva' && b.hungry && !b.dead && b.colony === this).length;
     if (hungry > 0 && !this.active('feed')) {
       tasks.push({ type: 'feed', n: 0, need: Math.min(2, hungry), reward: 40 });
-      G.msg('m_newTask', [{ key: 't_feed' }], '#80ff80');
+      this.say('m_newTask', [{ key: 't_feed' }], '#80ff80');
     }
     const pred = G.bugs.find(b => b.predator && !b.dead &&
       Math.abs(b.x - this.x) < 400);
@@ -1009,20 +1033,20 @@ class Colony {
         type: 'hunt', kind: pred.kind,
         targetId: pred.id, n: 0, need: 1, reward: 100
       });
-      G.msg('m_defend', [], '#ff8040');
-      G.sfx('danger');
+      this.say('m_defend', [], '#ff8040');
+      this.sfx('danger');
     }
     if (G.day > this.lastDigTaskDay && G.day >= 1 && !this.active('dig')) {
       this.lastDigTaskDay = G.day;
       tasks.push({ type: 'dig', n: 0, need: 600, reward: 60 });
-      G.msg('m_newTask', [{ key: 't_dig' }], '#80ff80');
+      this.say('m_newTask', [{ key: 't_dig' }], '#80ff80');
     }
     // a prospecting expedition: dig deep below the nest for a crystal
     if (G.day >= 1 && G.day > (this.lastCrystalTaskDay || 0) + 1 &&
         !this.active('crystal') && Math.random() < 0.35) {
       this.lastCrystalTaskDay = G.day;
       tasks.push({ type: 'crystal', n: 0, need: 1, reward: 150 });
-      G.msg('m_newTask', [{ key: 't_crystal' }], '#80e0ff');
+      this.say('m_newTask', [{ key: 't_crystal' }], '#80e0ff');
     }
   }
 
@@ -1038,8 +1062,8 @@ class Colony {
     t.doneT = 240;
     this.score += t.reward;
     this.stats.tasksDone++;
-    G.msg('m_taskDone', [t.reward], '#ffe040');
-    G.sfx('task');
+    this.say('m_taskDone', [t.reward], '#ffe040');
+    this.sfx('task');
   }
 
   checkTasks() {
@@ -1307,7 +1331,7 @@ function completeObjective(o, c) {
   c.score += OBJ_SCORE;
   c.crystals += OBJ_CRYSTALS;
   c.say('m_milestone', [{ key: 'o_' + o.id, args: [o.need] }, OBJ_CRYSTALS], '#ffe040');
-  G.sfx('task');
+  c.sfx('task');
 }
 
 // the season is over: judge its end-of-season milestones

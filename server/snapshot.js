@@ -26,8 +26,9 @@ const hpq = hp => hp > 0 ? Math.max(1, Math.floor(hp)) : 0;
 
 // ---------------------------------------------------------------------------
 // the world as records, built once per snapshot and shared by every client
+// (vs: a versus match -- each side gets only the other colony's public face)
 // ---------------------------------------------------------------------------
-function buildFrame(sim) {
+function buildFrame(sim, vs) {
   const G = sim.G, tick = G.tick;
   const hit = e => e.hitT !== undefined && tick - e.hitT < P.HIT_T;
   const ants = [], brood = [], bugs = [], items = [];
@@ -60,7 +61,9 @@ function buildFrame(sim) {
     const rec = [it.id, ITEM_IDX[it.kind] | 0, q(it.x), q(it.y), it.carried ? it.carried.id : 0, it.site ? 1 : 0];
     items.push({ id: it.id, x: it.x, y: it.y, rec, key: rec.join(',') });
   }
-  return { tick, lists: { a: ants, b: brood, u: bugs, i: items }, view: buildView(sim) };
+  const frame = { tick, lists: { a: ants, b: brood, u: bugs, i: items }, view: buildView(sim), vs: !!vs };
+  if (vs) frame.pub = publicView(frame.view);
+  return frame;
 }
 
 // colony-level state, by key; a client is sent a key when its JSON changed
@@ -68,7 +71,9 @@ function buildView(sim) {
   const G = sim.G;
   const v = {};
   const cs = G.contested;
-  v.g = { lfy: G.lastFlightYear, cs: cs ? { x: Math.round(cs.x), y: Math.round(cs.y), active: !!cs.active } : null };
+  v.g = { lfy: G.lastFlightYear, cs: cs ? { x: Math.round(cs.x), y: Math.round(cs.y), active: !!cs.active } : null, mode: G.mode };
+  // (a persistent world's legacy and story)
+  if (G.mode === 'world') Object.assign(v.g, { leg: G.legacy, gen: G.gen, hist: G.history.slice(-12) });
   for (const c of G.colonies) {
     v['c' + c.idx] = {
       food: r1(c.food), crystals: c.crystals, score: c.score, caps: c.caps,
@@ -92,6 +97,24 @@ function buildView(sim) {
   return v;
 }
 
+// versus: what one side may know of the other colony -- what it could see
+// for itself (the nest, its chambers and mound, its queen found or slain)
+// but not its stores, crystals, upgrades, milestones or tasks (the food
+// pile drawn at its storage is rounded off)
+const PRIVATE = ['crystals', 'score', 'caps', 'upg', 'raid'];
+function publicView(view) {
+  const pub = {};
+  for (const k in view) {
+    if (k[0] !== 'c') continue;
+    const o = Object.assign({}, view[k]);
+    for (const f of PRIVATE) delete o[f];
+    o.food = Math.floor(o.food / 30) * 30;
+    o.chambers = o.chambers.map(ch => { const c = Object.assign({}, ch); delete c.leaves; return c; });
+    pub[k] = o;
+  }
+  return pub;
+}
+
 // the view key for the players (names, ants, loads), from the room's slots
 function playersView(sim, slots) {
   return sim.G.players.map((p, i) => {
@@ -99,7 +122,7 @@ function playersView(sim, slots) {
     if (!s) return null;
     const a = p.ant && p.ant.hp > 0 ? p.ant : null;
     return {
-      n: s.name, on: s.connected ? 1 : 0, a: a ? a.id : 0, bm: p.buildMat,
+      n: s.name, on: s.connected ? 1 : 0, a: a ? a.id : 0, bm: p.buildMat, c: p.col || 0,
       so: a ? Math.round(a.soil) : 0, th: a ? Math.round(a.thatch) : 0,
       dp: p.deathPos ? pt(p.deathPos) : null,
     };
@@ -145,10 +168,16 @@ function clientSnapshot(frame, cl, edits) {
   const view = {};
   let nv = 0;
   for (const k in frame.view) {
-    const s = frame.viewJson[k];
+    let v = frame.view[k], s = frame.viewJson[k];
+    // (versus: the other side's colony only by its public face; its
+    // milestones and tasks not at all)
+    if (frame.vs && 'cot'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
+      if (k[0] !== 'c') continue;
+      v = frame.pub[k]; s = frame.pubJson[k];
+    }
     if (d.view.get(k) === s) continue;
     d.view.set(k, s);
-    view[k] = frame.view[k];
+    view[k] = v;
     nv++;
   }
   if (nv) msg.v = view;
@@ -165,6 +194,10 @@ function clientSnapshot(frame, cl, edits) {
 function viewJson(frame) {
   frame.viewJson = {};
   for (const k in frame.view) frame.viewJson[k] = JSON.stringify(frame.view[k]);
+  if (frame.pub) {
+    frame.pubJson = {};
+    for (const k in frame.pub) frame.pubJson[k] = JSON.stringify(frame.pub[k]);
+  }
 }
 
 // ---------------------------------------------------------------------------

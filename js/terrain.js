@@ -25,6 +25,7 @@ const T = {
   bgSurf: null,
   wear: null,       // Map pixel index -> bite damage on packed earth (sparse)
   onEdit: null,     // fn(x0, y0, x1, y1): a rect of pixels changed (client redraws, server relays)
+  gateSplit: null,  // versus: the column where the black side's ant gates end and red's begin
 
   init(world) {
     this.m = world.m;
@@ -42,9 +43,14 @@ const T = {
 
   // `own`: the test is for one of our colony's ants, to whom an ant gate is
   // as open as air. Everyone else (and anything building) sees it solid.
+  // (Colony.gates: true, every gate -- the players' colony; versus 1 or 2,
+  // only the gates on its own side of gateSplit, see setupFactions)
+  gateOpen(own, x) {
+    return own === true || (!!own && this.gateSplit !== null && (own === 1) === (x < this.gateSplit));
+  },
   solid(x, y, own) {
     const m = this.get(x, y);
-    return m !== M_AIR && (m !== M_GATE || !own);
+    return m !== M_AIR && (m !== M_GATE || !this.gateOpen(own, x | 0));
   },
 
   // any solid pixel inside the box centered at (x,y), half-extents hw,hh
@@ -66,8 +72,36 @@ const T = {
       let i = py * WORLD_W + x0;
       for (let px = x0; px <= x1; px++, i++) {
         const v = m[i];
-        if (v !== M_AIR && (v !== M_GATE || !own)) return true;
+        if (v !== M_AIR && (v !== M_GATE || !this.gateOpen(own, px))) return true;
       }
+    }
+    return false;
+  },
+
+  // any solid pixel in column x from row y0 to y1, or in row y from column
+  // x0 to x1 (whole numbers)? The walls and roofs climbers feel for, read
+  // straight off the byte array like boxSolid.
+  colSolid(x, y0, y1, own) {
+    if (x < 0 || x >= WORLD_W || y0 < 0 || y1 >= WORLD_H) {
+      for (let y = y0; y <= y1; y++) if (this.solid(x, y, own)) return true;
+      return false;
+    }
+    const m = this.m;
+    for (let i = y0 * WORLD_W + x, e = y1 * WORLD_W + x; i <= e; i += WORLD_W) {
+      const v = m[i];
+      if (v !== M_AIR && (v !== M_GATE || !this.gateOpen(own, x))) return true;
+    }
+    return false;
+  },
+  rowSolid(x0, x1, y, own) {
+    if (x0 < 0 || x1 >= WORLD_W || y < 0 || y >= WORLD_H) {
+      for (let x = x0; x <= x1; x++) if (this.solid(x, y, own)) return true;
+      return false;
+    }
+    const m = this.m;
+    for (let i = y * WORLD_W + x0, x = x0; x <= x1; i++, x++) {
+      const v = m[i];
+      if (v !== M_AIR && (v !== M_GATE || !this.gateOpen(own, x))) return true;
     }
     return false;
   },
@@ -112,7 +146,7 @@ const T = {
         if (!DIGGABLE(mat)) continue;
         if (spare && SPARED(mat, spare)) continue;
         if (TOUGH(mat)) {
-          if (own && mat === M_GATE) continue;
+          if (mat === M_GATE && this.gateOpen(own, x)) continue;
           if (power <= 0) continue;
           const w = (this.wear.get(i) || 0) + power;
           if (w < PACKED_HP - 0.01) { this.wear.set(i, w); worn++; continue; }
@@ -219,7 +253,7 @@ const T = {
         const dx = x - cx, dy = y - cy;
         if (dx * dx + dy * dy > r2) continue;
         const m = this.get(x, y);
-        if (DIGGABLE(m) && (m !== M_GATE || !own) && !(spare && SPARED(m, spare))) return true;
+        if (DIGGABLE(m) && (m !== M_GATE || !this.gateOpen(own, x)) && !(spare && SPARED(m, spare))) return true;
       }
     }
     return false;

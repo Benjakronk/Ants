@@ -5,11 +5,17 @@
 // player's ant, a dig showing up in the other page's terrain, takeover per
 // player, a message to one player only, a dropped connection (and a page
 // reload) reclaiming the slot, the match's end screen, the empty room
-// closing, malformed messages and floods, a full room, /api/health.
+// closing, malformed messages and floods, a full room, /api/health. The
+// room browser (a persistent world listed, a public match listed and a
+// private one not), the host kicking a player from the lobby (the page told
+// so), and a second server whose tiny CPU budget and MAX_ROOMS turn new
+// matches away (SERVER FULL).
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const http = require('http');
 const net = require('net');
+const os = require('os');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const WebSocket = require(path.join(ROOT, 'server', 'node_modules', 'ws'));
@@ -60,10 +66,12 @@ function bot(port, name) {
 
 (async () => {
   const port = await freePort();
+  const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'maur-net-'));
   const srv = spawn(process.execPath, [path.join(ROOT, 'server', 'server.js')], {
     env: Object.assign({}, process.env, {
       PORT: String(port), HOST: '127.0.0.1', MAUR_DEV: '1',
       ROOM_IDLE_MS: '3000', RECONNECT_MS: '10000', ROOM_OVER_MS: '60000', MAX_ROOMS: '6',
+      PERSIST_WORLDS: 'MAURTUA', DATA_DIR: DATA,
     }),
   });
   let srvLog = '';
@@ -71,8 +79,9 @@ function bot(port, name) {
   srv.stderr.on('data', d => { srvLog += d; });
   let health = null;
   for (let i = 0; i < 50 && !health; i++) { await sleep(100); try { health = await getJson(port, '/api/health'); } catch (e) { /* not yet */ } }
-  check('/api/health answers', health && health.ok === true && health.rooms === 0 && health.players === 0 &&
-    typeof health.uptime === 'number', health);
+  check('/api/health answers (load, budget, the worlds)', health && health.ok === true && health.rooms === 0 && health.players === 0 &&
+    typeof health.uptime === 'number' && health.load === 0 && health.budget === 10 && health.full === false &&
+    health.worlds.length === 1 && health.worlds[0].name === 'MAURTUA', health);
 
   const browser = await chromium.launch();
   const errors = [];
@@ -111,7 +120,20 @@ function bot(port, name) {
   await A.keyboard.type('Alpha');
   await A.keyboard.press('Enter');
   await A.waitForTimeout(100);
-  await A.keyboard.press('Enter');   // CREATE A MATCH
+  const items = await A.evaluate(() => netMenuItems().map(i => i.id));
+  check('the online menu: PERSISTENT WORLDS, CREATE, JOIN WITH CODE, OPEN MATCHES', items.join() === 'worlds,create,join,open,back', items);
+  // (the world list, from the server)
+  await A.keyboard.press('Enter');   // PERSISTENT WORLDS
+  await A.waitForFunction(() => G.state === 'networlds' && Net.list, null, { timeout: 5000 });
+  await A.waitForTimeout(200);
+  const wl = await A.evaluate(() => Net.list.worlds);
+  check('PERSISTENT WORLDS lists the server\'s worlds', wl.length === 1 && wl[0].name === 'MAURTUA' && wl[0].players === 0, wl);
+  await A.screenshot({ path: 'test/shot-net-worlds.png' });
+  await A.keyboard.press('Escape');
+  await A.waitForTimeout(100);
+  for (const k of ['ArrowDown', 'Enter', 'ArrowDown', 'ArrowDown']) { await A.keyboard.press(k); await A.waitForTimeout(80); }
+  // (CREATE A MATCH: co-op, private)
+  await A.keyboard.press('Enter');   // CREATE
   await A.waitForFunction(() => G.state === 'lobby' && Net.code, null, { timeout: 5000 });
   const code = await A.evaluate(() => Net.code);
   check('creating a match gives a 4-letter room code', /^[A-HJ-NP-Z]{4}$/.test(code), code);
@@ -124,7 +146,7 @@ function bot(port, name) {
   await B.keyboard.type('beta');
   await B.keyboard.press('Enter');
   await B.waitForTimeout(100);
-  await B.keyboard.press('ArrowDown');
+  for (let i = 0; i < 2; i++) { await B.keyboard.press('ArrowDown'); await B.waitForTimeout(60); }
   await B.keyboard.press('Enter');   // JOIN WITH A CODE
   await B.waitForTimeout(100);
   await B.keyboard.type(code.toLowerCase());
@@ -136,6 +158,51 @@ function bot(port, name) {
   check('the lobby shows both players (code case-insensitive)', lob.names.join() === 'ALPHA,BETA' && lob.host === 0, lob);
   await A.screenshot({ path: 'test/shot-net-lobby.png' });
   check('only the host may start', await B.evaluate(() => Net.you === 1 && Net.host === 0));
+  // a private match is not listed under OPEN MATCHES; the host makes it public
+  const L1 = bot(port, 'LISTER');
+  await L1.open;
+  L1.send({ t: 'hello', v: 1, name: 'LISTER' });
+  L1.send({ t: 'list' });
+  const ls1 = await L1.wait(m => m.t === 'list');
+  await A.keyboard.press('Tab');   // PUBLIC
+  await A.waitForFunction(() => Net.pub, null, { timeout: 3000 }).catch(() => {});
+  L1.msgs = [];
+  L1.send({ t: 'list' });
+  const ls2 = await L1.wait(m => m.t === 'list');
+  check('OPEN MATCHES: a private lobby is hidden; made public (TAB) it is listed', ls1 && !ls1.matches.some(m => m.code === code) &&
+    ls2 && ls2.matches.some(m => m.code === code && m.mode === 'coop' && m.players === 2 && m.host === 'ALPHA') &&
+    ls2.worlds.length === 1, { before: ls1 && ls1.matches, after: ls2 && ls2.matches });
+  // the host kicks a player out of the lobby: the kicked page is told so
+  const K = await mkPage();
+  await K.keyboard.press('ArrowDown');
+  await K.keyboard.press('Enter');
+  await K.waitForTimeout(100);
+  await K.keyboard.type('Kappa');
+  await K.keyboard.press('Enter');
+  await K.waitForTimeout(100);
+  for (let i = 0; i < 3; i++) { await K.keyboard.press('ArrowDown'); await K.waitForTimeout(60); }
+  await K.keyboard.press('Enter');   // OPEN MATCHES
+  await K.waitForFunction(c => G.state === 'netopen' && Net.list && Net.list.matches.some(m => m.code === c), code, { timeout: 5000 }).catch(() => {});
+  await K.screenshot({ path: 'test/shot-net-open.png' });
+  await K.keyboard.press('Enter');   // join it from the list
+  await K.waitForFunction(() => G.state === 'lobby' && Net.players.length === 3, null, { timeout: 5000 }).catch(() => {});
+  const kj = await K.evaluate(() => ({ s: G.state, you: Net.you }));
+  check('joining from OPEN MATCHES', kj.s === 'lobby' && kj.you === 2, kj);
+  B.evaluate(() => Net.send({ t: 'kick', idx: 0 }));
+  const notHost = await B.waitForFunction(() => Net.err === 'e_notHost', null, { timeout: 3000 }).then(() => true, () => false);
+  await A.waitForFunction(() => Net.players.length === 3, null, { timeout: 3000 });
+  for (let i = 0; i < 2; i++) { await A.keyboard.press('ArrowDown'); await A.waitForTimeout(60); }   // KAPPA
+  await A.keyboard.press('x');
+  await K.waitForFunction(() => G.state === 'netmenu' && Net.err === 'e_kicked', null, { timeout: 5000 }).catch(() => {});
+  await A.waitForFunction(() => Net.players.length === 2, null, { timeout: 3000 }).catch(() => {});
+  const kk = await K.evaluate(() => ({ s: G.state, err: Net.err, text: errText(Net.err) }));
+  await K.screenshot({ path: 'test/shot-net-kicked.png' });
+  check('the host kicks a player from the lobby (only the host may); the kicked page says so', notHost && kk.s === 'netmenu' &&
+    kk.err === 'e_kicked' && kk.text === 'THE HOST REMOVED YOU FROM THE MATCH' &&
+    (await A.evaluate(() => Net.players.map(p => p.n).join())) === 'ALPHA,BETA', kk);
+  await K.close();
+  // (a started match is no longer open)
+  L1.msgs = [];
 
   // A starts
   await A.keyboard.press('Enter');
@@ -167,6 +234,10 @@ function bot(port, name) {
   check('both pages get snapshots: ants, their own ant, the players', st.every((s, i) => s.snaps > 5 && s.ants > 15 &&
     s.you === i && s.mine && s.online && s.caps && s.players.join() === 'ALPHA,BETA'), st);
   await A.screenshot({ path: 'test/shot-net-play.png' });
+  L1.send({ t: 'list' });
+  const ls3 = await L1.wait(m => m.t === 'list');
+  check('a match under way is no longer listed', ls3 && !ls3.matches.some(m => m.code === code));
+  L1.ws.close();
 
   // B walks right: the server moves B's ant, A sees it go
   const srvB0 = await dev(A, 'G.players[1].ant.x');
@@ -298,7 +369,7 @@ function bot(port, name) {
   await C.keyboard.type('Gamma');
   await C.keyboard.press('Enter');
   await C.waitForTimeout(100);
-  await C.keyboard.press('ArrowDown');
+  for (let i = 0; i < 2; i++) { await C.keyboard.press('ArrowDown'); await C.waitForTimeout(60); }
   await C.keyboard.press('Enter');
   await C.waitForTimeout(100);
   await C.keyboard.type(code);
@@ -408,8 +479,10 @@ function bot(port, name) {
   check('an unknown code is refused', !!(await x.wait(m => m.t === 'error' && m.key === 'e_noRoom')));
   x.send({ t: 'resume', code: 'ZZZZ', token: 'abc' });
   check('resuming into a room that is gone: the match was closed', !!(await x.wait(m => m.t === 'closed' && m.key === 'e_closed')));
-  x.send({ t: 'create', mode: 'versus' });
-  check('an unknown mode is refused (versus is Phase 4b)', !!(await x.wait(m => m.t === 'error' && m.key === 'e_mode')));
+  x.send({ t: 'create', mode: 'royale' });
+  check('an unknown mode is refused', !!(await x.wait(m => m.t === 'error' && m.key === 'e_mode')));
+  x.send({ t: 'enter', name: 'NOWHERE' });
+  check('an unknown world is refused', !!(await x.wait(m => m.t === 'error' && m.key === 'e_noWorld')));
   for (const junk of ['', 'null', '[]', '{"t":5}', '{"t":"in","dx":"NaN"}', '{"t":"join","code":{}}', '{"t":"take","caste":"queen"}',
     '{"t":"buy","id":"__proto__"}', '{"t":"resume","code":"ABCD","token":' + JSON.stringify('x'.repeat(100)) + '}',
     '{"t":"dev","js":"process.exit(1)"}', '\u0000\u0001\u0002', '{"t":"start"}', '{"t":"leave"}']) x.send(junk);
@@ -447,10 +520,44 @@ function bot(port, name) {
   check('no room crashed, nothing uncaught', !dead);
   for (const o of others) o.ws.close();
 
+  // ---- SERVER FULL: a second server with MAX_ROOMS 2 and a tiny CPU budget ----
+  const port2 = await freePort();
+  const srv2 = spawn(process.execPath, [path.join(ROOT, 'server', 'server.js')], {
+    env: Object.assign({}, process.env, { PORT: String(port2), HOST: '127.0.0.1', MAX_ROOMS: '2', CPU_BUDGET_MS: '0.05',
+      PERSIST_WORLDS: '0', DATA_DIR: DATA }),
+  });
+  for (let i = 0; i < 50; i++) { await sleep(100); try { await getJson(port2, '/api/health'); break; } catch (e) { /* not yet */ } }
+  const f1 = bot(port2, 'F1'), f2 = bot(port2, 'F2'), f3 = bot(port2, 'F3');
+  await Promise.all([f1.open, f2.open, f3.open]);
+  for (const b of [f1, f2, f3]) b.send({ t: 'hello', v: 1, name: b.name });
+  f1.send({ t: 'create' });
+  f2.send({ t: 'create' });
+  const lf1 = await f1.wait(m => m.t === 'lobby'), lf2 = await f2.wait(m => m.t === 'lobby');
+  f3.send({ t: 'create' });
+  const busy1 = await f3.wait(m => m.t === 'error' && m.key === 'e_busy');
+  check('MAX_ROOMS: a third match is turned away (SERVER FULL)', lf1 && lf2 && !!busy1);
+  f1.send({ t: 'start' });
+  await f1.wait(m => m.t === 'world', 15000);
+  let hf = null;
+  for (let i = 0; i < 40; i++) { await sleep(150); hf = await getJson(port2, '/api/health'); if (hf.full) break; }
+  check('the load of a running match shows in /api/health, over the budget: full', hf && hf.full && hf.load > 0.05 && hf.budget === 0.05, hf);
+  f3.msgs = [];
+  f3.send({ t: 'list' });
+  const lf = await f3.wait(m => m.t === 'list');
+  f3.send({ t: 'join', code: lf1.code });
+  const busy2 = await f3.wait(m => m.t === 'error' && m.key === 'e_busy');
+  f2.send({ t: 'start' });
+  const busy3 = await f2.wait(m => m.t === 'error' && m.key === 'e_busy');
+  check('over the CPU budget: no joins into a running match, no new match started (SERVER FULL); the list says full',
+    !!busy2 && !!busy3 && lf && lf.full === 1);
+  for (const b of [f1, f2, f3]) b.ws.close();
+  srv2.kill();
+
   console.log('\nERRORS:', errors.length ? errors.join('\n') : 'none');
   if (fails.length) console.log('--- server log ---\n' + srvLog.split('\n').slice(-40).join('\n'));
   console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');
   await browser.close();
   srv.kill();
+  try { fs.rmSync(DATA, { recursive: true, force: true }); } catch (e) { /* leave it */ }
   process.exit(errors.length || fails.length ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });

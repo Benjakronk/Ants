@@ -110,6 +110,8 @@ const path = require('path');
     let b = G.brood.find(b => !b.dead && !b.carried && b.colony === G.colony);
     if (!b) { b = new Brood(a.x, a.y, 'egg'); G.brood.push(b); }
     b.x = a.x + 2; b.y = a.y;
+    // (the nurse taken over may have been mid-errand with a larva of its own)
+    if (a.carry && a.carry !== b) { a.carry.carried = null; a.carry = null; }
   });
   await page.keyboard.press('e');
   await page.waitForTimeout(150);

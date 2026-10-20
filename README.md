@@ -20,7 +20,7 @@ open index.html          # macOS
 python3 -m http.server   # then http://localhost:8000
 ```
 
-### Online co-op (local server)
+### Online (local server)
 
 **PLAY ONLINE** needs the game server (Node 22; its only dependency is
 `ws`):
@@ -32,10 +32,26 @@ cd server && npm install && npm start    # listening on 127.0.0.1:3006
 Then open <http://localhost:3006> (the server serves the game too) in up to
 four browsers or tabs. A page opened from disk (`file://`) connects to
 `ws://localhost:3006/ws`; `?server=ws://host:port/ws` points it elsewhere,
-and `?lag=100` adds an artificial 100 ms round trip for testing. Settings
-come from the environment or `server/.env` (see `server/.env.example`:
-`PORT`, `HOST`, `MAX_ROOMS`, ...). The public server will be
-`https://maur.lektorensrud.no` (see `deploy/README.md`).
+and `?lag=100` adds an artificial 100 ms round trip for testing. The public
+server will be `https://maur.lektorensrud.no` (see `deploy/README.md`).
+
+Settings come from the environment or `server/.env` (see
+`server/.env.example`):
+
+| Variable | Default | |
+|---|---|---|
+| `PORT`, `HOST` | `3006`, `127.0.0.1` | where the server listens |
+| `MAX_ROOMS` | `4` | matches at once (lobbies included; the persistent worlds come on top) |
+| `MAX_PLAYERS` | `4` | players per room |
+| `CPU_BUDGET_MS` | `10` | the CPU every running room together may use, in ms per 16.7 ms frame (about 60% of a core); above it new matches and joins are refused with SERVER FULL |
+| `PERSIST_WORLDS` | `1` | persistent worlds: a count (the first of `MAURTUA`, `ENGA`, `SKOGEN`, `LYNGEN`) or a comma-separated list of names; `0` for none |
+| `DATA_DIR` | `server/data` | where the worlds are saved (JSON, one file per world plus a `.bak`; gitignored). Must be writable, and backed up |
+| `AUTOSAVE_MS` | `120000` | how often a running world saves |
+| `ROOM_IDLE_MS`, `ROOM_OVER_MS`, `RECONNECT_MS` | 1 min, 5 min, 2 min | an empty room closes, an ended match closes, a lost player's place is kept |
+| `MAX_CONNS` | `64` | WebSocket connections at most |
+
+`GET /api/health` answers `{ ok, rooms, players, uptime, load, budget,
+full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 
 ## How to play
 
@@ -65,24 +81,60 @@ come from the environment or `server/.env` (see `server/.env.example`:
 
 ### Playing online
 
-Up to four players share one colony for one year. **PLAY ONLINE** asks for
-your name (remembered in this browser), then **CREATE A MATCH** gives a
-four-letter **room code** (no I or O, case doesn't matter) for your friends
-to type in with **JOIN WITH A CODE**. The lobby lists everyone in their
-colours; the host presses `Enter` to start. Someone who joins a match
-already under way picks an ant from the colony (**JOIN THE COLONY**).
+**PLAY ONLINE** asks for your name (remembered in this browser), then
+offers four ways in:
+
+- **PERSISTENT WORLDS** -- the server's named worlds (`MAURTUA`, ...), each
+  listed with its players (up to 4), year and season, and its legacy.
+  `Enter` drops you in at any time; you pick an ant (**JOIN THE COLONY**).
+  A world sleeps while nobody is in it (its colony can't die unattended)
+  and is saved on the server. Its seasons cycle year after year: the
+  nuptial flight doesn't end it, it banks **legacy points** (stars x 100 +
+  princesses flown x 50, shown in a toast, on the world list and on the
+  third page of the `O` screen, **WORLD HISTORY**) and the colony carries on
+  into a bigger next year. A queen who dies with a princess is succeeded;
+  a colony lost with no heir starts the world over -- a new seed, a fresh
+  colony -- with its legacy and history kept. Always co-op.
+- **CREATE A MATCH** -- **co-op** (1-4 players, one colony, one year; the
+  end screen has no CONTINUE) or **versus**, **public** (listed under OPEN
+  MATCHES) or **private** (by code only). You get a four-letter **room
+  code** (no I or O, case doesn't matter).
+- **JOIN WITH A CODE** -- any match, public or private.
+- **OPEN MATCHES** -- public matches still in their lobby with room to spare.
+
+The lobby lists everyone in their colours. The host presses `Enter` to
+start, `Tab` to make the match public or private, and `Up`/`Down` + `X` to
+kick a player (who is told so). Someone who joins a match already under way
+picks an ant from the colony (**JOIN THE COLONY**). When the server is busy
+(too many matches, or its CPU budget used up) it says **SERVER FULL**.
+
+**Versus**: black against red, 1-2 players a side (`Left`/`Right` in the
+lobby picks yours; the host can start once both sides have a player). Each
+side plays its own colony -- its own ants to take over (never the queen),
+its own milestones, crystals and upgrades, its own HUD, map, `O` screen
+and guide arrow, its own messages -- and never sees the other side's
+stores, crystals or milestones. Both nests are made equal from the seed
+(each pair of matching chambers counts only the smaller one's room, and
+both start with the same household), each side passes only its own ant
+gates, the queens are equally tough, and there are no AI raids (the NPCs
+of both colonies forage, nurse and defend; the attacking is the players'
+job -- a soldier's `Q` brings an escort). Kill the enemy queen while she
+has no heir and your side wins at once; otherwise the nuptial flight in
+spring of year 2 decides it: more stars wins, then more princesses flown,
+then more ants. No hints in versus. The end screen shows both sides.
 
 The keys are the same as solo. Each player plays its own ant -- a coloured
 chevron over it, the others' names over theirs, and the same colours on the
 map -- and `Tab` or a death hands you any ant no other player has. The
 milestones, the crystals and the upgrades (`O`, any player may buy) belong
 to the colony; the hints and the guide arrow are your own. Nothing pauses:
-`Esc` opens a menu with **RESUME** and **LEAVE MATCH** while the world runs
-on. If the connection drops, the game says so and reconnects by itself
-(reloading the page works too): for two minutes your place is kept and
-your ant carries on as one of the colony until you are back. When the year
-ends (the nuptial flight, or the colony lost) everyone sees the same end
-screen. Online matches are not saved.
+`Esc` opens a menu with **RESUME** and **LEAVE MATCH** (**LEAVE WORLD**, back
+to the world list) while the world runs on. If the connection drops, the game says so and
+reconnects by itself (reloading the page works too): for two minutes your
+place is kept and your ant carries on as one of the colony until you are
+back. When a match's year ends (the nuptial flight, or the colony lost)
+everyone sees the same end screen. Matches are not saved; persistent
+worlds are (on the server).
 
 ### Getting started
 
@@ -279,8 +331,17 @@ bitmap font and WebAudio square-wave sound. No frameworks.
 The simulation and the client are separate, so the same simulation can run
 on a server. The sim never touches the DOM, audio or translations: it reads
 each player's `input` struct and emits `G.events` (messages by string key,
-positional sounds, particle bursts), and terrain edits are reported through
-`T.onEdit`.
+positional sounds, particle bursts; a colony's own ones tagged with it, so
+in versus they reach only that side), and terrain edits are reported
+through `T.onEdit`. `G.mode` is `solo`, `coop`, `versus` or `world`;
+`G.colIdx` is whose eyes `G.colony` / `G.rival` see through (a red player's
+client sets 1).
+
+An NPC far from every player's ant thinks less often -- every 4 ticks
+beyond 900 px, every other tick off screen, every tick within 260 px or
+while it fights, flees, raids, rescues, escorts or burrows -- while its
+physics still runs every tick and its timers count the ticks that passed,
+so a far forager's errands take as long as a near one's.
 
 ```
 simulation (runs in the browser or headless in Node)
@@ -309,30 +370,41 @@ js/net.js          online client: connection, lobby, reconnect; snapshots
                    with the sim's own steering and physics
 js/netproto.js     protocol shared with the server: version, code tables,
                    room codes, names, terrain byte packing
-js/save.js         localStorage saves, RLE-packed terrain (v6)
+js/save.js         the world as data (serializeWorld, shared with the
+                   server) and the browser's localStorage slots; RLE-packed
+                   terrain (v7)
 js/lang.js         English / Norwegian strings, the plural helper Ln()
 js/font.js         bitmap font · js/sfx.js WebAudio bleeps
 
 server (Node 22, `ws`)
 server/server.js   HTTP (static files, GET /api/health) and the WebSocket
-                   on /ws: messages validated and rate-limited, the 60 Hz
-                   loop over the rooms
-server/room.js     a room: lobby, slots (faction per player), reconnect
-                   tokens, the match's own sim (a vm context of the sim
-                   files), inputs in, events out, snapshots at 20 Hz
+                   on /ws: messages validated and rate-limited, the room
+                   browser, the 60 Hz loop over the rooms, the CPU-load
+                   guard (SERVER FULL), the persistent worlds booted from
+                   their saves, a graceful stop that saves them
+server/room.js     a room: a co-op or versus match (lobby, sides, public/
+                   private, kick) or a persistent world (asleep with nobody
+                   in it, autosaved, reborn when its colony is lost); slots
+                   (faction per player), reconnect tokens, its own sim (a vm
+                   context of the sim files), inputs in, events out (a
+                   colony's only to its side), snapshots at 20 Hz
 server/snapshot.js per-client delta snapshots (all entities near the
-                   player's view, the rest at 2 Hz), colony state, terrain
-                   edits
-server/sim.js      loads the sim files into a fresh vm context per room
+                   player's view, the rest at 2 Hz), colony state (versus:
+                   the enemy colony's public face only), terrain edits
+server/store.js    the worlds' save files: atomic writes, one backup
+server/sim.js      loads the sim files (and save.js) into a fresh vm
+                   context per room
 server/config.js   settings from the environment / server/.env
-deploy/            pm2 ecosystem file, nginx block, deploy notes (Phase 5)
+deploy/            pm2 ecosystem file, nginx block, the worlds' nightly
+                   backup script, deploy notes (Phase 5)
 ```
 
 The protocol is JSON over one WebSocket (permessage-deflate on): `hello`,
-`create` / `join` (room code) / `resume` (token), `lobby`, `start`,
-`leave`; in a match the client sends held input (`in`, on change and every
-100 ms) and presses as messages of their own (`act`, `abil`, `mat`,
-`mark`, `buy`, `take`). On joining it gets `world` (the seed, plus the
+`list` (the room browser), `create` (mode, public) / `join` (room code) /
+`enter` (a persistent world by name) / `resume` (token), `lobby`, `side`,
+`pub`, `kick`, `start`, `leave`; in a match the client sends held input
+(`in`, on change and every 100 ms) and presses as messages of their own
+(`act`, `abil`, `mat`, `mark`, `buy`, `take`). On joining it gets `world` (the seed, plus the
 terrain as a deflated diff against what the seed generates, checked by a
 hash), then snapshots: entity records as integer arrays, the ids gone, the
 colony state that changed, its own events (messages, sounds, particles)
@@ -369,14 +441,34 @@ node test/activeyear.js   # a scripted active player through a whole year:
                           # (--casual: a first-timer's year)
 node test/netprobe.js     # online (needs `npm install` in server/): the
                           # server as a child process, two browser pages
-                          # (one with 80 ms lag) and raw clients: room
-                          # codes, lobby, start, terrain + snapshots (hash-
-                          # checked against the server), input, digging,
-                          # takeover, targeted messages, reconnect + reload,
-                          # mid-match join, upgrades, leave, match end, the
-                          # empty room closing, junk, floods, a full room
+                          # (one with 80 ms lag) and raw clients: the online
+                          # menu, the world list, room codes, lobby, public
+                          # and private (OPEN MATCHES), a kick, start,
+                          # terrain + snapshots (hash-checked against the
+                          # server), input, digging, takeover, targeted
+                          # messages, reconnect + reload, mid-match join,
+                          # upgrades, leave, match end, the empty room
+                          # closing, junk, floods, a full room, SERVER FULL
+                          # (MAX_ROOMS and the CPU budget)
+node test/persistprobe.js # persistent worlds (raw clients, a temp DATA_DIR):
+                          # boot from PERSIST_WORLDS, sleep with nobody in
+                          # (ticks stand still), wake on a join, atomic
+                          # autosave + .bak, a flight banking legacy and
+                          # going on, a lost colony restarting the world
+                          # (new seed, legacy and history kept), a graceful
+                          # stop saving it, a restart loading it the same,
+                          # a corrupt save falling back to the backup
+node test/versusprobe.js  # versus: the sim alone (equal nests on every
+                          # seed, own gates, no AI raids, the flight's
+                          # verdict, succession) and online (2 pages + 2 raw
+                          # clients): CREATE -> versus, sides in the lobby,
+                          # the start rule, 2v2, takeover in one's own
+                          # colony, each side's HUD/milestones/crystals and
+                          # nothing private of the enemy's, messages that
+                          # stay on their side, the enemy queen slain
 node test/netload.js      # one room, 4 bots, 2 minutes on a busy colony:
-                          # server ms/tick, CPU, bytes/s per client
+                          # server ms/tick (the whole run's average), CPU,
+                          # the guard's load, bytes/s per client
                           # (--natural: an uncrowded day-1 colony)
 ```
 

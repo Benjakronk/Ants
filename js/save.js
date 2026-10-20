@@ -1,7 +1,21 @@
-// MAUR -- save / load. Three slots in localStorage, terrain RLE-packed.
+// MAUR -- save / load. The world as plain data (serializeWorld; the sim's
+// restoreWorld rebuilds it), terrain RLE-packed. The first half is shared
+// with the server, which keeps its persistent worlds as JSON files on disk;
+// the second half is this browser's three save slots in localStorage.
 'use strict';
 
 const SAVE_PREFIX = 'maur_world_';
+// v3: chambers, building loads, surface line, packed-earth wear, build
+// material. v4: the calendar (implicit in tick), milestones, crystals and
+// upgrades, aphid shelters, fungus garden stock, royal brood, the last
+// nuptial flight. v5: every colony (G.colonies: the players' and the
+// red rival, each with its milestones, raid and growth), each ant's and
+// brood's colony, the contested food site. v6: each colony's ledger of
+// who wounded its queen lately (the red-queen bonus needs a real hand in
+// her death). v7: the world's mode (a persistent world on the server),
+// its legacy points, history and generation.
+// restoreWorld still loads v2-v6 saves (missing fields get defaults).
+const SAVE_VERSION = 7;
 
 // run-length encode the terrain bytes: [val, lo(count), hi(count)] triplets
 function rleEncode(arr) {
@@ -117,23 +131,16 @@ function roundAll(t) {
   return o;
 }
 
-function saveWorld(slot) {
-  if (!G || !G.running) return false;
-  // v3: chambers, building loads, surface line, packed-earth wear, build
-  // material. v4: the calendar (implicit in tick), milestones, crystals and
-  // upgrades, aphid shelters, fungus garden stock, royal brood, the last
-  // nuptial flight. v5: every colony (G.colonies: the players' and the
-  // red rival, each with its milestones, raid and growth), each ant's and
-  // brood's colony, the contested food site. v6: each colony's ledger of
-  // who wounded its queen lately (the red-queen bonus needs a real hand in
-  // her death).
-  // restoreWorld still loads v2-v5 saves (missing fields get defaults).
-  const data = {
-    v: 6,
+// the whole world as plain data (JSON-safe)
+function serializeWorld() {
+  return {
+    v: SAVE_VERSION,
     w: WORLD_W, h: WORLD_H,
     seed: G.seed,
     tick: G.tick,
     day: G.day,
+    mode: G.mode,
+    legacy: G.legacy, history: G.history, gen: G.gen,
     playerCount: G.players.length,
     terrain: rleEncode(T.m),
     colonies: G.colonies.map(serializeColony),
@@ -149,8 +156,28 @@ function saveWorld(slot) {
     bugs: G.bugs.filter(b => !b.dead).map(serializeBug),
     items: G.items.filter(i => !i.dead).map(serializeItem),
   };
+}
+
+// a saved world at a glance (the slot list, the server's world list)
+function worldSummary(d) {
+  // (v3 and older restart the calendar: year 1, spring)
+  const day = d.v >= 4 ? d.day : 0;
+  const c = d.v >= 5 ? d.colonies[0] : d.colony;
+  return {
+    day, ants: d.ants.filter(a => !a.col).length, food: Math.round(c.food),
+    score: c.score, playerCount: d.playerCount,
+    season: Math.floor(day / SEASON_DAYS) % 4, year: Math.floor(day / YEAR_DAYS) + 1,
+    legacy: d.legacy || 0, gen: d.gen || 1,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// this browser's save slots (client only)
+// ---------------------------------------------------------------------------
+function saveWorld(slot) {
+  if (!G || !G.running) return false;
   try {
-    localStorage.setItem(SAVE_PREFIX + slot, JSON.stringify(data));
+    localStorage.setItem(SAVE_PREFIX + slot, JSON.stringify(serializeWorld()));
     return true;
   } catch (e) {
     console.error('save failed', e);
@@ -167,17 +194,7 @@ function loadWorldData(slot) {
 function slotInfo(slot) {
   const raw = localStorage.getItem(SAVE_PREFIX + slot);
   if (!raw) return null;
-  try {
-    const d = JSON.parse(raw);
-    // (v3 and older restart the calendar: year 1, spring)
-    const day = d.v >= 4 ? d.day : 0;
-    const c = d.v >= 5 ? d.colonies[0] : d.colony;
-    return {
-      day, ants: d.ants.filter(a => !a.col).length, food: Math.round(c.food),
-      score: c.score, playerCount: d.playerCount,
-      season: Math.floor(day / SEASON_DAYS) % 4, year: Math.floor(day / YEAR_DAYS) + 1,
-    };
-  } catch (e) { return null; }
+  try { return worldSummary(JSON.parse(raw)); } catch (e) { return null; }
 }
 
 function deleteWorld(slot) {
