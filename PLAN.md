@@ -179,5 +179,7 @@ that march out from their own nest. This is also the foundation for versus.
      a red nuptial flight, a raid-defence hint (both from Phase 3), a
      "fallen colony's princess founds a new nest" variant (succession stays
      as before; a lost colony restarts the world).
-5. **Deploy to the VPS.** (Next: what remains. `deploy/README.md` has the
-   layout, the data dir and its nightly backup, `deploy/backup-maur.sh`.)
+5. **Deploy to the VPS.** **Done 2026-10-20:** live at
+   https://maur.lektorensrud.no (pm2 `maur`, port 3006, worlds in
+   `/srv/maur/data`, nightly backup). `deploy/README.md` has how it was done
+   and how to update; the shared runbook in `../../VPS-deploy` lists the service.

@@ -1,4 +1,22 @@
-# Deploying MAUR (Phase 5 -- not done yet)
+# Deploying MAUR
+
+**Live since 2026-10-20** at https://maur.lektorensrud.no (pm2 `maur`, port
+3006, code in `/srv/maur`, worlds in `/srv/maur/data`, nightly backup 02:50
+to `/var/backups/maur`). First deploy, as it happened:
+
+1. Domeneshop A record `maur` -> `159.195.215.124` (it first pointed at a
+   Domeneshop default, 151.249.121.9; compare the IP, don't just check that
+   one resolves).
+2. On a phone hotspot (the school network drops port 22):
+   `ssh admin@159.195.215.124 'mkdir -p ~/maur-setup'`,
+   `scp -r deploy admin@159.195.215.124:~/maur-setup/`, then in a real
+   terminal `ssh -t admin@159.195.215.124 "sudo bash ~/maur-setup/deploy/root-setup.sh"`.
+3. `powershell -ExecutionPolicy Bypass -File deploy\upload.ps1` (no sudo).
+4. Checked: `/api/health` over https, the page, a `wss://.../ws` hello/list
+   round trip, `/usr/local/bin/backup-maur.sh` by hand.
+
+**Updating:** on the hotspot, run `deploy\upload.ps1` again (it restarts pm2;
+running matches are lost, persistent worlds are saved and reloaded).
 
 Target: `https://maur.lektorensrud.no` (DNS pending), one pm2 process on
 port 3006 serving `/api/*` and the WebSocket on `/ws`, nginx serving the

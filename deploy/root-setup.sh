@@ -3,6 +3,7 @@
 # and the backup cron in one go). Safe to re-run: every step skips itself if
 # already done. sudo asks for a password, so run it yourself in a real terminal:
 #
+#   ssh admin@159.195.215.124 'mkdir -p ~/maur-setup'
 #   scp -r deploy admin@159.195.215.124:~/maur-setup/
 #   ssh -t admin@159.195.215.124 "sudo bash ~/maur-setup/deploy/root-setup.sh"
 #
