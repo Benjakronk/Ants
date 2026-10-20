@@ -30,8 +30,11 @@ const G = {
   history: [],        // ...and its story: { gen, year, out, stars, flown, legacy }
   gen: 1,             // ...and how many colonies it has seen (a lost one starts it over)
   // the players the world is balanced for (1-MAX_SLOTS, see playerSlots):
-  // set by newWorld, raised by notePlayers, never lowered (saved)
+  // set by newWorld, raised by notePlayers (saved); a persistent world's
+  // follows playerAvg instead
   playerSlots: 1,
+  playerAvg: 1,       // a persistent world: the players in it lately (a moving average, saved)
+  present: 0,         // a persistent world: the players connected now (the server's)
   // whose eyes G.colony / G.rival / G.objectives see through: 0 in the sim
   // (the players' black colony, the red rival); a red player's client in
   // versus sets 1, and its HUD, map and arrow take the red colony's side
@@ -207,20 +210,43 @@ function playerColony(pIdx) {
 // ---------------------------------------------------------------------------
 // the player count the world is balanced for (G.playerSlots): co-op the
 // players who started it, versus the bigger side, a persistent world the
-// most who were ever in it at once. Each player beyond the first gives the
+// players who have been in it lately. Each player beyond the first gives the
 // colonies room (their caps), raises the milestones a little, and in co-op
-// makes the red rival bigger and bolder (see SLOT_* in colony.js). It only
-// ever rises -- a world doesn't get easier when players leave -- and with
-// one player every factor is exactly 1.
+// makes the red rival bigger and bolder (see SLOT_* in colony.js). A match's
+// only ever rises -- it doesn't get easier when players leave; a persistent
+// world's follows a moving average of the players connected, so a crowd for
+// a few minutes doesn't make it a crowd's world for good. With one player
+// every factor is exactly 1.
 // ---------------------------------------------------------------------------
 const MAX_SLOTS = 8;
 function playerSlots() { return Math.max(1, Math.min(MAX_SLOTS, Math.floor(G.playerSlots) || 1)); }
 
-// n players are in the world now: balance it for that many, if more than
-// before (the season's open milestones grow with it)
+// n players are in the world now: balance a match for that many, if more
+// than before (a persistent world only notes it: see followPlayers)
 function notePlayers(n) {
   n = Math.max(1, Math.min(MAX_SLOTS, Math.floor(n) || 1));
+  if (G.mode === 'world') { G.present = n; return false; }
   if (n <= playerSlots()) return false;
+  setSlots(n);
+  return true;
+}
+
+// a persistent world: every in-game hour the average moves toward the
+// players connected, by an in-game day's time constant (~4 minutes of play;
+// asleep, nothing is counted), and the world is balanced for it rounded
+const AVG_STEP = DAY_LEN / 24, AVG_TAU = DAY_LEN;
+function followPlayers() {
+  if (!G.present) return false;
+  G.playerAvg += (G.present - G.playerAvg) * AVG_STEP / AVG_TAU;
+  const n = Math.max(1, Math.min(MAX_SLOTS, Math.round(G.playerAvg)));
+  if (n === playerSlots()) return false;
+  setSlots(n);
+  return true;
+}
+
+// balance the world for n players: the caps follow, and the season's open
+// milestones (a lowered one is met at its next count)
+function setSlots(n) {
   G.playerSlots = n;
   for (const c of G.colonies) {
     c.recalcChambers();
@@ -231,7 +257,6 @@ function notePlayers(n) {
       if (def && !o.done) o.need = objNeed(def, ob.year);
     }
   }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +371,7 @@ function newWorld(seed, playerCount, mode, slots) {
   G.legacy = 0; G.history = []; G.gen = 1;
   G.playerSlots = slots || playerCount || 1;
   G.playerSlots = playerSlots();
+  G.playerAvg = G.playerSlots; G.present = 0;
   G.tick = Math.floor(DAY_LEN * 0.08); // start in the morning
   ENT_ID = 1;
 
@@ -415,11 +441,12 @@ const HISTORY_MAX = 40;
 function rebirthWorld(seed) {
   const o = G.over || {};
   const keep = {
-    legacy: G.legacy, gen: G.gen, names: G.players.map(p => p.name), slots: playerSlots(),
+    legacy: G.legacy, gen: G.gen, names: G.players.map(p => p.name), slots: playerSlots(), avg: G.playerAvg,
     history: G.history.concat([{ gen: G.gen, year: G.year, out: 'lost', reason: o.reason || 'r_extinct', legacy: 0 }]),
   };
   // (balanced for as many players as the old colony was)
   newWorld(seed, 0, 'world', keep.slots);
+  G.playerAvg = keep.avg;
   G.legacy = keep.legacy;
   G.gen = keep.gen + 1;
   G.history = keep.history.slice(-HISTORY_MAX);
@@ -448,6 +475,9 @@ function restoreWorld(d, playerCount) {
   // v8: the players it is balanced for (older: as many as it had players)
   G.playerSlots = v >= 8 ? Number(d.slots) || 1 : Number(d.playerCount) || 1;
   G.playerSlots = playerSlots();
+  const avg = Number(d.avg);
+  G.playerAvg = avg >= 1 && avg <= MAX_SLOTS ? avg : G.playerSlots;
+  G.present = 0;
   // v3 and older had no calendar: their colony starts the year now, on the
   // first day of spring (keeping the time of day)
   G.tick = v >= 4 ? d.tick : d.tick % DAY_LEN;
@@ -1103,6 +1133,7 @@ function takeOver(pIdx, caste, refX, refY) {
 // ---------------------------------------------------------------------------
 function stepSim() {
   G.tick++;
+  if (G.mode === 'world' && G.tick % AVG_STEP === 0) followPlayers();
 
   for (let p = 0; p < G.players.length; p++) controlPlayer(p);
 

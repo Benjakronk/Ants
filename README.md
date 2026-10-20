@@ -144,9 +144,11 @@ worlds are (on the server).
 
 **More players, the same challenge.** A world is balanced for its number
 of players, *n*: a co-op match for the players who start it, versus for
-the bigger side (both sides alike), a persistent world for the most
-players ever in it at once (it never gets easier when they leave; saved
-with it). Co-op players' ants are workers on top of the colony's own
+the bigger side (both sides alike; a match never gets easier when players
+leave), a persistent world for the players who have been in it lately: a
+moving average of those connected, with a time constant of an in-game
+day (about 4 minutes of play), so a brief crowd doesn't make it a crowd's
+world for good, and it eases back when they go (saved with it). Co-op players' ants are workers on top of the colony's own
 household, so each player beyond the first gives the colony room for 1.5
 more ants and 10 more food, and the queen can still lay with eight at the
 mound. The milestones that more hands make easier grow by 15% a player

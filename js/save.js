@@ -142,7 +142,7 @@ function serializeWorld() {
     day: G.day,
     mode: G.mode,
     legacy: G.legacy, history: G.history, gen: G.gen,
-    playerCount: G.players.length, slots: playerSlots(),
+    playerCount: G.players.length, slots: playerSlots(), avg: G.playerAvg,
     terrain: rleEncode(T.m),
     colonies: G.colonies.map(serializeColony),
     lastFlightYear: G.lastFlightYear,

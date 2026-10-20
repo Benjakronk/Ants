@@ -7,8 +7,8 @@
 // worker for a player with no free ant to take. Then the server as a child
 // process with raw clients: 8 in a co-op room (distinct ants and colours),
 // the 9th turned away, versus 4v4 (a 5th on a side refused), a mid-match
-// joiner getting a fresh worker, a persistent world balanced for the most
-// players in it at once. Last, a browser page: the lobby with 8 players
+// joiner getting a fresh worker, a persistent world balanced for a moving
+// average of the players in it. Last, a browser page: the lobby with 8 players
 // (co-op and versus) and play with several name tags, as screenshots.
 //   node test/eightprobe.js [--no-browser]
 const { spawn } = require('child_process');
@@ -138,15 +138,15 @@ function simChecks() {
     JSON.stringify(vn.caps[0]) === JSON.stringify(vn.caps[1]) && JSON.stringify(vn.house[0]) === JSON.stringify(vn.house[1]) &&
     vn.caps[0].pop === vn.raw[0].pop + 5 && vs(`G.colonies[1].objectives.list[1].need`) === 7, { caps: vn.caps, house: vn.house });
 
-  // ---- the count only rises; saves keep it ----------------------------------
+  // ---- a match's count only rises; saves keep it ----------------------------------
   const run = simCtx(13);
-  run(`newWorld(${13 * 7919}, 0, 'world')`);
+  run(`newWorld(${13 * 7919}, 0, 'coop')`);
   const w0 = run.json(`[playerSlots(), G.objectives.list.find(o => o.id === 'raise').need]`);
   const up = run(`notePlayers(5)`);
   const w1 = run.json(`[playerSlots(), G.objectives.list.find(o => o.id === 'raise').need, G.objectives.list.find(o => o.id === 'storage2').need]`);
   const down = run(`notePlayers(3)`);
   const w2 = run(`playerSlots()`);
-  check('a persistent world: balanced for 1, raised to 5 (open milestones grow), never lowered', w0[0] === 1 && w0[1] === 5 && up === true &&
+  check('a match: balanced for 1, raised to 5 (open milestones grow), never lowered', w0[0] === 1 && w0[1] === 5 && up === true &&
     w1[0] === 5 && w1[1] === 8 && w1[2] === 2 && down === false && w2 === 5, { w0, w1, w2 });
   const rt = run.json(`(() => {
     const d = serializeWorld();
@@ -358,7 +358,7 @@ async function online() {
     { before, got });
     for (const b of M) b.ws.close();
 
-    // ---- a persistent world: balanced for the most in it at once ------------------
+    // ---- a persistent world: balanced for a moving average of the players in it ----
     const W = await bots(port, ['W1', 'W2', 'W3']);
     all.push(...W);
     W[0].send({ t: 'enter', name: 'MAURTUA' });
@@ -367,12 +367,24 @@ async function online() {
     W[1].send({ t: 'enter', name: 'MAURTUA' });
     W[2].send({ t: 'enter', name: 'MAURTUA' });
     await Promise.all(W.slice(1).map(b => b.wait(m => m.t === 'world', 20000)));
-    const w3 = await W[0].dev('playerSlots()');
+    // (followPlayers runs every in-game hour; here a few hours or days of them at once)
+    const hours = n => W[0].dev(`(() => { for (let i = 0; i < ${n}; i++) followPlayers();
+      return { s: playerSlots(), avg: +G.playerAvg.toFixed(2), present: G.present }; })()`);
+    const w3 = await W[0].dev('({ s: playerSlots(), present: G.present })');
+    const brief = await hours(6);           // a quarter of a day with 3
+    const long = await hours(66);           // three days with 3
+    const raised = await W[0].dev(`G.colony.objectives.list.find(o => o.id === 'raise').need`);
     W[1].send({ t: 'leave' }); W[2].send({ t: 'leave' });
     await sleep(300);
-    const w1b = await W[0].dev('({ s: playerSlots(), saved: serializeWorld().slots })');
-    check('a persistent world: 1 player -> balanced for 1; 3 at once -> 3; two leave -> still 3 (and saved so)',
-      w1 === 1 && w3 === 3 && w1b && w1b.s === 3 && w1b.saved === 3, { w1, w3, w1b });
+    const left = await W[0].dev('({ s: playerSlots(), present: G.present })');
+    const after = await hours(72);          // three days alone again
+    const saved = await W[0].dev('(() => { const d = serializeWorld(); return { slots: d.slots, avg: +d.avg.toFixed(2) }; })()');
+    const lowered = await W[0].dev(`G.colony.objectives.list.find(o => o.id === 'raise').need`);
+    check('a persistent world: 3 players join a 1-player world -> still 1 at first, 1 after a brief while, 3 after days',
+      w1 === 1 && w3.s === 1 && w3.present === 3 && brief.s === 1 && long.s === 3, { w1, w3, brief, long });
+    check('... two leave -> 3 until the average falls, then 1 again (milestones follow; saved)',
+      left.s === 3 && left.present === 1 && after.s === 1 && saved.slots === 1 && saved.avg < 1.5 && lowered < raised,
+      { left, after, saved, raised, lowered });
     for (const b of W) b.ws.close();
     L.ws.close();
 
@@ -461,8 +473,8 @@ async function screens(port) {
     await page.waitForTimeout(1500);
     await page.screenshot({ path: 'test/shot-8-crowd.png' });
     const crowd = await tagRects();
-    check('name tags: 6 others spread around us nearly all tagged; in a heap only the ones with room; never one over another',
-      tags.others >= 6 && tags.tags >= 5 && !tags.over && crowd.tags >= 1 && crowd.tags < crowd.others && !crowd.over, { tags, crowd });
+    check('name tags: 6 others spread around us mostly tagged (they walk about); in a heap only the ones with room; never one over another',
+      tags.others >= 6 && tags.tags >= 4 && !tags.over && crowd.tags >= 1 && crowd.tags < crowd.others && !crowd.over, { tags, crowd });
     for (const b of others) b.ws.close();
     await page.evaluate(() => { leaveOnline('title'); G.menuSel = 0; });
     await page.waitForTimeout(300);

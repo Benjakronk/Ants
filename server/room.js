@@ -75,7 +75,8 @@ class Room {
   }
   // the players the sim is to be balanced for (see playerSlots in
   // game.js): versus the bigger side (both colonies alike), else everyone
-  // with a slot (a persistent world: everyone connected to it now)
+  // with a slot (a persistent world: everyone connected to it now, which
+  // its moving average follows)
   balanceFor() {
     if (this.mode === 'versus') return Math.max(1, ...this.sides());
     return Math.max(1, this.world ? this.connectedSlots().length : this.playerCount());
@@ -164,6 +165,7 @@ class Room {
     if (this.state === 'play') {
       const a = this.sim.releasePlayer(slot.idx);
       slot.antId = a ? a.id : 0;
+      this.sim.notePlayers(this.balanceFor());   // (a persistent world: fewer in it now)
     }
     this.passHost();
     this.broadcastLobby();
@@ -183,6 +185,7 @@ class Room {
       if (this.state === 'play') {
         this.sim.releasePlayer(slot.idx);
         this.sim.G.players[slot.idx].name = null;
+        this.sim.notePlayers(this.balanceFor());
       }
     }
     if (this.host === slot) this.host = null;

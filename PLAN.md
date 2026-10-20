@@ -189,8 +189,10 @@ that march out from their own nest. This is also the foundation for versus.
    another, **A NEW WORKER** for a joiner (or a dead player) with no free
    ant. **Balance by player count**: `G.playerSlots` = *n* (co-op: the
    starting players; versus: the bigger side, both sides alike; a
-   persistent world: the most connected at once -- `notePlayers` only
-   ever raises it), saved (save v8; older saves: their `playerCount`, or
+   a match's `notePlayers` only ever raises it; a persistent world:
+   `followPlayers` rounds `G.playerAvg`, a moving average of those
+   connected, sampled each in-game hour with a day's time constant, so it
+   rises and falls), saved (save v8; older saves: their `playerCount`, or
    1). Each player beyond the first: the played colony's caps +1.5 pop
    and +10 food (co-op players' ants are extra workers, so the queen still
    lays at the start with 8); the milestones more hands make easier
