@@ -18,6 +18,13 @@ claim the port in the runbook's table.
 /srv/maur/deploy/   ecosystem.config.cjs nginx-maur.conf backup-maur.sh README.md
 ```
 
+**Shortcut (the way to do it):** `deploy/root-setup.sh` does every sudo step
+(port check, `/srv/maur` + data dir, rate-limit zone, nginx site, certbot once
+DNS points at the box, nightly backup cron) in one re-runnable run; see its
+header. Then `deploy\upload.ps1` (as admin, no sudo) uploads, runs `npm ci`,
+creates `server/.env` on first run and starts or restarts pm2. The sections
+below are the same steps by hand.
+
 One small box, shared with other services: assume MAUR may use about one
 core. A busy 80-ant room costs ~2-3 ms per tick (~20% of a core), a sleeping
 persistent world nothing. `MAX_ROOMS=4` and `CPU_BUDGET_MS=10` (ms of CPU
