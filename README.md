@@ -11,13 +11,31 @@ a single ant survives, the colony — and you — live on.
 
 ## Run it
 
-No build, no dependencies. Open `index.html` in any modern browser:
+No build, no dependencies. Open `index.html` in any modern browser and
+choose **PLAY SOLO**:
 
 ```sh
 open index.html          # macOS
 # or serve it:
 python3 -m http.server   # then http://localhost:8000
 ```
+
+### Online co-op (local server)
+
+**PLAY ONLINE** needs the game server (Node 22; its only dependency is
+`ws`):
+
+```sh
+cd server && npm install && npm start    # listening on 127.0.0.1:3006
+```
+
+Then open <http://localhost:3006> (the server serves the game too) in up to
+four browsers or tabs. A page opened from disk (`file://`) connects to
+`ws://localhost:3006/ws`; `?server=ws://host:port/ws` points it elsewhere,
+and `?lag=100` adds an artificial 100 ms round trip for testing. Settings
+come from the environment or `server/.env` (see `server/.env.example`:
+`PORT`, `HOST`, `MAX_ROOMS`, ...). The public server will be
+`https://maur.lektorensrud.no` (see `deploy/README.md`).
 
 ## How to play
 
@@ -44,6 +62,27 @@ python3 -m http.server   # then http://localhost:8000
   hungry larvae, milks aphids for honeydew, and feeds leaves (or your
   thatch load) to a fungus garden.
 - `M` map · `Esc`/`P` pause · `N` sound · `C` CRT filter
+
+### Playing online
+
+Up to four players share one colony for one year. **PLAY ONLINE** asks for
+your name (remembered in this browser), then **CREATE A MATCH** gives a
+four-letter **room code** (no I or O, case doesn't matter) for your friends
+to type in with **JOIN WITH A CODE**. The lobby lists everyone in their
+colours; the host presses `Enter` to start. Someone who joins a match
+already under way picks an ant from the colony (**JOIN THE COLONY**).
+
+The keys are the same as solo. Each player plays its own ant -- a coloured
+chevron over it, the others' names over theirs, and the same colours on the
+map -- and `Tab` or a death hands you any ant no other player has. The
+milestones, the crystals and the upgrades (`O`, any player may buy) belong
+to the colony; the hints and the guide arrow are your own. Nothing pauses:
+`Esc` opens a menu with **RESUME** and **LEAVE MATCH** while the world runs
+on. If the connection drops, the game says so and reconnects by itself
+(reloading the page works too): for two minutes your place is kept and
+your ant carries on as one of the colony until you are back. When the year
+ends (the nuptial flight, or the colony lost) everyone sees the same end
+screen. Online matches are not saved.
 
 ### Getting started
 
@@ -216,8 +255,8 @@ trees with aphid herds in the canopy, rock seams and natural caves below,
 and the colony mound with its chambers dug beneath. Your nest sits in the
 left quarter of the map, the red colony's in the right quarter, with a long
 stretch of open forest beyond each nest to explore. Worlds save automatically
-(and on quit) — sink hours into one and come back later. Online co-op is on
-the way (see `PLAN.md`).
+(and on quit) — sink hours into one and come back later. (Online matches,
+above, live on the server and aren't saved.)
 
 ### Wildlife
 
@@ -262,11 +301,43 @@ js/game.js         world state G, setup/restore (and save migration),
 client
 js/terrainview.js  terrain canvases, repainted from edit rects
 js/main.js         input, event handling, camera, rendering, HUD, menus,
-                   the tutorial hints, the guide arrow, the map
+                   the tutorial hints, the guide arrow, the map, the
+                   online menus and lobby
+js/net.js          online client: connection, lobby, reconnect; snapshots
+                   into the render model (G.ants, G.colonies... drawn
+                   100 ms behind, interpolated), the local ant predicted
+                   with the sim's own steering and physics
+js/netproto.js     protocol shared with the server: version, code tables,
+                   room codes, names, terrain byte packing
 js/save.js         localStorage saves, RLE-packed terrain (v6)
 js/lang.js         English / Norwegian strings, the plural helper Ln()
 js/font.js         bitmap font · js/sfx.js WebAudio bleeps
+
+server (Node 22, `ws`)
+server/server.js   HTTP (static files, GET /api/health) and the WebSocket
+                   on /ws: messages validated and rate-limited, the 60 Hz
+                   loop over the rooms
+server/room.js     a room: lobby, slots (faction per player), reconnect
+                   tokens, the match's own sim (a vm context of the sim
+                   files), inputs in, events out, snapshots at 20 Hz
+server/snapshot.js per-client delta snapshots (all entities near the
+                   player's view, the rest at 2 Hz), colony state, terrain
+                   edits
+server/sim.js      loads the sim files into a fresh vm context per room
+server/config.js   settings from the environment / server/.env
+deploy/            pm2 ecosystem file, nginx block, deploy notes (Phase 5)
 ```
+
+The protocol is JSON over one WebSocket (permessage-deflate on): `hello`,
+`create` / `join` (room code) / `resume` (token), `lobby`, `start`,
+`leave`; in a match the client sends held input (`in`, on change and every
+100 ms) and presses as messages of their own (`act`, `abil`, `mat`,
+`mark`, `buy`, `take`). On joining it gets `world` (the seed, plus the
+terrain as a deflated diff against what the seed generates, checked by a
+hash), then snapshots: entity records as integer arrays, the ids gone, the
+colony state that changed, its own events (messages, sounds, particles)
+and the terrain rects edited (run-length packed). A mid-game colony with
+four players costs each client about 3-7 KB/s on the wire.
 
 Headless tests (require `npm install` for Playwright):
 
@@ -296,6 +367,17 @@ node test/polishprobe.js  # hints (advance, skip, off), the guide arrow and
 node test/activeyear.js   # a scripted active player through a whole year:
                           # milestones, stars, colony size per season
                           # (--casual: a first-timer's year)
+node test/netprobe.js     # online (needs `npm install` in server/): the
+                          # server as a child process, two browser pages
+                          # (one with 80 ms lag) and raw clients: room
+                          # codes, lobby, start, terrain + snapshots (hash-
+                          # checked against the server), input, digging,
+                          # takeover, targeted messages, reconnect + reload,
+                          # mid-match join, upgrades, leave, match end, the
+                          # empty room closing, junk, floods, a full room
+node test/netload.js      # one room, 4 bots, 2 minutes on a busy colony:
+                          # server ms/tick, CPU, bytes/s per client
+                          # (--natural: an uncrowded day-1 colony)
 ```
 
 © 1998 BENSOFT INTERACTIVE (in spirit)

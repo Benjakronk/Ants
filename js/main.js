@@ -5,8 +5,9 @@
 
 const VIEW_W = 320, VIEW_H = 200, HUD_H = 24;
 
-// the local player's slot in G.players (always 0 offline)
-const LOCAL = 0;
+// the local player's slot in G.players (0 offline; online the server's
+// player index for us, set when the world arrives)
+let LOCAL = 0;
 
 // key bindings (KeyboardEvent.code); each action accepts any of its keys
 const BIND = {
@@ -24,6 +25,8 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 // client-side state, layered onto the simulation's G
 Object.assign(G, {
   state: 'title',     // title | slots | intro | help | play | pause | gameover
+                      // online: netname | netmenu | netjoin | netwait | lobby
+  online: false,      // in an online match: the server runs the sim (net.js)
   slot: 1,
   msgs: [],           // on-screen messages { text, color, t }
   takeover: null,     // ant-selection overlay { types, sel, refX, refY, live }
@@ -45,6 +48,8 @@ Object.assign(G, {
   arrowOn: lsGet('maur_arrow') !== 'off',   // the guide arrow (G)
   gates: [],          // ant gate spots for the map, rescanned while it's open
   gatesT: 0,
+  nameBuf: lsGet('maur_name') || '',   // the online name being typed
+  codeBuf: '',        // the room code being typed
 });
 
 // an overlay that owns the screen: the HUD toasts wait (their timers stop)
@@ -243,15 +248,18 @@ function drainEvents() {
 // ---------------------------------------------------------------------------
 const keys = {};
 const pressed = {};
+const typed = [];     // characters typed since the last step (name and code entry)
 
 window.addEventListener('keydown', e => {
   if (!keys[e.code]) pressed[e.code] = true;
+  if (e.key && e.key.length === 1) typed.push(e.key);
   keys[e.code] = true;
   Sfx.init(); Sfx.resume();
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(e.code)) e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
-window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; Net.idle(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) Net.idle(); });
 
 function tookPress(code) {
   if (pressed[code]) { pressed[code] = false; return true; }
@@ -296,7 +304,9 @@ function enterWorld(slot) {
   Particles.list = [];
   G.autosaveT = 7200;
   const a = localAnt();
-  G.cam = { x: a ? a.x - VIEW_W / 2 : 0, y: a ? a.y - 60 : 0 };
+  // (no ant yet -- just joined online: the view starts at the nest)
+  const f = a || G.colony.entrance;
+  G.cam = { x: f.x - VIEW_W / 2, y: f.y - 60 };
 }
 
 function startNewWorld(slot) {
@@ -385,29 +395,24 @@ function updatePlay() {
     readInput();
   }
 
-  stepSim();
-  drainEvents();
+  // online the server steps the world; we draw its snapshots
+  if (G.online) Net.frame(); else stepSim();
+  worldTick();
   Tut.update();
-  Particles.update();
-  if (G.flyers.length) updateFlyers();
 
-  // messages (they wait while an overlay covers them, and show after)
-  if (!overlayOpen()) for (const m of G.msgs) m.t--;
-  G.msgs = G.msgs.filter(m => m.t > 0);
+  if (G.over && !G.online) { endWorld(); return; }
+  if (G.online && G.state !== 'play') return;   // (the match ended, or the connection did)
 
-  updateCamera();
-
-  if (G.over) { endWorld(); return; }
-
-  // dead: offer another body
+  // dead (or just joined): offer another body -- online not while the
+  // server is still handing us the one we picked
   const me = G.players[LOCAL];
-  if (!localAnt() && !G.takeover) {
+  if (!localAnt() && !G.takeover && !(G.online && Net.takeWait > 0)) {
     const ref = me.deathPos || G.colony.entrance;
     openTakeover(ref.x, ref.y, false);
   }
 
-  // autosave
-  G.autosaveT--;
+  // autosave (a match online isn't saved)
+  if (!G.online) G.autosaveT--;
   if (G.autosaveT <= 0) {
     G.autosaveT = 7200;
     if (saveWorld(G.slot)) { pushMsg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
@@ -424,6 +429,18 @@ function updatePlay() {
     if (G.takeover && G.takeover.live) { G.takeover = null; Sfx.play('menu'); }
     else { G.state = 'pause'; G.menuSel = 0; Sfx.play('menu'); }
   }
+}
+
+// what a running world does each tick besides the sim: events into sound,
+// particles and messages, the flight, the toasts' timers, the camera
+function worldTick() {
+  drainEvents();
+  Particles.update();
+  if (G.flyers.length) updateFlyers();
+  // messages (they wait while an overlay covers them, and show after)
+  if (!overlayOpen()) for (const m of G.msgs) m.t--;
+  G.msgs = G.msgs.filter(m => m.t > 0);
+  updateCamera();
 }
 
 function updateCamera() {
@@ -488,7 +505,9 @@ function updateTakeover() {
   if (tookPress('ArrowUp') || tookPress('KeyW')) { tk.sel = (tk.sel + tk.types.length - 1) % tk.types.length; Sfx.play('menu'); }
   if (tookPress('ArrowDown') || tookPress('KeyS')) { tk.sel = (tk.sel + 1) % tk.types.length; Sfx.play('menu'); }
   if (tookPress('Enter') || tookPress('Space')) {
-    if (takeOver(LOCAL, tk.types[tk.sel].caste, tk.refX, tk.refY)) {
+    // (online the server hands us the ant; it arrives with a snapshot)
+    const caste = tk.types[tk.sel].caste;
+    if (G.online ? (Net.take(caste), true) : takeOver(LOCAL, caste, tk.refX, tk.refY)) {
       if (tk.live) tutSaw('tab');
       G.takeover = null;
       G.cam.fx = undefined; // snap the camera to the new body
@@ -932,6 +951,7 @@ function drawViewport(vx, vy, vw, vh) {
   }
   // labels over the dark (each in a free spot), then the guide arrows
   Labels.clear(camx, camy, vw, vh);
+  if (G.online) drawNameTags(camx, camy, vw, vh);
   if (me) {
     drawChamberLabels(camx, camy, me, markCh);
     drawShelterLabel(camx, camy, me);
@@ -1021,6 +1041,36 @@ const Labels = {
     return false;
   },
 };
+
+// online: the other players' ants carry their names, in their colours
+// (placed first, so the chamber labels keep clear of them)
+// (on a dark plate, kept on the screen, and lifted clear of every player's
+// chevron -- the local one's too -- and of each other)
+function drawNameTags(camx, camy, vw, vh) {
+  const hit = (r, list) => list.some(o => r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h);
+  const keep = [];
+  for (const p of G.players) {
+    if (!p || !p.ant) continue;
+    const a = p.ant;
+    keep.push({ x: Math.round(a.x - camx) - 5, y: Math.round(a.y - camy) - Math.round(a.hh) - 12, w: 11, h: 8 });
+  }
+  for (let i = 0; i < G.players.length; i++) {
+    const p = G.players[i];
+    if (i === LOCAL || !p || !p.ant || !p.name) continue;
+    const a = p.ant;
+    const w = textWidth(p.name) + 4;
+    let ex = Math.round(a.x - camx), ey = Math.round(a.y - camy) - Math.round(a.hh) - 21;
+    if (ex < -40 || ex > vw + 40 || ey < -10 || ey > vh) continue;
+    ex = Math.max((w >> 1) + 1, Math.min(vw - (w >> 1) - 1, ex));
+    for (let n = 0; n < 3 && hit({ x: ex - (w >> 1), y: ey - 1, w, h: 10 }, keep); n++) ey -= 10;
+    const r = { x: ex - (w >> 1), y: ey - 1, w, h: 10 };
+    ctx.fillStyle = 'rgba(16,8,4,0.7)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    drawTextCS(ctx, p.name, ex, ey, PLAYER_COLORS[i % PLAYER_COLORS.length]);
+    keep.push(r);
+    Labels.rects.push(r);
+  }
+}
 
 // this summer's fallen fruit: named when the player's ant is near it
 function drawSiteLabel(camx, camy, me) {
@@ -1157,6 +1207,9 @@ function drawHud() {
     drawText(ctx, '\x10', 61, y + 14, thatchSel ? '#e8c870' : '#a08848');
     drawLoadBar(68, y + 15, 26, me.thatch / LOAD_CAP, '#d8b860', thatchSel);
     drawMatSwatch(98, thatchSel ? y + 14 : y + 4, pl.buildMat);
+  } else if (G.online && pl && !pl.deathPos) {
+    // (just joined: no ant yet, and none lost)
+    drawTextC(ctx, L('w_joining'), HUD_G1 / 2, y + 9, '#c8b890');
   } else {
     drawTextC(ctx, L('w_dead'), HUD_G1 / 2, y + 9, '#e03020');
   }
@@ -1594,7 +1647,7 @@ function drawMapAnts(mx, my, sx, sy, wx0, wy0, wx1, wy1) {
       ctx.fillStyle = '#000000';
       ctx.fillRect(x - 1, y, 2, 2);
     }
-    ctx.fillStyle = a.playerIdx === 0 ? '#ffff40' : a.playerIdx === 1 ? '#40d0ff'
+    ctx.fillStyle = a.playerIdx >= 0 ? PLAYER_COLORS[a.playerIdx % PLAYER_COLORS.length]
       : red ? '#ff6050' : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
     const sz = a.playerIdx >= 0 && (G.tick >> 3) % 2 ? 3 : 2;
     ctx.fillRect(x - 1, y - 1, sz, sz);
@@ -1671,6 +1724,20 @@ function drawPlay() {
   if (G.showMap) drawMinimap();
   if (G.objScreen) drawObjScreen();
   if (G.takeover) drawTakeover();
+  if (G.online && Net.status === 'lost') drawNetLost();
+}
+
+// online: the connection dropped and we're trying to get back in
+function drawNetLost() {
+  const str = L('ui_netLost') + '.'.repeat((G.frame >> 4) % 4);
+  const w = textWidth(L('ui_netLost')) + 34;
+  const x = Math.round((VIEW_W - w) / 2);
+  ctx.fillStyle = '#4a0c04';
+  ctx.fillRect(x, 80, w, 15);
+  ctx.fillStyle = '#ff5040';
+  ctx.fillRect(x, 80, w, 1);
+  ctx.fillRect(x, 94, w, 1);
+  drawText(ctx, str, x + 14, 84, (G.frame >> 4) % 2 ? '#ffe0c0' : '#ff9070');
 }
 
 // ---------------------------------------------------------------------------
@@ -1687,7 +1754,7 @@ function menuNav(n) {
 // a little troupe of title-screen ants
 const titleAnts = [];
 for (let i = 0; i < 5; i++) {
-  titleAnts.push({ x: -i * 40 - Math.random() * 30, y: 168, phase: Math.random() * 10 });
+  titleAnts.push({ x: -i * 40 - Math.random() * 30, y: 176, phase: Math.random() * 10 });
 }
 
 function drawTitle() {
@@ -1714,15 +1781,12 @@ function drawTitle() {
   drawTextCS(ctx, L('ui_tagline'), VIEW_W / 2, ly + 50, '#b09060');
 
   // menu
-  const items = [L('ui_start'), L('ui_help'),
-    L('ui_sound', L(Sfx.muted ? 'w_off' : 'w_on')),
-    L('ui_crt', L(document.getElementById('crt').classList.contains('off') ? 'w_off' : 'w_on')),
-    L('ui_lang'), L('ui_hints', L(Tut.on ? 'w_on' : 'w_off'))];
-  const my = 108;
+  const items = titleItems().map(it => it.label);
+  const my = 100;
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
-    if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, my + i * 12, '#ffe040');
-    drawTextCS(ctx, items[i], VIEW_W / 2, my + i * 12, sel ? '#ffe040' : '#c8b890');
+    if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, my + i * 10, '#ffe040');
+    drawTextCS(ctx, items[i], VIEW_W / 2, my + i * 10, sel ? '#ffe040' : '#c8b890');
   }
 
   // marching ants
@@ -1743,16 +1807,30 @@ function drawTitle() {
   drawTextC(ctx, '(C) 1998 BENSOFT INTERACTIVE', VIEW_W / 2, VIEW_H - 12, '#605040');
 }
 
+function titleItems() {
+  return [
+    { id: 'solo', label: L('ui_start') },
+    { id: 'online', label: L('ui_online') },
+    { id: 'help', label: L('ui_help') },
+    { id: 'sound', label: L('ui_sound', L(Sfx.muted ? 'w_off' : 'w_on')) },
+    { id: 'crt', label: L('ui_crt', L(document.getElementById('crt').classList.contains('off') ? 'w_off' : 'w_on')) },
+    { id: 'lang', label: L('ui_lang') },
+    { id: 'hints', label: L('ui_hints', L(Tut.on ? 'w_on' : 'w_off')) },
+  ];
+}
+
 function updateTitle() {
-  if (menuNav(6)) {
+  const items = titleItems();
+  if (menuNav(items.length)) {
     Sfx.play('select');
-    switch (G.menuSel) {
-      case 0: G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
-      case 1: G.prevState = 'title'; G.state = 'help'; break;
-      case 2: Sfx.toggleMute(); break;
-      case 3: document.getElementById('crt').classList.toggle('off'); break;
-      case 4: setLang(LANG === 0); break;
-      case 5: Tut.setOn(!Tut.on); break;
+    switch (items[G.menuSel].id) {
+      case 'solo': G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
+      case 'online': G.state = 'netname'; Net.err = null; break;
+      case 'help': G.prevState = 'title'; G.state = 'help'; break;
+      case 'sound': Sfx.toggleMute(); break;
+      case 'crt': document.getElementById('crt').classList.toggle('off'); break;
+      case 'lang': setLang(LANG === 0); break;
+      case 'hints': Tut.setOn(!Tut.on); break;
     }
   }
 }
@@ -1861,6 +1939,8 @@ function updateHelp() {
 }
 
 function pauseItems() {
+  // (online nothing pauses: the menu just covers the running world)
+  if (G.online) return [{ id: 'resume', label: L('ui_resume') }, { id: 'leave', label: L('ui_leaveMatch') }];
   const items = [
     { id: 'resume', label: L('ui_resume') },
     { id: 'save', label: L('ui_saveGame') },
@@ -1877,8 +1957,9 @@ function drawPause() {
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const items = pauseItems();
   // (clear of the hint panel below, y 144)
-  bevelPanel(90, 46, 140, 35 + items.length * 12);
-  drawTextCS(ctx, L('ui_paused'), VIEW_W / 2, 54, '#ffa040', 2);
+  bevelPanel(90, 46, 140, 35 + items.length * 12 + (G.online ? 10 : 0));
+  drawTextCS(ctx, L(G.online ? 'ui_menu' : 'ui_paused'), VIEW_W / 2, 54, '#ffa040', 2);
+  if (G.online) drawTextC(ctx, L('ui_worldRuns'), VIEW_W / 2, 79 + items.length * 12, '#806e58');
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
     if (sel) drawText(ctx, '\x06', 100, 78 + i * 12, '#ffe040');
@@ -1887,7 +1968,14 @@ function drawPause() {
 }
 
 function updatePause() {
-  if (tookPress('Escape')) { G.state = 'play'; return; }
+  if (G.online) {
+    // the match goes on under the menu: our ant stands still meanwhile
+    clearInput();
+    Net.frame();
+    worldTick();
+    if (G.state !== 'pause') return;
+  }
+  if (tookPress('Escape') || (G.online && tookPress('KeyP'))) { G.state = 'play'; return; }
   const items = pauseItems();
   if (menuNav(items.length)) {
     Sfx.play('select');
@@ -1911,6 +1999,9 @@ function updatePause() {
         G.running = false;
         G.state = 'title'; G.menuSel = 0;
         break;
+      case 'leave':
+        leaveOnline('title');
+        break;
     }
   }
 }
@@ -1919,11 +2010,18 @@ function drawTakeover() {
   const tk = G.takeover;
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  bevelPanel(70, 30, 180, 140);
-  const pcol = '#ffe080';
+  const title = tk.live ? L('ui_switchAnt') : G.online && !G.players[LOCAL].deathPos ? L('ui_joinColony') : L('ui_youDied');
+  // (the panel widens for a long title, in big letters)
+  const pw = Math.min(VIEW_W - 8, Math.max(180, textWidth(title) * 2 + 16));
+  bevelPanel(Math.round((VIEW_W - pw) / 2), 30, pw, 140);
+  const pcol = PLAYER_COLORS[LOCAL % PLAYER_COLORS.length];
   if (tk.live) {
     drawTextCS(ctx, L('ui_switchAnt'), VIEW_W / 2, 38, pcol, 2);
     drawTextC(ctx, L('ui_lendLegs'), VIEW_W / 2, 58, '#c8b890');
+  } else if (G.online && !G.players[LOCAL].deathPos) {
+    // (just joined, or back from a lost connection with the old ant gone)
+    drawTextCS(ctx, L('ui_joinColony'), VIEW_W / 2, 38, pcol, 2);
+    drawTextC(ctx, L('ui_pickAnt'), VIEW_W / 2, 58, '#c8b890');
   } else {
     drawTextCS(ctx, L('ui_youDied'), VIEW_W / 2, 38, '#ff5040', 2);
     drawTextC(ctx, L('ui_colonyLives'), VIEW_W / 2, 58, '#c8b890');
@@ -1972,10 +2070,12 @@ function drawGameOver() {
     ];
     let y = 78;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 11; }
-    const items = [L('ui_continue'), L('ui_toTitle')];
+    const items = G.online ? [L('ui_toTitle')] : [L('ui_continue'), L('ui_toTitle')];
+    // (online the match is over for everyone: no next year)
+    if (G.online) drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 152, '#a09070');
     for (let i = 0; i < items.length; i++) {
       const sel = i === G.overSel;
-      const iy = 152 + i * 12;
+      const iy = (G.online ? 166 : 152) + i * 12;
       if (sel) drawText(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, iy, '#ffe040');
       drawTextCS(ctx, items[i], VIEW_W / 2, iy, sel ? '#ffe040' : '#c8b890');
     }
@@ -1997,11 +2097,20 @@ function drawGameOver() {
     let y = 64;
     for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
   }
+  if (G.online) drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 164, '#a09070');
   if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
 }
 
 function updateGameOver() {
   const s = G.gameOverStats;
+  if (G.online) {
+    // the match is over for everyone: back to the title
+    if (tookPress('Enter') || tookPress('Space') || tookPress('Escape')) {
+      Sfx.play('select');
+      leaveOnline('title');
+    }
+    return;
+  }
   if (s && s.canContinue) {
     // continue into the next year, or leave the (saved) world for now
     const n = 2;
@@ -2028,9 +2137,250 @@ function updateGameOver() {
 }
 
 // ---------------------------------------------------------------------------
+// online: name, CREATE / JOIN, the code, the lobby. Net (net.js) talks to the
+// server and calls the netOn* hooks below as the answers come.
+// ---------------------------------------------------------------------------
+function netBackdrop(title) {
+  ctx.fillStyle = '#0c0805';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  drawTextCS(ctx, title, VIEW_W / 2, 14, '#ffa040', 2);
+}
+
+// the last error, in red, under the menu
+function drawNetErr(y) {
+  if (Net.err) drawTextC(ctx, errText(Net.err), VIEW_W / 2, y, '#ff5040');
+}
+
+// a text box with a blinking cursor
+function drawEntry(text, y, w) {
+  const x = Math.round((VIEW_W - w) / 2);
+  bevelPanel(x, y, w, 19);
+  ctx.fillStyle = '#1a1008';
+  ctx.fillRect(x + 3, y + 3, w - 6, 13);
+  const tx = drawText(ctx, text, x + 7, y + 6, '#ffe8a0');
+  if ((G.frame >> 4) % 2) drawText(ctx, '_', tx, y + 6, '#ffe040');
+}
+
+function drawNetName() {
+  netBackdrop(L('ui_onlineTitle'));
+  drawTextC(ctx, L('ui_coopNote'), VIEW_W / 2, 40, '#b09060');
+  drawTextCS(ctx, L('ui_yourName'), VIEW_W / 2, 70, '#ffe080');
+  drawEntry(G.nameBuf, 84, 110);
+  drawNetErr(120);
+  drawTextC(ctx, L('ui_nameKeys'), VIEW_W / 2, 176, '#a09070');
+}
+
+function updateNetName() {
+  for (const ch of typed) {
+    const c = ch.toUpperCase();
+    if (NetProto.NAME_OK.includes(c) && G.nameBuf.length < NetProto.NAME_MAX && !(c === ' ' && !G.nameBuf)) G.nameBuf += c;
+  }
+  if (tookPress('Backspace')) G.nameBuf = G.nameBuf.slice(0, -1);
+  if (tookPress('Escape')) { G.state = 'title'; Net.err = null; Sfx.play('menu'); return; }
+  if (!tookPress('Enter')) return;
+  // (nothing typed yet: say so)
+  if (!NetProto.cleanName(G.nameBuf)) { Net.err = 'e_noName'; Sfx.play('menu'); return; }
+  Net.err = null;
+  G.nameBuf = NetProto.cleanName(G.nameBuf);
+  lsSet('maur_name', G.nameBuf);
+  G.state = 'netmenu'; G.menuSel = 0;
+  Sfx.play('select');
+}
+
+function netMenuItems() {
+  return [{ id: 'create', label: L('ui_create') }, { id: 'join', label: L('ui_joinCode') }, { id: 'back', label: L('ui_back') }];
+}
+
+function drawNetMenu() {
+  netBackdrop(L('ui_onlineTitle'));
+  drawTextC(ctx, G.nameBuf, VIEW_W / 2, 40, '#ffe080');
+  const items = netMenuItems();
+  for (let i = 0; i < items.length; i++) {
+    const sel = i === G.menuSel, y = 72 + i * 14;
+    if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i].label) / 2 - 12, y, '#ffe040');
+    drawTextCS(ctx, items[i].label, VIEW_W / 2, y, sel ? '#ffe040' : '#c8b890');
+  }
+  drawNetErr(130);
+  drawTextC(ctx, L('ui_coopNote'), VIEW_W / 2, 176, '#706050');
+}
+
+function updateNetMenu() {
+  if (tookPress('Escape')) { G.state = 'netname'; Sfx.play('menu'); return; }
+  const items = netMenuItems();
+  if (!menuNav(items.length)) return;
+  Sfx.play('select');
+  Net.err = null;
+  switch (items[G.menuSel].id) {
+    case 'create':
+      Net.name = G.nameBuf;
+      Net.start({ t: 'create', mode: 'coop' });
+      G.state = 'netwait';
+      break;
+    case 'join':
+      G.state = 'netjoin'; G.codeBuf = ''; Net.err = null;
+      break;
+    case 'back':
+      G.state = 'title'; G.menuSel = 1;
+      break;
+  }
+}
+
+function drawNetJoin() {
+  netBackdrop(L('ui_onlineTitle'));
+  drawTextCS(ctx, L('ui_enterCode'), VIEW_W / 2, 60, '#ffe080');
+  // four boxes, the letters big
+  for (let i = 0; i < NetProto.CODE_LEN; i++) {
+    const x = VIEW_W / 2 - 58 + i * 30;
+    bevelPanel(x, 78, 26, 30);
+    ctx.fillStyle = '#1a1008';
+    ctx.fillRect(x + 3, 81, 20, 24);
+    const ch = G.codeBuf[i];
+    if (ch) drawText(ctx, ch, x + 6, 85, '#ffe8a0', 3);
+    else if (i === G.codeBuf.length && (G.frame >> 4) % 2) drawText(ctx, '_', x + 6, 85, '#ffe040', 3);
+  }
+  drawNetErr(124);
+  drawTextC(ctx, L('ui_codeKeys'), VIEW_W / 2, 176, '#a09070');
+}
+
+function updateNetJoin() {
+  for (const ch of typed) {
+    const c = ch.toUpperCase();
+    if (NetProto.CODE_ABC.includes(c) && G.codeBuf.length < NetProto.CODE_LEN) G.codeBuf += c;
+  }
+  if (tookPress('Backspace')) G.codeBuf = G.codeBuf.slice(0, -1);
+  if (tookPress('Escape')) { G.state = 'netmenu'; Net.err = null; Sfx.play('menu'); return; }
+  if (tookPress('Enter') && NetProto.normCode(G.codeBuf)) {
+    Net.name = G.nameBuf;
+    Net.start({ t: 'join', code: G.codeBuf });
+    G.state = 'netwait';
+    Sfx.play('select');
+  }
+}
+
+function drawNetWait() {
+  netBackdrop(L('ui_onlineTitle'));
+  const str = Net.inMatch || Net.roomState === 'play' ? L('ui_loading') : L('ui_connecting');
+  drawTextCS(ctx, str, VIEW_W / 2, 90, (G.frame >> 4) % 2 ? '#ffe080' : '#c8b890');
+  drawTextC(ctx, L('ui_escBack'), VIEW_W / 2, 176, '#706050');
+}
+
+function updateNetWait() {
+  if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); }
+}
+
+function drawLobby() {
+  netBackdrop(L('ui_onlineTitle'));
+  drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, 34, '#b09060');
+  drawTextCS(ctx, Net.code || '----', VIEW_W / 2, 45, '#ffe040', 4);
+  drawTextC(ctx, L('ui_shareCode'), VIEW_W / 2, 77, '#806e58');
+  const n = Net.players.filter(Boolean).length;
+  drawTextC(ctx, L('ui_lobbyPlayers', n, Net.max), VIEW_W / 2, 92, '#c8b890');
+  let y = 104;
+  Net.players.forEach((pl, i) => {
+    if (!pl) return;
+    const col = PLAYER_COLORS[i % PLAYER_COLORS.length];
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(83, y - 1, 9, 9);
+    ctx.fillStyle = pl.on ? col : '#4a3826';
+    ctx.fillRect(84, y, 7, 7);
+    drawText(ctx, pl.n, 98, y, pl.on ? col : '#706050');
+    const tags = [];
+    if (i === Net.host) tags.push(L('ui_host'));
+    if (i === Net.you) tags.push(L('ui_you'));
+    if (!pl.on) tags.push(L('ui_offline'));
+    if (tags.length) drawText(ctx, '(' + tags.join(', ') + ')', 176, y, pl.on ? '#a09070' : '#806e58');
+    y += 11;
+  });
+  const host = Net.you === Net.host;
+  let note = host ? L('ui_hostStart') : L('ui_waitHost');
+  if (Net.roomState === 'play') note = L('ui_inProgress');
+  const up = Net.status === 'open';
+  drawTextC(ctx, note, VIEW_W / 2, 160, !up ? '#706050' : host && Net.roomState === 'lobby' && (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
+  drawTextC(ctx, L('ui_lobbyLeave'), VIEW_W / 2, 176, '#706050');
+  drawNetErr(148);
+  if (Net.status === 'lost') drawNetLost();
+}
+
+function updateLobby() {
+  Net.poll();
+  if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); return; }
+  if (Net.you === Net.host && Net.roomState === 'lobby' && Net.status === 'open' && tookPress('Enter')) {
+    Net.err = null;
+    Net.send({ t: 'start' });
+    Sfx.play('select');
+  }
+}
+
+// leave the room (and the match), for the title or the online menu
+function leaveOnline(state) {
+  Net.leave();
+  G.online = false; G.running = false;
+  G.takeover = null; G.objScreen = null; G.showMap = false;
+  LOCAL = 0;
+  G.state = state; G.menuSel = state === 'title' ? 1 : 0;
+}
+
+// ---- what net.js reports ------------------------------------------------------
+function netOnLobby() {
+  if (G.state === 'netwait' || G.state === 'lobby') G.state = Net.roomState === 'over' ? 'netwait' : 'lobby';
+}
+
+// the world and its first snapshot are in: play (or, back from a lost
+// connection, carry on)
+function netOnWorldReady(fresh) {
+  const wasPlaying = G.online && (G.state === 'play' || G.state === 'pause');
+  G.online = true;
+  G.running = true;
+  enterWorld('net');
+  if (fresh) {
+    Tut.start(true);
+    const n = Net.players.filter(Boolean).length;
+    pushMsg(Ln('m_coopStart', n), '#80ff80');
+    if (!Tut.active()) pushMsg(L('m_objHint'), '#ffd890');
+  }
+  if (!wasPlaying) { G.state = 'play'; Sfx.play('select'); }
+}
+
+function netOnError(key) {
+  Net.err = key;
+  if (G.state === 'netwait' || G.state === 'lobby') {
+    G.state = ['e_noRoom', 'e_full', 'e_over'].includes(key) ? 'netjoin' : 'netmenu';
+    G.menuSel = 0;
+  } else if (G.online) {
+    pushMsg(errText(key), '#ff5040');
+  }
+}
+
+// the room is gone (closed, crashed, our place lost): to the online menu --
+// unless the end screen is up, which stays
+function netOnClosed(key) {
+  Net.err = key;
+  if (G.state === 'gameover' && G.online) return;
+  if (['play', 'pause', 'lobby', 'netwait'].includes(G.state)) {
+    G.online = false; G.running = false;
+    G.takeover = null; G.objScreen = null; G.showMap = false;
+    LOCAL = 0;
+    G.state = 'netmenu'; G.menuSel = 0;
+  }
+}
+
+// the match is over: everyone gets the year's end screen
+function netOnOver(over) {
+  // (online even when no world came first: a reload after the end)
+  G.online = true;
+  G.over = over;
+  G.gameOverStats = over;
+  G.overSel = 0;
+  G.takeover = null; G.objScreen = null; G.showMap = false;
+  G.state = 'gameover';
+  Sfx.play(over && over.win ? 'task' : 'die');
+}
+
+// ---------------------------------------------------------------------------
 // global toggles + loop
 // ---------------------------------------------------------------------------
 function globalKeys() {
+  if (G.state === 'netname' || G.state === 'netjoin') return;   // (letters are being typed)
   if (tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
   if (tookPress('KeyN')) {
     const m = Sfx.toggleMute();
@@ -2058,9 +2408,15 @@ function frame(now) {
       case 'play': updatePlay(); break;
       case 'pause': updatePause(); break;
       case 'gameover': updateGameOver(); break;
+      case 'netname': updateNetName(); break;
+      case 'netmenu': updateNetMenu(); break;
+      case 'netjoin': updateNetJoin(); break;
+      case 'netwait': updateNetWait(); break;
+      case 'lobby': updateLobby(); break;
     }
     // clear one-shot presses each sim step
     for (const k in pressed) pressed[k] = false;
+    typed.length = 0;
   }
 
   G.frame++;
@@ -2072,6 +2428,11 @@ function frame(now) {
     case 'play': drawPlay(); break;
     case 'pause': drawPause(); break;
     case 'gameover': drawGameOver(); break;
+    case 'netname': drawNetName(); break;
+    case 'netmenu': drawNetMenu(); break;
+    case 'netjoin': drawNetJoin(); break;
+    case 'netwait': drawNetWait(); break;
+    case 'lobby': drawLobby(); break;
   }
 }
 
@@ -2088,7 +2449,14 @@ window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
 window.addEventListener('beforeunload', () => {
-  if (G.running) saveWorld(G.slot);
+  if (G.running && !G.online) saveWorld(G.slot);
 });
+
+// a reload in the middle of an online match: back into it, if the server
+// still keeps our place
+{
+  const s = Net.savedSession();
+  if (s) { Net.resumeSaved(s); G.state = 'netwait'; }
+}
 
 requestAnimationFrame(frame);

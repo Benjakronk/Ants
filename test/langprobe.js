@@ -42,8 +42,8 @@ const path = require('path');
   if (missing.length) console.log('  missing glyphs:', JSON.stringify(missing));
 
   // title menu: 5th item toggles language
-  check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'START GAME'));
-  for (let i = 0; i < 4; i++) { // down to LANGUAGE
+  check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'PLAY SOLO'));
+  for (let i = 0; i < 5; i++) { // down to LANGUAGE
     await page.keyboard.press('ArrowDown');
     await page.waitForTimeout(120);
   }
@@ -54,7 +54,7 @@ const path = require('path');
     start: L('ui_start'), tag: L('ui_tagline'),
     intro: introText()[0], help: helpText()[0][0],
   }));
-  check('toggles to norwegian + persists', no.lang === 1 && no.stored === 'no' && no.start === 'START SPILL');
+  check('toggles to norwegian + persists', no.lang === 1 && no.stored === 'no' && no.start === 'SPILL ALENE');
   console.log('  tagline:', no.tag, '| intro:', no.intro, '| help:', no.help);
   await page.screenshot({ path: 'test/shot-title-no.png' });
 
@@ -64,7 +64,7 @@ const path = require('path');
   check('norwegian after reload', await page.evaluate(() => LANG === 1));
 
   // start a game in Norwegian
-  await page.keyboard.press('Enter'); // START SPILL -> slots
+  await page.keyboard.press('Enter'); // SPILL ALENE -> slots
   await page.waitForTimeout(200);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(2500);
@@ -96,7 +96,7 @@ const path = require('path');
 
   // switch back to English for good measure
   await page.evaluate(() => setLang(false));
-  check('back to english', await page.evaluate(() => L('ui_start') === 'START GAME'));
+  check('back to english', await page.evaluate(() => L('ui_start') === 'PLAY SOLO'));
 
   console.log('\nERRORS:', errors.length ? errors.join('\n') : 'none');
   console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');

@@ -131,8 +131,32 @@ that march out from their own nest. This is also the foundation for versus.
      princesses and a red nuptial flight, raid warnings in the HUD/arrow.
 3. **Polish.** Tutorial, objective arrow, HUD, chamber labels, balancing. **Done** (7-hint spring tutorial, guide arrow `G`, regrouped HUD + plurals, charcoal-vs-scarlet factions and enemy health bars, raid banner + FOOD STOLEN, map icons + nest inset, readable labels/gates/shelters/fruit, idle colonies grow past the pop-cap stall, ~80% less mound erosion, soldier rally escort, red queen 1.5x and a wound-ledger bonus, save v6).
 4. **Online.** Server, lobby, room codes, persistent worlds; co-op first, then versus.
-   Carried over from Phase 3: hints and the guide arrow per connected player
-   (they are per viewer already), red princesses and a red nuptial flight, a
-   raid-defence hint, and a look at the ~7% slower early foraging that
-   came with the erosion fix.
+   - **4a done:** `server/` (Node 22 + `ws`, one process: static files,
+     `/api/health`, the WebSocket on `/ws`; `MAX_ROOMS`, 4 players a room,
+     rooms close 60 s empty or 5 min after the match), each room its own
+     sim in a vm context at 60 Hz with 20 Hz per-client delta snapshots
+     (entities near the view every time, the rest at 2 Hz, colony state by
+     changed key, events per player, terrain edits RLE-packed; the join's
+     terrain a deflated diff against the seed's, hash-checked), validated and
+     rate-limited input, a crash closes only its room; `js/net.js` (lobby
+     with room codes, the render model interpolated 100 ms behind, the local
+     ant predicted with the sim's `steerAnt`/`physStep`, reconnect with a
+     sessionStorage token within 2 min while the ant plays as an NPC, page
+     reload rejoins); sim: `ensurePlayer`/`releasePlayer`/`reclaimAnt`,
+     `PLAYER_COLORS`, the dead player told by name; title SOLO / ONLINE,
+     name tags, online pause (RESUME / LEAVE MATCH), the shared end screen;
+     `deploy/` (pm2, nginx, notes); `netprobe.js`, `netload.js` (4 bots on
+     an 80-ant colony: ~5.3 ms/tick, ~42% of a core, ~6.3 KB/s per client on
+     the wire; on a natural 39-ant colony 2.8 ms, 22%, 3.6 KB/s). No save
+     version change (online matches aren't saved).
+   - **4b (next):** persistent named worlds (saved on the server as JSON,
+     with backups), hibernation while nobody is connected, legacy points per
+     nuptial flight, a fallen colony's princess founding a new nest; versus
+     (`room.mode` 'versus', players with `faction` 'red' playing the rival
+     colony: `p.col` 1, the red colony's milestones/tasks/messages, takeover
+     and upgrades for it); a lobby list of open worlds. Also worth a look
+     before the VPS: the sim's cost grows with the ants (4.5 ms/tick at 80
+     ants), e.g. throttling far NPC thinking. Still carried over from
+     Phase 3: red princesses and a red nuptial flight, a raid-defence hint,
+     and the ~7% slower early foraging that came with the erosion fix.
 5. **Deploy to the VPS.**

@@ -17,10 +17,12 @@ const STR = {
   w_score: ['SCORE', 'POENG'],
   w_brood: ['BROOD', 'YNGEL'],
   w_dead: ['DEAD', 'DØD'],
+  w_joining: ['JOINING', 'BLIR MED'],
   w_cramped: ['CRAMPED!', 'TRANGT!'],
 
   // menus & screens
-  ui_start: ['START GAME', 'START SPILL'],
+  ui_start: ['PLAY SOLO', 'SPILL ALENE'],
+  ui_online: ['PLAY ONLINE', 'SPILL PÅ NETT'],
   ui_help: ['HELP', 'HJELP'],
   ui_sound: ['SOUND: {0}', 'LYD: {0}'],
   ui_crt: ['CRT: {0}', 'CRT: {0}'],
@@ -64,7 +66,7 @@ const STR = {
   m_gather: ['GATHER FOOD FOR THE COLONY', 'SANK MAT TIL KOLONIEN'],
   m_saved: ['GAME SAVED', 'SPILL LAGRET'],
   m_sound: ['SOUND {0}', 'LYD {0}'],
-  m_pDied: ['PLAYER {0} DIED!', 'SPILLER {0} DØDE!'],
+  m_pDied: ['{0} DIED!', '{0} DØDE!'],
   m_youDied: ['YOU DIED!', 'DU DØDE!'],
   m_queenDead: ['THE QUEEN IS DEAD!', 'DRONNINGEN ER DØD!'],
   m_antDied: ['AN ANT HAS DIED', 'EN MAUR HAR DØDD'],
@@ -291,6 +293,57 @@ const STR = {
   lg_fruit: ['FRUIT', 'FRUKT'],
   lg_red: ['RED NEST', 'RØD TUE'],
   ui_ourNest: ['OUR NEST', 'VÅR TUE'],
+
+  // online: the menus and the lobby
+  ui_onlineTitle: ['ONLINE CO-OP', 'SAMARBEID PÅ NETT'],
+  ui_yourName: ['YOUR NAME', 'DITT NAVN'],
+  ui_nameKeys: ['TYPE YOUR NAME   ENTER: OK   ESC: BACK', 'SKRIV NAVNET DITT   ENTER: OK   ESC: TILBAKE'],
+  ui_create: ['CREATE A MATCH', 'OPPRETT ET SPILL'],
+  ui_joinCode: ['JOIN WITH A CODE', 'BLI MED VIA KODE'],
+  ui_back: ['BACK', 'TILBAKE'],
+  ui_coopNote: ['1-4 PLAYERS, ONE COLONY, ONE YEAR', '1-4 SPILLERE, EN KOLONI, ETT ÅR'],
+  ui_enterCode: ['TYPE THE ROOM CODE', 'SKRIV ROMKODEN'],
+  ui_codeKeys: ['ENTER: JOIN   ESC: BACK', 'ENTER: BLI MED   ESC: TILBAKE'],
+  ui_connecting: ['CONNECTING...', 'KOBLER TIL...'],
+  ui_loading: ['LOADING THE WORLD...', 'LASTER VERDENEN...'],
+  ui_roomCode: ['ROOM CODE', 'ROMKODE'],
+  ui_shareCode: ['FRIENDS JOIN WITH THIS CODE', 'DEL KODEN MED VENNENE DINE'],
+  ui_lobbyPlayers: ['PLAYERS {0}/{1}', 'SPILLERE {0}/{1}'],
+  ui_host: ['HOST', 'VERT'],
+  ui_you: ['YOU', 'DU'],
+  ui_offline: ['OFFLINE', 'FRAKOBLET'],
+  ui_hostStart: ['ENTER: START THE MATCH', 'ENTER: START SPILLET'],
+  ui_waitHost: ['WAITING FOR THE HOST TO START...', 'VENTER PÅ AT VERTEN STARTER...'],
+  ui_inProgress: ['THE MATCH IS ON - JOINING...', 'SPILLET ER I GANG - BLIR MED...'],
+  ui_lobbyLeave: ['ESC: LEAVE', 'ESC: FORLAT'],
+  ui_menu: ['MENU', 'MENY'],
+  ui_worldRuns: ['THE WORLD KEEPS RUNNING', 'VERDENEN GÅR VIDERE'],
+  ui_leaveMatch: ['LEAVE MATCH', 'FORLAT SPILLET'],
+  ui_netLost: ['CONNECTION LOST - RECONNECTING', 'MISTET FORBINDELSEN - KOBLER TIL IGJEN'],
+  ui_joinColony: ['JOIN THE COLONY', 'BLI MED I KOLONIEN'],
+  ui_pickAnt: ['PICK AN ANT TO PLAY.', 'VELG EN MAUR Å SPILLE SOM.'],
+  ui_matchOver: ['THE MATCH IS OVER', 'SPILLET ER OVER'],
+  m_netJoined: ['{0} JOINED THE COLONY', '{0} BLE MED I KOLONIEN'],
+  m_netLeft: ['{0} LEFT THE MATCH', '{0} FORLOT SPILLET'],
+  m_netDropped: ['{0} LOST THE CONNECTION', '{0} MISTET FORBINDELSEN'],
+  m_netBack: ['{0} IS BACK', '{0} ER TILBAKE'],
+  m_coopStart: ['YOUR COLONY: {0} PLAYERS. GOOD LUCK!', 'KOLONIEN DERES: {0} SPILLERE. LYKKE TIL!'],
+  m_coopStart_1: ['YOUR COLONY AWAITS. GOOD LUCK!', 'KOLONIEN DIN VENTER. LYKKE TIL!'],
+
+  // online: what can go wrong
+  e_noRoom: ['NO MATCH WITH THAT CODE', 'FANT INGEN SPILL MED DEN KODEN'],
+  e_full: ['THAT MATCH IS FULL', 'DET SPILLET ER FULLT'],
+  e_over: ['THAT MATCH HAS ENDED', 'DET SPILLET ER OVER'],
+  e_busy: ['THE SERVER IS FULL - TRY AGAIN LATER', 'SERVEREN ER FULL - PRØV IGJEN SENERE'],
+  e_crash: ['THE MATCH CRASHED - SORRY!', 'SPILLET KRASJET - BEKLAGER!'],
+  e_version: ['A NEW VERSION IS OUT - RELOAD THE PAGE', 'NY VERSJON - LAST INN SIDEN PÅ NYTT'],
+  e_conn: ['CANNOT REACH THE SERVER', 'FÅR IKKE KONTAKT MED SERVEREN'],
+  e_lost: ['THE CONNECTION WAS LOST', 'FORBINDELSEN BLE BRUTT'],
+  e_closed: ['THE MATCH WAS CLOSED', 'SPILLET BLE STENGT'],
+  e_noName: ['TYPE A NAME FIRST', 'SKRIV ET NAVN FØRST'],
+  e_noSlot: ['YOUR PLACE IN THE MATCH IS GONE', 'PLASSEN DIN I SPILLET ER BORTE'],
+  e_elsewhere: ['YOU JOINED FROM ANOTHER WINDOW', 'DU BLE MED FRA ET ANNET VINDU'],
+  e_generic: ['SOMETHING WENT WRONG', 'NOE GIKK GALT'],
 };
 
 function L(key) {
@@ -341,6 +394,7 @@ function broodNameDef(k) { return (BROOD_NAME_DEF[k] || [k, k])[LANG]; }
 // ({ caste }, { bug }, { brood }, { key }) translated here, on the client
 function msgArg(a) {
   if (a && typeof a === 'object') {
+    if (a.player !== undefined) return playerName(a.player);
     if (a.caste) return casteName(a.caste);
     if (a.bug) return bugNameDef(a.bug);
     if (a.brood) return broodNameDef(a.brood);
@@ -348,6 +402,15 @@ function msgArg(a) {
   }
   return a;
 }
+// a player by index: its name online, PLAYER n offline
+function playerName(i) {
+  const p = typeof G !== 'undefined' && G.players[i];
+  return p && p.name ? p.name : L('ui_player', i + 1);
+}
+
+// an error key from the server (or the connection) as text
+function errText(key) { return STR[key] ? L(key) : L('e_generic'); }
+
 // (a count of 1 as the first arg picks the singular, as in Ln)
 function msgText(m) {
   const args = (m.args || []).map(msgArg);

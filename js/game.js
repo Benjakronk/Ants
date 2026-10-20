@@ -127,11 +127,54 @@ function newPlayer(ant) {
   // (or "no room") during this press already; buildFailT: quiet time after a "nothing to
   // build on" clank; refuseT: a refused deposit lets the next E (within
   // this many ticks) just put the item down
-  // col: the index of the player's colony in G.colonies (0 until versus)
+  // col: the index of the player's colony in G.colonies (0 until versus);
+  // name: what the others call this player online (null offline)
   return {
     ant, input: newInput(), deathPos: null, buildMat: M_PACKED, buildWarned: false,
-    buildFailT: 0, refuseT: 0, coldT: 0, col: 0,
+    buildFailT: 0, refuseT: 0, coldT: 0, col: 0, name: null,
   };
+}
+
+// online players come and go while the world runs. A slot (an index into
+// G.players) exists for every player who ever joined; one who left keeps an
+// empty slot (ant null) that the next newcomer takes.
+function ensurePlayer(pIdx) {
+  while (G.players.length <= pIdx) G.players.push(newPlayer(null));
+  return G.players[pIdx];
+}
+
+// an ant a player lets go of carries on as one of the colony's own
+function handBack(a) {
+  a.playerIdx = -1;
+  a.state = 'idle'; a.stateT = 120;
+  a.target = null; a.nav = null;
+  a.climbing = false; a.ceiling = false;
+}
+
+// player pIdx steps away (left, or lost the connection): its ant goes back
+// to the colony meanwhile. Returns the ant it had (or null).
+function releasePlayer(pIdx) {
+  const p = G.players[pIdx];
+  if (!p) return null;
+  const a = p.ant && p.ant.hp > 0 ? p.ant : null;
+  if (a) handBack(a);
+  p.ant = null; p.deathPos = null;
+  p.input = newInput();
+  return a;
+}
+
+// player pIdx takes back the very ant it let go of (a reconnect), if that
+// ant still lives, is one of its colony's and nobody else has taken it
+function reclaimAnt(pIdx, id) {
+  const p = ensurePlayer(pIdx);
+  const a = G.ants.find(o => o.id === id);
+  if (!a || a.hp <= 0 || a.playerIdx >= 0 || !PLAYABLE(a.caste) || a.colony !== playerColony(pIdx)) return null;
+  a.playerIdx = pIdx;
+  a.state = 'idle'; a.nav = null; a.target = null;
+  if (a.raiding) a.endRaid();
+  p.ant = a; p.deathPos = null;
+  p.input = newInput();
+  return a;
 }
 
 // the colony player pIdx plays for
@@ -189,9 +232,9 @@ function newWorld(seed, playerCount) {
   populateColony(c, 7, 2);
   populateColony(G.rival, RED_WORKERS, RED_SOLDIERS);
 
-  // player ants
+  // player ants, side by side at the entrance
   for (let p = 0; p < playerCount; p++) {
-    const a = new Ant(c.entrance.x + (p ? 8 : -8), c.entrance.y - 8, 'worker');
+    const a = new Ant(c.entrance.x + [-8, 8, -16, 16][p % 4], c.entrance.y - 8, 'worker');
     a.playerIdx = p;
     G.ants.push(a);
     G.players.push(newPlayer(a));
@@ -502,21 +545,10 @@ function buildClear(cx, cy, r) {
 // lang key naming a build material (for messages and the HUD)
 function buildMatKey(m) { return m === M_THATCH ? 'mat_thatch' : m === M_GATE ? 'mat_gate' : 'mat_packed'; }
 
-function controlPlayer(pIdx) {
-  const p = G.players[pIdx];
-  const a = p.ant;
-  const inp = p.input;
-  const col = playerColony(pIdx);
-  // crystal upgrades are bought for the whole colony (alive or not)
-  if (inp.buy) {
-    col.buyUpgrade(inp.buy, pIdx);
-    inp.buy = null;
-  }
-  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; return; }
-  const c = a.def;
-
-  const dx = inp.dx, dy = inp.dy;
-
+// a player's held direction steers its ant: walking, climbing walls and
+// tunnels, hanging from roofs, hopping. (The online client runs it too, to
+// predict its own ant between the server's snapshots.)
+function steerAnt(a, dx, dy) {
   const SPEED = a.speedNow() * 1.5;
   a.vx = dx * SPEED;
   if (dx !== 0) a.dir = dx;
@@ -549,6 +581,43 @@ function controlPlayer(pIdx) {
        sideWall(a, a.dir) || sideWall(a, -a.dir) || wallNear(a, 1, 5) || wallNear(a, -1, 5))) {
     a.climbing = true; a.climbV = SPEED * 1.1;
   }
+}
+
+// after a player ant's physics step: a climber stuck under an overhang
+// shimmies sideways, and one that topped out boosts over the ledge
+function climbFix(a) {
+  // stubborn overhang: shimmy sideways, away from the wall first
+  if (a.vBlocked && a.climbV < 0) {
+    const vhw = Math.max(1, a.hw - 1.5);
+    for (const s of [-1, -2, 1, 2]) {
+      const nx = a.x + a.dir * s;
+      if (!T.boxSolid(nx, a.y - 1, vhw, a.hh, a.own)) { a.x = nx; a.y -= 1; break; }
+    }
+  }
+  a.vBlocked = false;
+  // ledge-boost: only once no wall remains in grab reach -- and never
+  // underground, where wall-less climbing is the whole point
+  if (a.climbV < 0 && !underground(a) &&
+      !wallNear(a, a.dir, 5) && !wallNear(a, -a.dir, 5)) {
+    a.climbing = false; a.vy = -1.5; a.vx = a.dir * 0.8;
+  }
+}
+
+function controlPlayer(pIdx) {
+  const p = G.players[pIdx];
+  const a = p.ant;
+  const inp = p.input;
+  const col = playerColony(pIdx);
+  // crystal upgrades are bought for the whole colony (alive or not)
+  if (inp.buy) {
+    col.buyUpgrade(inp.buy, pIdx);
+    inp.buy = null;
+  }
+  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; return; }
+  const c = a.def;
+
+  const dx = inp.dx, dy = inp.dy;
+  steerAnt(a, dx, dy);
 
   // bite / dig
   if (inp.bite && a.biteCd <= 0) {
@@ -821,12 +890,7 @@ function takeOver(pIdx, caste, refX, refY) {
   if (!a) return null;
   const p = G.players[pIdx];
   const prev = p.ant;
-  if (prev && prev.hp > 0) {
-    prev.playerIdx = -1;
-    prev.state = 'idle'; prev.stateT = 120;
-    prev.target = null; prev.nav = null;
-    prev.climbing = false; prev.ceiling = false;
-  }
+  if (prev && prev.hp > 0) handBack(prev);
   a.playerIdx = pIdx;
   a.state = 'idle';
   if (a.raiding) a.endRaid();
@@ -837,7 +901,7 @@ function takeOver(pIdx, caste, refX, refY) {
   p.ant = a;
   p.deathPos = null;
   p.input = newInput();
-  G.msg('m_nowPlaying', [{ caste: a.caste }], pIdx === 0 ? '#ffe080' : '#80d0ff', pIdx);
+  G.msg('m_nowPlaying', [{ caste: a.caste }], PLAYER_COLORS[pIdx % PLAYER_COLORS.length], pIdx);
   return a;
 }
 
@@ -852,23 +916,7 @@ function stepSim() {
   // ants
   for (const a of G.ants) {
     if (a.hp > 0) a.update();
-    if (a.playerIdx >= 0 && a.climbing) {
-      // stubborn overhang: shimmy sideways, away from the wall first
-      if (a.vBlocked && a.climbV < 0) {
-        const vhw = Math.max(1, a.hw - 1.5);
-        for (const s of [-1, -2, 1, 2]) {
-          const nx = a.x + a.dir * s;
-          if (!T.boxSolid(nx, a.y - 1, vhw, a.hh, a.own)) { a.x = nx; a.y -= 1; break; }
-        }
-      }
-      a.vBlocked = false;
-      // ledge-boost: only once no wall remains in grab reach -- and never
-      // underground, where wall-less climbing is the whole point
-      if (a.climbV < 0 && !underground(a) &&
-          !wallNear(a, a.dir, 5) && !wallNear(a, -a.dir, 5)) {
-        a.climbing = false; a.vy = -1.5; a.vx = a.dir * 0.8;
-      }
-    }
+    if (a.playerIdx >= 0 && a.climbing) climbFix(a);
   }
   // deaths
   for (const a of G.ants) {
@@ -882,7 +930,7 @@ function stepSim() {
         G.sfx('die', a.x, a.y, 9999);
         for (let q = 0; q < G.players.length; q++) {
           if (q === pIdx) G.msg('m_youDied', [], '#ff5040', q);
-          else G.msg('m_pDied', [pIdx + 1], '#ff5040', q);
+          else G.msg('m_pDied', [{ player: pIdx }], '#ff5040', q);
         }
         G.players[pIdx].ant = null;
         G.players[pIdx].deathPos = { x: a.x, y: a.y };

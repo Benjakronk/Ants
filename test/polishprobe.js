@@ -217,8 +217,8 @@ const path = require('path');
   check('the pause menu turns the hints off (remembered, nothing drawn)',
     sk.off.on === false && sk.off.stored === 'off' && sk.off.active === null && sk.drawn === false, sk.off);
   const title = await page.evaluate(() => {
-    // and the title menu has the switch too (its 6th item)
-    G.state = 'title'; G.menuSel = 5;
+    // and the title menu has the switch too
+    G.state = 'title'; G.menuSel = titleItems().findIndex(i => i.id === 'hints');
     pressed.Enter = true; updateTitle(); pressed.Enter = false;
     const off = Tut.on;
     pressed.Enter = true; updateTitle(); pressed.Enter = false;

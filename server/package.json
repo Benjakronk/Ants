@@ -1,0 +1,17 @@
+{
+  "name": "maur-server",
+  "version": "0.4.0",
+  "private": true,
+  "description": "MAUR online: rooms, lobby and the authoritative simulation over WebSocket",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

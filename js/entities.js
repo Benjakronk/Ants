@@ -35,6 +35,10 @@ const BLACK_RIM = '#8e8698', BLACK_SHINE = '#d8d4e4', BLACK_LEG = '#6e645e';
 // what a (player) ant can haul in its mandibles for building, in pixels
 const LOAD_CAP = 100;
 
+// each player's colour (by player index): the chevron over its ant, its
+// name tag and map dot online, its messages
+const PLAYER_COLORS = ['#ffe080', '#80d0ff', '#ff9ec8', '#a8f080'];
+
 const ITEM_DEF = {
   seed:     { value: 5,  food: true },
   honeydew: { value: 8,  food: true },
@@ -1564,7 +1568,7 @@ class Ant {
       const ty = ey - Math.round(this.hh) - 6 - (G.tick >> 4) % 2;   // the tip
       ctx.fillStyle = '#100804';
       for (let i = 0; i < 4; i++) ctx.fillRect(ex - i - 1, ty - i - 1, 2 * i + 3, 2);
-      ctx.fillStyle = this.playerIdx === 0 ? '#ffe080' : '#80d0ff';
+      ctx.fillStyle = PLAYER_COLORS[this.playerIdx % PLAYER_COLORS.length];
       for (let i = 0; i < 3; i++) ctx.fillRect(ex - i, ty - i, 2 * i + 1, 1);
     }
   }
