@@ -39,9 +39,28 @@ const path = require('path');
   const lit = await bright(page);
   check('footprint and name are drawn', lit > 3, 'brightness ' + lit.toFixed(1));
   await page.screenshot({ path: 'test/shot-logo.png' });
-  await page.waitForTimeout(4500);
-  check('the title starts after the logo', (await page.evaluate(() => G.state)) === 'title' && (await frames(page)) > 0);
+  // the ants: the title runs underneath while they eat the logo layer away
+  await page.waitForFunction(() => Logo.blocking(), null, { timeout: 8000 });
+  check('ants start eating with the title running underneath', (await frames(page)) > 0);
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: 'test/shot-logo-eat.png' });
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: 'test/shot-logo-eat2.png' });
+  const t0 = Date.now();
+  await page.waitForFunction(() => !Logo.active(), null, { timeout: 15000 });
+  check('the ants finish and leave by themselves', true, 'eating+leaving ended ' + ((Date.now() - t0) / 1000 + 2).toFixed(1) + ' s after it began');
+  check('the title is left, untouched by the swarm', (await page.evaluate(() => G.state)) === 'title');
   await page.screenshot({ path: 'test/shot-logo-title.png' });
+  await page.close();
+
+  // 1b. skip while the ants are eating: the rest goes at once, the key chooses nothing
+  page = await open();
+  await page.waitForFunction(() => Logo.blocking(), null, { timeout: 8000 });
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  check('a key while the ants eat clears the logo', !(await page.evaluate(() => Logo.active())));
+  check('that key does not choose on the title menu', (await page.evaluate(() => G.state)) === 'title');
   await page.close();
 
   // 2. skip it with Enter: straight to the title, and that Enter doesn't open SOLO

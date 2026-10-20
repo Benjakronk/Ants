@@ -2700,23 +2700,27 @@ function frame(now) {
   while (acc >= STEP && steps < 4) {
     acc -= STEP;
     steps++;
-    globalKeys();
-    switch (G.state) {
-      case 'title': updateTitle(); break;
-      case 'slots': updateSlots(); break;
-      case 'intro': updateIntro(); break;
-      case 'help': updateHelp(); break;
-      case 'play': updatePlay(); break;
-      case 'pause': updatePause(); break;
-      case 'gameover': updateGameOver(); break;
-      case 'netname': updateNetName(); break;
-      case 'netmenu': updateNetMenu(); break;
-      case 'networlds': updateNetWorlds(); break;
-      case 'netopen': updateNetOpen(); break;
-      case 'netcreate': updateNetCreate(); break;
-      case 'netjoin': updateNetJoin(); break;
-      case 'netwait': updateNetWait(); break;
-      case 'lobby': updateLobby(); break;
+    if (Logo.active()) Logo.step(pressed);
+    // while the logo's ants are still uncovering the title, keys only skip them
+    if (!Logo.blocking()) {
+      globalKeys();
+      switch (G.state) {
+        case 'title': updateTitle(); break;
+        case 'slots': updateSlots(); break;
+        case 'intro': updateIntro(); break;
+        case 'help': updateHelp(); break;
+        case 'play': updatePlay(); break;
+        case 'pause': updatePause(); break;
+        case 'gameover': updateGameOver(); break;
+        case 'netname': updateNetName(); break;
+        case 'netmenu': updateNetMenu(); break;
+        case 'networlds': updateNetWorlds(); break;
+        case 'netopen': updateNetOpen(); break;
+        case 'netcreate': updateNetCreate(); break;
+        case 'netjoin': updateNetJoin(); break;
+        case 'netwait': updateNetWait(); break;
+        case 'lobby': updateLobby(); break;
+      }
     }
     // clear one-shot presses each sim step
     for (const k in pressed) pressed[k] = false;
@@ -2741,6 +2745,7 @@ function frame(now) {
     case 'netwait': drawNetWait(); break;
     case 'lobby': drawLobby(); break;
   }
+  if (Logo.active()) Logo.draw(ctx);
 }
 
 // integer-scale the canvas to the window

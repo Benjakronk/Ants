@@ -2,9 +2,10 @@
 // Aasen-spelet's js/rpg/opning.js (Opning.logo), with its art. The gold
 // footprint is pressed down in three frames, the name appears letter by
 // letter from the top, a shine runs over the gold, a second of stillness,
-// then a 16-step fade out (two frames per step, like the Super Nintendo).
+// then a swarm of ants eats the logo away to uncover the title (below).
 // Enter, Space, Z, X or Esc skips it. With prefers-reduced-motion it comes
-// in with one fade and no shine.
+// in with one fade, no shine, and fades out (16 steps, two frames each, like
+// the Super Nintendo) instead of the ants.
 //
 // main.js plays it on page load before the title starts. Automated browsers
 // (navigator.webdriver: the Playwright tests) skip it, so they still begin on
@@ -46,8 +47,9 @@ const Logo = (function () {
         await wait(33);
       }
     };
+    const reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
     try {
-      if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      if (reduced) {
         fr = 3; written = LETTERS.length; await fade(true);
       } else {
         await hold(20);
@@ -61,12 +63,146 @@ const Logo = (function () {
         fr = 3;
       }
       await hold(60);                                                // a second of stillness
-      if (!skipped) await fade(false);
+      if (!skipped && reduced) await fade(false);
+      else if (!skipped) { startEating(canvas); return; }            // the ants take it from here
     } finally {
       window.removeEventListener('keydown', onKey, true);
     }
     g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
   }
 
-  return { play };
+  // ---- the ants eat the logo away ----------------------------------------
+  // The finished logo frame becomes a layer over the live title screen. A
+  // swarm comes in from all four edges; each ant walks to a nearby uneaten
+  // 8x8 cell, chews it out of the layer (a ragged round bite, gold crumbs)
+  // and picks the next, so the menu shows through from the outside in. Once
+  // every cell is gone the ants scurry off the nearest edge. main.js calls
+  // step() each sim step and draw() after the screen; a key press while the
+  // ants are still eating clears the rest at once.
+  const CELL = 8, CW = W / CELL, CH = H / CELL, SWARM = 64;
+  let layer = null, lg = null, cells = null, left = 0, ants = [], crumbs = [], t = 0;
+
+  function startEating(canvas) {
+    layer = document.createElement('canvas'); layer.width = W; layer.height = H;
+    lg = layer.getContext('2d');
+    lg.drawImage(canvas, 0, 0);
+    lg.globalCompositeOperation = 'destination-out';
+    cells = new Uint8Array(CW * CH).fill(1);
+    left = cells.length; ants = []; crumbs = []; t = 0;
+    for (let i = 0; i < SWARM; i++) {
+      const side = i % 4, r = Math.random();
+      const soldier = Math.random() < 0.2;
+      ants.push({
+        x: side === 0 ? -10 : side === 1 ? W + 10 : r * W,
+        y: side === 2 ? -10 : side === 3 ? H + 10 : r * H,
+        wait: Math.floor(Math.random() * 30),                         // they arrive in a ragged stream
+        speed: (soldier ? 1.5 : 1.9) + Math.random() * 0.6,
+        caste: soldier ? 'soldier' : 'worker',
+        tx: -1, ty: -1, cell: -1, chew: 0, phase: Math.random() * 6, ang: 0, gone: false,
+      });
+    }
+  }
+
+  // the next bite: an uneaten cell in the nearest ring around the ant (so it
+  // chews a growing edge), else the nearest of a random handful (so the swarm
+  // spreads out when its patch is done)
+  function pickCell(a) {
+    const acx = Math.floor(a.x / CELL), acy = Math.floor(a.y / CELL);
+    for (let r = 0; r <= 3; r++) {
+      const ring = [];
+      for (let y = acy - r; y <= acy + r; y++) for (let x = acx - r; x <= acx + r; x++) {
+        if (Math.max(Math.abs(x - acx), Math.abs(y - acy)) !== r) continue;
+        if (x >= 0 && x < CW && y >= 0 && y < CH && cells[y * CW + x]) ring.push(y * CW + x);
+      }
+      if (ring.length) return ring[Math.floor(Math.random() * ring.length)];
+    }
+    let best = -1, bd = Infinity;
+    for (let k = 0; k < 40; k++) {
+      const c = Math.floor(Math.random() * cells.length);
+      if (!cells[c]) continue;
+      const cx = (c % CW + 0.5) * CELL, cy = (Math.floor(c / CW) + 0.5) * CELL;
+      const d = (cx - a.x) ** 2 + (cy - a.y) ** 2;
+      if (d < bd) { bd = d; best = c; }
+    }
+    if (best < 0) for (let c = 0; c < cells.length; c++) if (cells[c]) { best = c; break; }
+    return best;
+  }
+
+  function bite(c) {
+    if (!cells[c]) return;
+    cells[c] = 0; left--;
+    const cx = (c % CW + 0.5) * CELL, cy = (Math.floor(c / CW) + 0.5) * CELL;
+    lg.beginPath();
+    lg.arc(cx + Math.random() * 2 - 1, cy + Math.random() * 2 - 1, 6 + Math.random() * 1.5, 0, Math.PI * 2);
+    lg.fill();
+    for (let i = 0; i < 2; i++) {
+      crumbs.push({ x: cx, y: cy, vx: Math.random() * 1.6 - 0.8, vy: -Math.random() * 1.2, life: 14 + Math.random() * 10 });
+    }
+  }
+
+  function step(pressed) {
+    if (!layer) return;
+    t++;
+    if (left > 0 && pressed && Object.keys(pressed).some(k => pressed[k])) {
+      for (const k in pressed) pressed[k] = false;                   // the skip key is used up
+      finish(); return;
+    }
+    let onScreen = 0;
+    for (const a of ants) {
+      if (a.gone) continue;
+      if (a.wait > 0) { a.wait--; onScreen++; continue; }
+      if (a.chew > 0) {                                               // chewing a cell out
+        if (--a.chew === 0) { bite(a.cell); a.cell = -1; }
+        onScreen++; continue;
+      }
+      if (a.cell < 0 || !cells[a.cell]) {                             // pick the next bite, or leave
+        a.cell = left > 0 ? pickCell(a) : -1;
+        if (a.cell >= 0) { a.tx = (a.cell % CW + 0.5) * CELL; a.ty = (Math.floor(a.cell / CW) + 0.5) * CELL; }
+        else {
+          const ex = a.x < W / 2 ? -20 : W + 20, ey = a.y < H / 2 ? -20 : H + 20;
+          if (Math.abs(ex - a.x) < Math.abs(ey - a.y)) { a.tx = ex; a.ty = a.y; } else { a.tx = a.x; a.ty = ey; }
+        }
+      }
+      const dx = a.tx - a.x, dy = a.ty - a.y, d = Math.hypot(dx, dy);
+      if (a.cell >= 0 && d < 3) { a.chew = 2; onScreen++; continue; }
+      const sp = a.cell < 0 ? a.speed * 1.4 : a.speed;
+      a.ang = Math.atan2(dy, dx);
+      a.x += Math.cos(a.ang) * sp + (Math.random() - 0.5) * 0.6;    // a little ant wobble
+      a.y += Math.sin(a.ang) * sp + (Math.random() - 0.5) * 0.6;
+      a.phase += 0.5;
+      if (a.cell < 0 && (a.x < -16 || a.x > W + 16 || a.y < -16 || a.y > H + 16)) { a.gone = true; continue; }
+      onScreen++;
+    }
+    for (const c of crumbs) { c.x += c.vx; c.y += c.vy; c.vy += 0.15; c.life--; }
+    crumbs = crumbs.filter(c => c.life > 0);
+    if (left === 0 && !onScreen && !crumbs.length) finish();
+  }
+
+  function draw(ctx) {
+    if (!layer) return;
+    ctx.drawImage(layer, 0, 0);
+    ctx.fillStyle = '#d8a848';
+    for (const c of crumbs) ctx.fillRect(Math.round(c.x), Math.round(c.y), 1, 1);
+    for (const a of ants) {
+      if (a.gone || a.wait > 0) continue;
+      const fake = {
+        x: 0, y: 0, dir: 1, phase: a.phase, def: CASTE[a.caste], caste: a.caste,
+        flash: 0, biteAnim: a.chew > 0 ? 6 : 0, climbing: false, carry: null, playerIdx: -1,
+      };
+      ctx.save();
+      ctx.translate(Math.round(a.x), Math.round(a.y));
+      ctx.rotate(a.ang);
+      if (Math.abs(a.ang) > Math.PI / 2) ctx.scale(1, -1);           // keep the legs on the near side
+      Ant.prototype.draw.call(fake, ctx, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  function finish() { layer = null; lg = null; cells = null; ants = []; crumbs = []; }
+
+  return {
+    play, step, draw, finish,
+    active: () => !!layer,                 // the layer (or departing ants) is still up
+    blocking: () => !!layer && left > 0,   // the menu is still being uncovered: no menu input
+  };
 })();
