@@ -954,9 +954,20 @@ function drawViewport(vx, vy, vw, vh) {
     const aim = buildAim(me, pl.input.dx, pl.input.dy);
     if (aim) {
       const ex = Math.round(aim.bx - camx), ey = Math.round(aim.by - camy);
+      // the stamp's footprint, in the material's colour, on the open pixels
+      ctx.fillStyle = pl.buildMat === M_THATCH ? '#d2b05c' : pl.buildMat === M_GATE ? '#f0d080' : '#9c6a40';
+      ctx.globalAlpha = 0.7 + 0.2 * Math.sin(G.frame * 0.2);
+      const r = Math.ceil(BUILD_R);
+      for (let oy = -r; oy <= r; oy++) {
+        for (let ox = -r; ox <= r; ox++) {
+          const wx = Math.round(aim.bx) + ox, wy = Math.round(aim.by) + oy;
+          if (ox * ox + oy * oy <= BUILD_R * BUILD_R && !T.solid(wx, wy)) ctx.fillRect(ex + ox, ey + oy, 1, 1);
+        }
+      }
+      ctx.globalAlpha = 1;
       ctx.fillStyle = (G.frame >> 3) % 2 ? '#ffe040' : '#fff8c0';
-      ctx.fillRect(ex - 2, ey, 1, 1); ctx.fillRect(ex + 2, ey, 1, 1);
-      ctx.fillRect(ex, ey - 2, 1, 1); ctx.fillRect(ex, ey + 2, 1, 1);
+      ctx.fillRect(ex - 4, ey, 1, 1); ctx.fillRect(ex + 4, ey, 1, 1);   // (a cross framing it)
+      ctx.fillRect(ex, ey - 4, 1, 1); ctx.fillRect(ex, ey + 4, 1, 1);
     } else {
       const f = aimPoint(me, pl.input.dx, pl.input.dy);
       const ex = Math.round(f.bx - camx), ey = Math.round(f.by - camy);

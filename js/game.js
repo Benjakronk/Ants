@@ -750,8 +750,16 @@ function buildMatKey(m) { return m === M_THATCH ? 'mat_thatch' : m === M_GATE ? 
 
 // a player's held direction steers its ant: walking, climbing walls and
 // tunnels, hanging from roofs, hopping. (The online client runs it too, to
-// predict its own ant between the server's snapshots.)
-function steerAnt(a, dx, dy) {
+// predict its own ant between the server's snapshots.) build: the build key
+// is held -- an ant with a footing (on the ground, on a wall, under a roof)
+// braces and stands still, and the direction keys only aim the stamp
+function steerAnt(a, dx, dy, build) {
+  if (build && (a.onGround || a.climbing || a.ceiling)) {
+    a.vx = 0;
+    if (a.climbing) a.climbV = 0;           // cling where it is
+    else if (dx !== 0) a.dir = dx;          // turn to face the aim
+    return;
+  }
   const SPEED = a.speedNow() * 1.5;
   a.vx = dx * SPEED;
   if (dx !== 0) a.dir = dx;
@@ -820,7 +828,7 @@ function controlPlayer(pIdx) {
   const c = a.def;
 
   const dx = inp.dx, dy = inp.dy;
-  steerAnt(a, dx, dy);
+  steerAnt(a, dx, dy, inp.build);
 
   // bite / dig
   if (inp.bite && a.biteCd <= 0) {

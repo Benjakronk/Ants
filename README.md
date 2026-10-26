@@ -228,7 +228,11 @@ and carry speed — three levels each.
 Everything you bite out of the ground goes into your mandibles: soil from
 dirt, grass and roots, **thatch** from leaves. The two bars next to your
 health show both loads. Hold **`F`** to lay the selected material where you
-aim (the gold-framed bar; **`R`** switches): **packed earth** is a tough wall
+aim (the gold-framed bar; **`R`** switches). While `F` is held your ant
+braces where it stands -- on the ground, on a wall or under a roof -- and
+the direction keys only aim (eight ways, shown by a cross; a red x: no
+room there), so you can build up, down or diagonally without walking off;
+in mid-air it falls as usual. **Packed earth** is a tough wall
 that takes a worker three bites (a soldier two) and slows burrowing worms,
 centipedes and beetles just as much; **thatch** is light and breaks in one
 bite. Building never walls in an ant, brood or bug.

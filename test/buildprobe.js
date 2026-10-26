@@ -116,6 +116,42 @@ const path = require('path');
     build.counts[0] === build.placed && build.counts[1] === build.placed && build.counts[2] === 0, build.counts);
   check('packed earth takes 2 soldier bites', build.soldier.every(Boolean), build.soldier);
 
+  // --- holding F braces the ant: the direction keys aim instead of walking ---
+  const brace = await page.evaluate(() => {
+    makeRoom(ROOM.x, ROOM.y, 34, 14);
+    const a = standIn(ROOM.x, ROOM.y, 1);
+    a.soil = 100;
+    G.players[0].buildMat = M_PACKED;
+    const x0 = a.x, y0 = a.y;
+    // aim up and to the left, then straight up: no step, no hop
+    simN(30, { build: true, dx: -1, dy: -1 });
+    const upLeft = { dx: a.x - x0, dy: a.y - y0, dir: a.dir, soilUsed: 100 - a.soil,
+      stamp: countMat(M_PACKED, a.x - a.hw - 6, a.y - a.hh - 6, 5) };
+    simN(20, { build: true, dy: -1 });
+    const up = { dx: a.x - x0, dy: a.y - y0 };
+    // let go of F: the same keys walk again
+    simN(20, { dx: 1 });
+    const walk = a.x - x0;
+    // on a wall: holding F clings there
+    makeRoom(ROOM.x, ROOM.y, 34, 14);
+    standIn(ROOM.x + 30, ROOM.y, 1);
+    simN(25, { dx: 1, dy: -1 });
+    const yWall = a.y, climbing = a.climbing;
+    simN(40, { build: true, dx: -1 });
+    const wall = { climbing, drift: a.y - yWall, still: a.climbing };
+    // in mid-air there's nothing to brace on: it falls as usual
+    a.x = ROOM.x - 10; a.y = ROOM.y - 8; a.vx = a.vy = 0; a.climbing = a.ceiling = false; a.onGround = false;
+    const yAir = a.y;
+    simN(4, { build: true });
+    return { upLeft, up, walk, wall, fell: a.y - yAir };
+  });
+  check('holding F braces a grounded ant: aiming up-left neither walks nor hops, and builds up-left',
+    brace.upLeft.dx === 0 && brace.upLeft.dy === 0 && brace.upLeft.dir === -1 && brace.upLeft.soilUsed > 0 &&
+    brace.upLeft.stamp > 0 && brace.up.dx === 0 && brace.up.dy === 0, brace);
+  check('... letting go of F walks again', brace.walk > 3, brace.walk);
+  check('... on a wall it clings in place', brace.wall.climbing && brace.wall.still && Math.abs(brace.wall.drift) < 0.5, brace.wall);
+  check('... in mid-air it still falls', brace.fell > 0, brace.fell);
+
   // --- empty load: nothing placed, one message ---
   const empty = await page.evaluate(() => {
     makeRoom(ROOM.x, ROOM.y, 34, 14);

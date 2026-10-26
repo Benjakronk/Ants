@@ -601,7 +601,7 @@ const Net = {
       this.hist = [];
     }
     P.caste = me.caste; P.colony = me.colony; P.carry = me.carry; P.hw = me.hw; P.hh = me.hh;
-    steerAnt(P, inp.dx, inp.dy);
+    steerAnt(P, inp.dx, inp.dy, inp.build);
     physStep(P);
     if (P.climbing) climbFix(P);
     this.hist.push([this.ltick, P.x, P.y]);
