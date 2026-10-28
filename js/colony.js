@@ -679,6 +679,7 @@ class Colony {
       this.food += v;
       this.stats.foodGathered += v;
       if (who && who.playerIdx >= 0) {
+        if (G.players[who.playerIdx]) G.players[who.playerIdx].stats.food += v;
         this.progress('gather', 1);
         G.msg('m_foodStored', [Math.round(v)], null, who.playerIdx);
       }

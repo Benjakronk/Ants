@@ -152,11 +152,24 @@ function newPlayer(ant) {
   // build on" clank; refuseT: a refused deposit lets the next E (within
   // this many ticks) just put the item down
   // col: the index of the player's colony in G.colonies (0 until versus);
-  // name: what the others call this player online (null offline)
+  // name: what the others call this player online (null offline);
+  // stats: the scoreboard's tally (see newPlayerStats)
   return {
     ant, input: newInput(), deathPos: null, buildMat: M_PACKED, buildWarned: false,
-    buildFailT: 0, refuseT: 0, coldT: 0, col: 0, name: null,
+    buildFailT: 0, refuseT: 0, coldT: 0, col: 0, name: null, stats: newPlayerStats(),
   };
+}
+
+// a player's tally for the scoreboard (held Tab): ants and bugs it gave the
+// killing blow (or the last bite, KILL_CREDIT ticks before), its deaths, food
+// it carried into the storage, earth it dug and built (pixels). A newcomer
+// taking an old slot starts from nothing (see the server's join).
+function newPlayerStats() { return { kills: 0, deaths: 0, food: 0, dug: 0, built: 0 }; }
+const KILL_CREDIT = 300;
+// the player who gets the kill of `e` (a dying ant or bug), or null
+function killerOf(e) {
+  if (!(e.lastHitIdx >= 0) || G.tick - e.lastHitT > KILL_CREDIT) return null;
+  return G.players[e.lastHitIdx] || null;
 }
 
 // online players come and go while the world runs. A slot (an index into
@@ -854,6 +867,7 @@ function controlPlayer(pIdx) {
     if (bit) {
       bit.hurt(a.dmgNow(), ux * 1.2, uy * 0.6 - 0.3, a);
       bit.lastHitBy = 'player';
+      bit.lastHitIdx = pIdx; bit.lastHitT = G.tick;   // (for the scoreboard's kills)
       G.sfx('bite', a.x, a.y);
     } else {
       const digR = a.digRNow();
@@ -866,6 +880,7 @@ function controlPlayer(pIdx) {
       res.natural += res2.natural;
       // the spoil goes into the mandibles as building material
       a.soil = Math.min(LOAD_CAP, a.soil + res.soil + res2.soil);
+      p.stats.dug += res.count;
       a.thatch = Math.min(LOAD_CAP, a.thatch + res.thatch + res2.thatch);
       if (res.count > 0) {
         G.fx('dirt', bx, by, 4);
@@ -920,6 +935,7 @@ function controlPlayer(pIdx) {
         buildClear(aim.bx, aim.by, BUILD_R), Math.floor(a[load])) : 0;
       if (n > 0) {
         a[load] -= n;
+        p.stats.built += n;
         a.biteAnim = 5;
         G.fx('dirt', aim.bx, aim.by, 2);
         G.sfx('build', a.x, a.y);
@@ -1160,6 +1176,8 @@ function stepSim() {
       if (a.carry) { a.carry.carried = null; a.carry = null; }
       G.items.push(G.makeItem('corpse', a.x, a.y));
       a.colony.stats.antsDied++;
+      const killer = killerOf(a);
+      if (killer) killer.stats.kills++;
       // (versus: every ant down is a rival slain for the other side)
       if (G.mode === 'versus') for (const o of G.colonies) if (o !== a.colony) o.stats.rivalsSlain = (o.stats.rivalsSlain || 0) + 1;
       if (a.playerIdx >= 0) {
@@ -1171,6 +1189,7 @@ function stepSim() {
         }
         G.players[pIdx].ant = null;
         G.players[pIdx].deathPos = { x: a.x, y: a.y };
+        G.players[pIdx].stats.deaths++;
       } else if (!a.colony.player) {
         // a rival down: the players' tally (their queen's fall is told by
         // the defeat, in updateYear)
@@ -1206,6 +1225,8 @@ function stepSim() {
       const it = G.makeItem(b.predator || b.kind === 'worm' ? 'bigcorpse' : 'corpse', b.x, b.y, BUG_DEF[b.kind].corpse);
       G.items.push(it);
       G.fx('blood', b.x, b.y, 8);
+      const killer = killerOf(b);
+      if (killer) killer.stats.kills++;
       // (versus: the kill counts for the nest it was nearer to)
       const by = G.mode === 'versus' ? nestNearest(b.x) : G.colonies[0];
       if (b.kind === 'centipede') objEvent('centipedes', 1, by);

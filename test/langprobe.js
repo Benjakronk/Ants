@@ -100,7 +100,7 @@ const path = require('path');
   check('task text norwegian', task === 'SANK MAT');
 
   // takeover menu shows Norwegian caste names
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('KeyC');
   await page.waitForTimeout(200);
   const castes = await page.evaluate(() =>
     G.takeover ? G.takeover.types.map(t => casteName(t.caste)) : []);

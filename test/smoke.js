@@ -132,7 +132,7 @@ const path = require('path');
     'arrow moved:', await page.evaluate(x => G.players[0].ant.x < x - 3, x0));
 
   // live switch with Tab: the world keeps running under the overlay
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('KeyC');
   await page.waitForTimeout(200);
   const t0 = await page.evaluate(() => G.tick);
   await page.waitForTimeout(300);

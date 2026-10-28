@@ -123,6 +123,7 @@ class Room {
     if (this.state === 'play') {
       const p = this.sim.ensurePlayer(idx);
       p.name = slot.name;
+      p.stats = this.sim.newPlayerStats();   // (an old slot's tally isn't the newcomer's)
       p.col = this.colOf(slot);
       // (more players than the world was balanced for: it grows to match)
       if (this.sim.notePlayers(this.balanceFor())) this.log(`room ${this.label()}: now balanced for ${this.sim.playerSlots()} players`);
@@ -424,6 +425,11 @@ class Room {
     const sim = this.sim;
     const frame = S.buildFrame(sim, this.mode === 'versus');
     frame.view.p = S.playersView(sim, this.slots);
+    // (the scoreboard: once a second is plenty, and unchanged it isn't resent)
+    // (a world started over has its clock back at the start: refresh then too)
+    const sdt = sim.G.tick - (this.scoresT || 0);
+    if (!this.scores || sdt >= 60 || sdt < 0) { this.scores = S.scoresView(sim, this.slots); this.scoresT = sim.G.tick; }
+    frame.view.sc = this.scores;
     S.viewJson(frame);
     const edits = this.dirty.length ? S.encodeEdits(sim, this.dirty) : [];
     this.dirty = [];

@@ -434,6 +434,9 @@ const Net = {
       G.legacy = v.leg || 0; G.gen = v.gen || 1; G.history = v.hist || [];
     } else if (key === 'p') {
       this.playersView(v);
+    } else if (key === 'sc') {
+      // the scoreboard's tallies (see server/snapshot.js scoresView)
+      v.forEach((st, i) => { if (st) ensurePlayer(i).stats = { kills: st[0], deaths: st[1], food: st[2], dug: st[3], built: st[4] }; });
     } else {
       const c = G.colonies[Number(key.slice(1))];
       if (!c) return;

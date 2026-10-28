@@ -115,6 +115,13 @@ function publicView(view) {
   return pub;
 }
 
+// the view key for the scoreboard: each player's tally (see newPlayerStats),
+// [kills, deaths, food, dug, built] -- the room refreshes it once a second
+function scoresView(sim, slots) {
+  return sim.G.players.map((p, i) => slots[i] && p.stats ?
+    [p.stats.kills, p.stats.deaths, Math.round(p.stats.food), p.stats.dug, p.stats.built] : null);
+}
+
 // the view key for the players (names, ants, loads), from the room's slots
 function playersView(sim, slots) {
   return sim.G.players.map((p, i) => {
@@ -260,4 +267,4 @@ function terrainHash(m) {
   return h >>> 0;
 }
 
-module.exports = { terrainHash, buildFrame, viewJson, playersView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };
+module.exports = { terrainHash, buildFrame, viewJson, playersView, scoresView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };

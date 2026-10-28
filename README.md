@@ -62,7 +62,8 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 | Bite / dig | `Space` |
 | Pick up / use | `E` |
 | Caste ability (soldier: rally, nurse: heal) | `Q` |
-| Switch ant | `Tab` |
+| Switch ant | `C` |
+| Scoreboard (hold) | `Tab` |
 | Build (hold) | `F` |
 | Change build material (earth / thatch / ant gate) | `R` |
 | Mark chamber (or, by a tree, an aphid shelter) | `X` |
@@ -136,7 +137,10 @@ then more ants. No hints in versus. The end screen shows both sides.
 The keys are the same as solo. Each player plays its own ant -- a coloured
 chevron over it (eight colours), the others' names over theirs while they
 are on screen (the nearest first; a tag with no room left in a crowd is
-left out), and the same colours on the map -- and `Tab` or a death hands
+left out), and the same colours on the map. Hold `Tab` for the
+**scoreboard**: each player's kills (the killing blow, or the last bite
+within five seconds), deaths, food carried into the storage, and earth
+dug and built, the most kills first (versus: a block a side). `C` or a death hands
 you any ant no other player has. The
 milestones, the crystals and the upgrades (`O`, any player may buy) belong
 to the colony; the hints and the guide arrow are your own. Nothing pauses:
@@ -173,7 +177,7 @@ raiders; its queen lays at her usual pace). One player plays exactly the game as
 Spring of year 1 doubles as the tutorial: a hint panel above the HUD
 teaches one thing at a time — walking and climbing, biting and the soil
 load, carrying food to the storage, building (`F`, `R`), marking a chamber
-(`X`), the `O` screen and switching ants (`Tab`). Each hint stays until you
+(`X`), the `O` screen and switching ants (`C`). Each hint stays until you
 have done it; `H` skips one, and **HINTS** in the title or pause menu turns
 them off (your progress is remembered per world, in this browser only).
 

@@ -39,6 +39,7 @@ function createSim() {
     reclaimAnt: ctx.reclaimAnt, takeOver: ctx.takeOver, joinColony: ctx.joinColony,
     serializeWorld: ctx.serializeWorld, restoreWorld: ctx.restoreWorld, worldSummary: ctx.worldSummary,
     rebirthWorld: ctx.rebirthWorld, notePlayers: ctx.notePlayers, playerSlots: ctx.playerSlots,
+    newPlayerStats: ctx.newPlayerStats,
   };
 }
 

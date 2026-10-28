@@ -301,9 +301,21 @@ function bot(port, name) {
   check('B\'s terrain view repainted it', stale === 0, stale + ' stale pixels');
   check('the server reports both players\' soil loads', (await A.evaluate(() => localAnt().soil)) > 0);
 
-  // takeover per player: A switches (Tab), B keeps its ant
+  // the scoreboard: the server's tallies reach the pages (once a second);
+  // held Tab shows them
+  await A.waitForTimeout(1200);
+  const sc = await A.evaluate(() => G.players.map(p => p.stats && { ...p.stats }));
+  await A.keyboard.down('Tab');
+  await A.waitForTimeout(150);
+  const scOn = await A.evaluate(() => held('scores') && !G.takeover);
+  await A.screenshot({ path: 'test/shot-net-scores.png' });
+  await A.keyboard.up('Tab');
+  check('the scoreboard: both players\' tallies from the server (A dug), shown while Tab is held',
+    sc.length >= 2 && sc[0] && sc[1] && sc[0].dug > 0 && scOn, sc);
+
+  // takeover per player: A switches (C), B keeps its ant
   const ids0 = await dev(A, 'G.players.map(p => p.ant && p.ant.id)');
-  await A.keyboard.press('Tab');
+  await A.keyboard.press('KeyC');
   await A.waitForTimeout(150);
   const tkOpen = await A.evaluate(() => !!G.takeover && G.takeover.live);
   await A.keyboard.press('ArrowDown');   // a soldier
@@ -414,7 +426,9 @@ function bot(port, name) {
   await C.keyboard.press('Escape');
   await C.waitForTimeout(150);
   await C.keyboard.press('ArrowDown');   // (past HELP)
+  await C.waitForTimeout(60);
   await C.keyboard.press('ArrowDown');
+  await C.waitForTimeout(60);
   await C.keyboard.press('Enter');
   await C.waitForTimeout(600);
   check('LEAVE MATCH goes to the title', await C.evaluate(() => G.state === 'title' && !G.online));

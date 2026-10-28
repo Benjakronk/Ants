@@ -165,6 +165,31 @@ function simChecks() {
   check('saves: v8 keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v === 8 && rt.slots === 5 && rt.ok &&
     rt.after === 5 && rt.v7 === 3 && rt.v6 === 1 && rt.huge === 8, rt);
 
+  // ---- the scoreboard's tally ---------------------------------------------------
+  const sb = simCtx(31);
+  sb(`newWorld(${31 * 7919}, 2, 'coop')`);
+  const tally = sb.json(`(() => {
+    const p = G.players[0], a = p.ant, run = (n, inp) => { for (let i = 0; i < n; i++) { Object.assign(p.input, inp || {}); stepSim(); G.events.length = 0; } p.input = newInput(); };
+    // a pillbug beside us: bitten to death -> a kill
+    a.x = G.colony.x - 300; a.y = T.surf[Math.round(a.x)] - a.hh - 1; a.vx = a.vy = 0; a.dir = 1;
+    run(20);
+    const bug = new Bug(a.x + a.hw + 5, a.y, 'pillbug'); bug.hp = 1; bug.curl = 0; G.bugs.push(bug);
+    for (let k = 0; k < 6 && !bug.dead; k++) { a.biteCd = 0; run(1, { bite: true }); }
+    // dig (the ground below), build it back
+    a.soil = 0;
+    for (let k = 0; k < 8; k++) { a.biteCd = 0; run(1, { bite: true, dy: 1 }); }
+    const dug = p.stats.dug;
+    a.soil = 40; run(1, { build: true, dy: 1 });   // (back into the hole)
+    // food carried in
+    G.colony.deposit(G.makeItem('seed', a.x, a.y), a);
+    // a death; the other player's tally untouched
+    a.hp = 0; run(1);
+    return { st: p.stats, other: G.players[1].stats, dug, bugDead: !!bug.dead };
+  })()`);
+  check('the scoreboard counts a player\'s kills, earth dug and built, food stored and deaths (and only its own)',
+    tally.bugDead && tally.st.kills === 1 && tally.dug > 0 && tally.st.built > 0 && tally.st.food > 0 && tally.st.deaths === 1 &&
+    Object.values(tally.other).every(v => v === 0), tally);
+
   // ---- a fresh worker when no ant is free -------------------------------------
   const fr = simCtx(21);
   fr(`newWorld(${21 * 7919}, 2, 'coop')`);

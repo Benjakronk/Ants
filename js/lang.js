@@ -272,8 +272,8 @@ const STR = {
     'GRAV UT ET HULROM DYPT NEDE OG TRYKK X\nDER INNE FOR Å MERKE ET KAMMER. X IGJEN: TYPE.'],
   h_obj: ["PRESS O FOR THE SEASON'S MILESTONES\nAND THE CRYSTAL UPGRADES.",
     'TRYKK O FOR ÅRSTIDENS DELMÅL\nOG KRYSTALLOPPGRADERINGENE.'],
-  h_tab: ['TAB SWITCHES TO ANOTHER ANT: A SOLDIER\nFIGHTS AND RALLIES (Q), A NURSE HEALS.',
-    'TAB BYTTER TIL EN ANNEN MAUR: SOLDATEN\nSLÅSS OG SAMLER TROPPER (Q), PLEIEREN LEGER.'],
+  h_tab: ['C SWITCHES TO ANOTHER ANT: A SOLDIER\nFIGHTS AND RALLIES (Q), A NURSE HEALS.',
+    'C BYTTER TIL EN ANNEN MAUR: SOLDATEN\nSLÅSS OG SAMLER TROPPER (Q), PLEIEREN LEGER.'],
   h_done: ['THAT IS THE BASICS. THE ARROW (G) POINTS\nTHE WAY TO YOUR NEXT MILESTONE.',
     'DET VAR DET VIKTIGSTE. PILEN (G) VISER\nVEIEN TIL NESTE DELMÅL.'],
 
@@ -354,6 +354,8 @@ const STR = {
   ui_waitHost: ['WAITING FOR THE HOST TO START...', 'VENTER PÅ AT VERTEN STARTER...'],
   ui_inProgress: ['THE MATCH IS ON - JOINING...', 'SPILLET ER I GANG - BLIR MED...'],
   ui_lobbyLeave: ['H: HOW TO PLAY   ESC: LEAVE', 'H: SLIK SPILLER DU   ESC: FORLAT'],
+  ui_scores: ['SCORES', 'POENG'],
+  ui_scoreCols: ['KILLS,DEATHS,FOOD,DUG,BUILT', 'DREP,DØD,MAT,GRAVD,BYGD'],
   ui_helpKeys: ['LEFT/RIGHT: PAGE {0}/{1}   ESC: BACK', 'VENSTRE/HØYRE: SIDE {0}/{1}   ESC: TILBAKE'],
   m_helpHint: ['ESC > HELP: HOW THE MATCH WORKS', 'ESC > HJELP: SLIK VIRKER SPILLET'],
   ui_menu: ['MENU', 'MENY'],
@@ -563,7 +565,7 @@ function helpText() {
     ['  MELLOMROM ..... BIT / GRAV', '#c8b890'],
     ['  E ............. PLUKK OPP / BRUK', '#c8b890'],
     ['  Q ............. EVNE (SAMLE / LEGE)', '#c8b890'],
-    ['  TAB ........... BYTT MAUR', '#c8b890'],
+    ['  C ............. BYTT MAUR (HOLD TAB: POENG)', '#c8b890'],
     ['  F (HOLD INNE) . BYGG', '#c8b890'],
     ['  R ............. JORD / STRÅ / MAURPORT', '#c8b890'],
     ['  X ............. MERK KAMMER / BLADLUSLY', '#c8b890'],
@@ -580,7 +582,7 @@ function helpText() {
     ['  SPACE ......... BITE / DIG', '#c8b890'],
     ['  E ............. PICK UP / USE', '#c8b890'],
     ['  Q ............. ABILITY (RALLY / HEAL)', '#c8b890'],
-    ['  TAB ........... SWITCH ANT', '#c8b890'],
+    ['  C ............. SWITCH ANT (HOLD TAB: SCORES)', '#c8b890'],
     ['  F (HOLD) ...... BUILD', '#c8b890'],
     ['  R ............. EARTH / THATCH / ANT GATE', '#c8b890'],
     ['  X ............. MARK CHAMBER / APHID SHELTER', '#c8b890'],
@@ -616,7 +618,7 @@ function helpPages(mode) {
     ['HELE TIDEN', H],
     'HOLD DRONNINGEN I LIVE. SOLDATER (Q) SAMLER',
     'FØLGE, AMMER (Q) LEGER. DØR DU, TAR DU EN NY',
-    'MAUR. TAB BYTTER MAUR.',
+    'MAUR. C BYTTER MAUR, HOLD TAB FOR POENGENE.',
   ] : [
     ['SPRING AND SUMMER', H],
     'BRING FOOD TO THE STORAGE (E). DIG OUT ROOMS',
@@ -632,7 +634,7 @@ function helpPages(mode) {
     ['ALWAYS', H],
     'KEEP THE QUEEN ALIVE. SOLDIERS (Q) RALLY AN',
     'ESCORT, NURSES (Q) HEAL. IF YOU DIE, PICK',
-    'ANOTHER ANT. TAB SWITCHES ANTS.',
+    'ANOTHER ANT. C SWITCHES ANTS; HOLD TAB: SCORES.',
   ]);
   const controls = page(L('ui_howto'), helpText());
   if (mode === 'coop') return [page(no ? 'SAMARBEID' : 'THE CO-OP MATCH', no ? [

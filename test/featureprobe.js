@@ -25,7 +25,7 @@ const path = require('path');
   await page.waitForTimeout(400);
 
   // --- live switch: Tab opens the type menu, Esc cancels, Enter switches ---
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('KeyC');
   await page.waitForTimeout(200);
   const sw = await page.evaluate(() => ({
     state: G.state, swap: !!(G.takeover && G.takeover.live),
@@ -36,7 +36,7 @@ const path = require('path');
   await page.waitForTimeout(200);
   check('switch menu cancels', await page.evaluate(() => G.state === 'play' && !G.takeover));
 
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('KeyC');
   await page.waitForTimeout(200);
   await page.keyboard.press('ArrowDown'); // soldier
   await page.keyboard.press('Enter');
@@ -76,7 +76,7 @@ const path = require('path');
   // --- nurse heal: switch to nurse, wound a worker beside her, press Q ---
   await page.evaluate(() => { for (const b of G.bugs) if (b.kind === 'spider') b.hp = 0; });
   await page.waitForTimeout(300);
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('KeyC');
   await page.waitForTimeout(200);
   const nurseIdx = await page.evaluate(() => G.takeover.types.findIndex(t => t.caste === 'nurse'));
   for (let i = 0; i < nurseIdx; i++) {

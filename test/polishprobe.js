@@ -183,7 +183,7 @@ const path = require('path');
 
   // 7 Tab to another ant
   const tb = await page.evaluate(() => {
-    play(1, [], ['Tab']);
+    play(1, [], ['KeyC']);
     const menu = !!(G.takeover && G.takeover.live);
     play(1, [], ['Enter']);
     return { menu, gap: Tut.gapT > 0, stored: localStorage.getItem('maur_tut_1') };

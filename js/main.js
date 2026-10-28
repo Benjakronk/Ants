@@ -13,7 +13,7 @@ let LOCAL = 0;
 const BIND = {
   up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
-  bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['Tab'],
+  bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['KeyC'], scores: ['Tab'],
   build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'], obj: ['KeyO'],
   arrow: ['KeyG'], skipHint: ['KeyH'],
 };
@@ -1790,7 +1790,45 @@ function drawPlay() {
   if (G.showMap) drawMinimap();
   if (G.objScreen) drawObjScreen();
   if (G.takeover) drawTakeover();
+  else if (held('scores') && !G.objScreen && !G.showMap) drawScoreboard();
   if (G.online && Net.status === 'lost') drawNetLost();
+}
+
+// the scoreboard, while Tab is held: each player's kills, deaths, food
+// stored, earth dug and built (see newPlayerStats), the most kills first --
+// versus a block a side
+const SCORE_COLS = [130, 176, 212, 254, 302];   // (right edges)
+function drawScoreboard() {
+  const vs = G.mode === 'versus';
+  const rows = [];
+  G.players.forEach((p, i) => {
+    if (!p || !p.stats || (G.online ? !p.name : i !== LOCAL)) return;
+    rows.push({ i, p, name: p.name || L('ui_you'), col: vs ? p.col || 0 : 0 });
+  });
+  const groups = vs ? [0, 1].map(c => rows.filter(r => r.col === c)) : [rows];
+  for (const g of groups) g.sort((a, b) => b.p.stats.kills - a.p.stats.kills || a.p.stats.deaths - b.p.stats.deaths || a.i - b.i);
+  const h = 30 + rows.length * 8 + (vs ? 22 : 0);
+  bevelPanel(6, 4, 308, h);
+  drawTextC(ctx, L('ui_scores'), VIEW_W / 2, 9, '#ffa040');
+  const heads = L('ui_scoreCols').split(',');
+  heads.forEach((t, k) => drawText(ctx, t, SCORE_COLS[k] - textWidth(t), 20, '#a09070'));
+  let y = 30;
+  groups.forEach((g, c) => {
+    if (vs) {
+      drawText(ctx, L(c ? 'ui_red' : 'ui_black'), 14, y, c ? '#ff7060' : '#d8d4e4');
+      y += 11;
+    }
+    for (const r of g) {
+      const st = r.p.stats, off = G.online && !r.p.online;
+      if (r.i === LOCAL) drawText(ctx, '\x06', 8, y, '#ffe040');
+      drawText(ctx, r.name, 16, y, off ? '#706050' : playerColor(r.i));
+      [st.kills, st.deaths, Math.round(st.food), st.dug, st.built].forEach((v, k) => {
+        const s = String(v);
+        drawText(ctx, s, SCORE_COLS[k] - textWidth(s), y, off ? '#706050' : r.i === LOCAL ? '#ffe040' : '#c8b890');
+      });
+      y += 8;
+    }
+  });
 }
 
 // online: the connection dropped and we're trying to get back in
@@ -2794,7 +2832,8 @@ function netOnOver(over) {
 // ---------------------------------------------------------------------------
 function globalKeys() {
   if (G.state === 'netname' || G.state === 'netjoin') return;   // (letters are being typed)
-  if (tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
+  // (in play C switches ants: the CRT filter is toggled from anywhere else)
+  if (G.state !== 'play' && tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
   if (tookPress('KeyN')) {
     const m = Sfx.toggleMute();
     if (G.state === 'play') pushMsg(L('m_sound', L(m ? 'w_off' : 'w_on')), '#80c0ff');

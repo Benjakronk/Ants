@@ -351,7 +351,7 @@ function bot(port, name) {
   const optsB = await B.evaluate(() => takeoverOptions(LOCAL));
   const redFree = await dev(A, `(() => { const o = {}; for (const a of G.ants) if (a.colony.idx === 1 && a.playerIdx < 0 && a.hp > 0 && PLAYABLE(a.caste)) o[a.caste] = (o[a.caste] || 0) + 1; return o; })()`);
   check('the red player\'s switch overlay lists only red ants', optsB.length > 0 && optsB.every(t => redFree[t.caste] === t.count), { optsB, redFree });
-  await key(B, 'Tab');
+  await key(B, 'KeyC');
   await key(B, 'ArrowDown');   // soldier
   await key(B, 'Enter');
   await B.waitForFunction(() => localAnt() && localAnt().caste === 'soldier', null, { timeout: 4000 }).catch(() => {});
