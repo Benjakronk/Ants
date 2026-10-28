@@ -236,7 +236,8 @@ function bot(port, name) {
   await A.screenshot({ path: 'test/shot-net-play.png' });
   L1.send({ t: 'list' });
   const ls3 = await L1.wait(m => m.t === 'list');
-  check('a match under way is no longer listed', ls3 && !ls3.matches.some(m => m.code === code));
+  check('a public match under way with room to spare is still listed, marked under way', ls3 &&
+    ls3.matches.some(m => m.code === code && m.on === 1 && m.players === 2), ls3 && ls3.matches);
   L1.ws.close();
 
   // B walks right: the server moves B's ant, A sees it go
@@ -412,6 +413,7 @@ function bot(port, name) {
   // C leaves by the menu: its slot empties, the others are told
   await C.keyboard.press('Escape');
   await C.waitForTimeout(150);
+  await C.keyboard.press('ArrowDown');   // (past HELP)
   await C.keyboard.press('ArrowDown');
   await C.keyboard.press('Enter');
   await C.waitForTimeout(600);
@@ -435,9 +437,24 @@ function bot(port, name) {
   await A.waitForTimeout(600);
   const pm = await A.evaluate(() => ({ state: G.state, items: pauseItems().map(i => i.id) }));
   const t1 = await A.evaluate(() => G.tick);
-  check('online pause: RESUME / LEAVE MATCH, and the world runs on', pm.state === 'pause' &&
-    pm.items.join() === 'resume,leave' && t1 > t0 + 20, { pm, ticks: t1 - t0 });
+  check('online pause: RESUME / HELP / LEAVE MATCH, and the world runs on', pm.state === 'pause' &&
+    pm.items.join() === 'resume,help,leave' && t1 > t0 + 20, { pm, ticks: t1 - t0 });
   await A.screenshot({ path: 'test/shot-net-pause.png' });
+  // HELP: the co-op pages over the running world; Right turns a page, Esc
+  // back to the menu
+  await A.keyboard.press('ArrowDown'); await A.keyboard.press('Enter');
+  await A.waitForTimeout(300);
+  const hp0 = await A.evaluate(() => ({ state: G.state, help: G.help && { ...G.help }, tick: G.tick, title: G.help && helpPages(G.help.mode)[0].title }));
+  await A.keyboard.press('ArrowRight');
+  await A.waitForTimeout(400);
+  const hp1 = await A.evaluate(() => ({ page: G.help && G.help.page, tick: G.tick }));
+  await A.screenshot({ path: 'test/shot-net-help.png' });
+  await A.keyboard.press('Escape');
+  await A.waitForTimeout(200);
+  const hp2 = await A.evaluate(() => ({ state: G.state, help: G.help }));
+  check('online HELP: the co-op pages (how it\'s won first), Right turns the page, the world runs on, Esc back to the menu',
+    hp0.state === 'pause' && hp0.help && hp0.help.mode === 'coop' && hp0.help.page === 0 && hp0.title === 'THE CO-OP MATCH' &&
+    hp1.page === 1 && hp1.tick > hp0.tick + 10 && hp2.state === 'pause' && !hp2.help, { hp0, hp1, hp2 });
   await A.keyboard.press('Escape');
 
   // the match ends: both see the end screen, then go back to the title

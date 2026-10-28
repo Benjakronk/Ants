@@ -23,7 +23,7 @@ const SNAP_TICKS = 3;        // a snapshot every 3 ticks: 20 Hz
 const CATCH_UP = 5;          // ticks a late loop may run at once
 const MODES = ['coop', 'versus'];   // (what a player may create; 'world' is the server's)
 const FACTIONS = ['black', 'red'];  // by colony index
-const SIDE_MAX = Math.ceil(cfg.MAX_PLAYERS / 2);   // versus: players a side at most (4 of 8)
+const SIDE_MAX = cfg.SIDE_MAX;   // versus: players a side at most (the room holds two sides)
 const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark' };
 
 // a uniform random 32-bit seed / an unguessable reconnect token
@@ -82,6 +82,19 @@ class Room {
     return Math.max(1, this.world ? this.connectedSlots().length : this.playerCount());
   }
 
+  // a colour for a player on side `faction` (see playerColor): the first
+  // no one else on that side has (co-op: no one in the room)
+  pickHue(faction, self) {
+    const used = new Set();
+    for (const s of this.slots) if (s && s !== self && (this.mode !== 'versus' || s.faction === faction)) used.add(s.hue);
+    let h = 0;
+    while (used.has(h)) h++;
+    return h;
+  }
+
+  // players the room holds: versus two sides, else MAX_PLAYERS
+  cap() { return this.mode === 'versus' ? 2 * SIDE_MAX : cfg.MAX_PLAYERS; }
+
   // a new player asks to join. Returns an error key, or null (joined).
   join(cl) {
     if (this.state === 'over') return 'e_over';
@@ -92,7 +105,7 @@ class Room {
       for (const s of this.slots) if (s && !s.connected && (!old || s.lostAt < old.lostAt)) old = s;
       if (old) this.leave(old);
     }
-    if (this.playerCount() >= cfg.MAX_PLAYERS) return 'e_full';
+    if (this.playerCount() >= this.cap()) return 'e_full';
     let idx = this.slots.findIndex(s => !s);
     if (idx < 0) idx = this.slots.length;
     // (versus: the side with fewer players)
@@ -100,7 +113,7 @@ class Room {
     const faction = this.mode === 'versus' && sides[1] < sides[0] ? 'red' : 'black';
     const slot = {
       idx, name: cl.name, token: randToken(), client: null, connected: false, lostAt: null,
-      antId: 0, faction, input: { dx: 0, dy: 0, bite: false, build: false },
+      antId: 0, faction, hue: this.pickHue(faction, null), input: { dx: 0, dy: 0, bite: false, build: false },
       shots: { act: 0, abil: 0, mat: 0, mark: 0 }, buys: [], take: null,
       inL: null, inN: 0,
     };
@@ -208,6 +221,7 @@ class Room {
     if (slot.faction === f) return null;
     if (this.sides()[FACTIONS.indexOf(f)] >= SIDE_MAX) return 'e_sideFull';
     slot.faction = f;
+    slot.hue = this.pickHue(f, slot);
     this.broadcastLobby();
     return null;
   }
@@ -243,22 +257,22 @@ class Room {
         year: G.year, season: G.season, legacy: G.legacy, gen: G.gen, sleeping: this.hibernating,
       };
     }
-    return { code: this.code, mode: this.mode, players: this.playerCount(), max: cfg.MAX_PLAYERS,
-      host: this.host ? this.host.name : '' };
+    return { code: this.code, mode: this.mode, players: this.playerCount(), max: this.cap(),
+      host: this.host ? this.host.name : '', on: this.state === 'play' ? 1 : 0 };
   }
-  // listed under OPEN MATCHES: public, in the lobby, someone (connected) in
-  // it, room to spare
+  // listed under OPEN MATCHES: public, in the lobby or under way (a joiner
+  // picks an ant, see join), someone (connected) in it, room to spare
   open() {
-    return !this.world && !this.closed && this.pub && this.state === 'lobby' && this.connectedSlots().length > 0 &&
-      this.playerCount() < cfg.MAX_PLAYERS;
+    return !this.world && !this.closed && this.pub && (this.state === 'lobby' || this.state === 'play') &&
+      this.connectedSlots().length > 0 && this.playerCount() < this.cap();
   }
 
   broadcastLobby() {
-    const players = this.slots.map(s => s && { n: s.name, on: s.connected ? 1 : 0, f: s.faction });
+    const players = this.slots.map(s => s && { n: s.name, on: s.connected ? 1 : 0, f: s.faction, h: s.hue });
     for (const s of this.slots) {
       if (!s || !s.client) continue;
       s.client.send({
-        t: 'lobby', code: this.code, mode: this.mode, state: this.state, max: cfg.MAX_PLAYERS,
+        t: 'lobby', code: this.code, mode: this.mode, state: this.state, max: this.cap(),
         you: s.idx, host: this.host ? this.host.idx : -1, token: s.token, faction: s.faction, players,
         pub: this.pub ? 1 : 0, name: this.name,
       });

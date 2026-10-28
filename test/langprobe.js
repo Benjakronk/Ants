@@ -34,6 +34,7 @@ const path = require('path');
       LANG = lang;
       introText().forEach(scan);
       helpText().forEach(([line]) => scan(line));
+      for (const m of ['solo', 'coop', 'versus', 'world']) for (const pg of helpPages(m)) { scan(pg.title); pg.lines.forEach(([line]) => scan(line)); }
     }
     LANG = 0;
     return [...out];

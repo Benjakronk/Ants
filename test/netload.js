@@ -1,9 +1,9 @@
-// Online load: one room, 4 (or --bots N, up to 8) bot players sending random input for ~2 minutes
+// Online load: one room, 4 (or --bots N, up to 8; --versus: a versus room, up to 16) bot players sending random input for ~2 minutes
 // on a mid-game colony; reports the server's ms per tick (the sim's step
 // averaged over the whole run, and the snapshots on top), its CPU use, the
 // load the server's guard sees (/api/health), and the bytes per second each
 // client receives (JSON, and on the wire after permessage-deflate).
-//   node test/netload.js [seconds=120] [--natural] [--bots N]
+//   node test/netload.js [seconds=120] [--natural] [--bots N] [--versus]
 // (--natural: the colony as a day of play left it, ~35 ants; by default it
 // is crowded up to a busy summer nest, 45 black + 35 red)
 const { spawn } = require('child_process');
@@ -15,7 +15,8 @@ const WebSocket = require(path.join(ROOT, 'server', 'node_modules', 'ws'));
 
 const SECONDS = Number(process.argv[2]) || 120;   // (a number first: --bots N alone keeps 120)
 const NATURAL = process.argv.includes('--natural');
-const BOTS = Math.max(1, Math.min(8, Number(process.argv[process.argv.indexOf('--bots') + 1]) || 4));
+const VERSUS = process.argv.includes('--versus');
+const BOTS = Math.max(VERSUS ? 2 : 1, Math.min(VERSUS ? 16 : 8, Number(process.argv[process.argv.indexOf('--bots') + 1]) || 4));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fails = [];
 const check = (name, ok, info) => {
@@ -98,7 +99,7 @@ function bot(port, name, idx) {
   const bots = Array.from({ length: BOTS }, (_, i) => bot(port, 'BOT' + (i + 1), i));
   await Promise.all(bots.map(b => b.open));
   for (const b of bots) b.send({ t: 'hello', v: 1, name: b.name });
-  bots[0].send({ t: 'create' });
+  bots[0].send({ t: 'create', mode: VERSUS ? 'versus' : 'coop' });
   const lobby = await bots[0].wait(m => m.t === 'lobby');
   for (const b of bots.slice(1)) b.send({ t: 'join', code: lobby.code });
   await Promise.all(bots.slice(1).map(b => b.wait(m => m.t === 'lobby')));

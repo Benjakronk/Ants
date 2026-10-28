@@ -42,7 +42,8 @@ Settings come from the environment or `server/.env` (see
 |---|---|---|
 | `PORT`, `HOST` | `3006`, `127.0.0.1` | where the server listens |
 | `MAX_ROOMS` | `4` | matches at once (lobbies included; the persistent worlds come on top) |
-| `MAX_PLAYERS` | `8` | players per room, 1-8 (versus: at most half of them a side, so 4v4) |
+| `MAX_PLAYERS` | `8` | players per co-op room and persistent world, 1-8 |
+| `SIDE_MAX` | `8` | versus: players a side, 1-8 (8v8: a room of 16) |
 | `CPU_BUDGET_MS` | `10` | the CPU every running room together may use, in ms per 16.7 ms frame (about 60% of a core); above it new matches and joins are refused with SERVER FULL |
 | `PERSIST_WORLDS` | `1` | persistent worlds: a count (the first of `MAURTUA`, `ENGA`, `SKOGEN`, `LYNGEN`) or a comma-separated list of names; `0` for none |
 | `DATA_DIR` | `server/data` | where the worlds are saved (JSON, one file per world plus a `.bak`; gitignored). Must be writable, and backed up |
@@ -100,10 +101,13 @@ offers four ways in:
   MATCHES) or **private** (by code only). You get a four-letter **room
   code** (no I or O, case doesn't matter).
 - **JOIN WITH A CODE** -- any match, public or private.
-- **OPEN MATCHES** -- public matches still in their lobby with room to spare.
+- **OPEN MATCHES** -- public matches with room to spare, in their lobby or
+  already **UNDER WAY** (you join the running match and pick an ant).
 
 The lobby lists everyone in their colours, in two columns of four (versus:
-black on the left, red on the right; a player who dropped out is dimmed).
+black on the left, red on the right, up to eight each under a smaller room
+code; a player who dropped out is dimmed). `H` opens the help: how the
+match works and how it's won, what to do through the year, the controls.
 The host presses `Enter` to start, `Tab` to make the match public or
 private, and `Up`/`Down` + `X` to kick a player (who is told so). Someone
 who joins a match already under way picks an ant from the colony (**JOIN
@@ -112,14 +116,16 @@ is left), **A NEW WORKER** comes out of the entrance for them -- the same
 after a death with no ant free. When the server is busy
 (too many matches, or its CPU budget used up) it says **SERVER FULL**.
 
-**Versus**: black against red, 1-4 players a side (`Left`/`Right` in the
+**Versus**: black against red, 1-8 players a side (`Left`/`Right` in the
 lobby picks yours; the host can start once both sides have a player). Each
 side plays its own colony -- its own ants to take over (never the queen),
 its own milestones, crystals and upgrades, its own HUD, map, `O` screen
 and guide arrow, its own messages -- and never sees the other side's
 stores, crystals or milestones. Both nests are made equal from the seed
 (each pair of matching chambers counts only the smaller one's room, and
-both start with the same household), each side passes only its own ant
+both start with the same household, a worker more for each player beyond
+the first on the bigger side, so an 8v8 still has NPCs to forage), each
+side passes only its own ant
 gates, the queens are equally tough, and there are no AI raids (the NPCs
 of both colonies forage, nurse and defend; the attacking is the players'
 job -- a soldier's `Q` brings an escort). Kill the enemy queen while she
@@ -134,8 +140,9 @@ left out), and the same colours on the map -- and `Tab` or a death hands
 you any ant no other player has. The
 milestones, the crystals and the upgrades (`O`, any player may buy) belong
 to the colony; the hints and the guide arrow are your own. Nothing pauses:
-`Esc` opens a menu with **RESUME** and **LEAVE MATCH** (**LEAVE WORLD**, back
-to the world list) while the world runs on. If the connection drops, the game says so and
+`Esc` opens a menu with **RESUME**, **HELP** (the same pages as the lobby's
+`H`, for the mode played) and **LEAVE MATCH** (**LEAVE WORLD**, back to the
+world list) while the world runs on; a message at the start points to it. If the connection drops, the game says so and
 reconnects by itself (reloading the page works too): for two minutes your
 place is kept and your ant carries on as one of the colony until you are
 back. When a match's year ends (the nuptial flight, or the colony lost)
@@ -502,10 +509,11 @@ node test/eightprobe.js   # rooms of 8 and the balance by player count: the
                           # the count only rising; v8 saves + older ones
                           # migrated; a fresh worker when no ant is free),
                           # then raw clients (8 in co-op, the 9th refused,
-                          # versus 4v4 and a 5th on a side refused, a
+                          # versus 8v8, a 9th on a side refused, the 17th
+                          # turned away, a colour each on a side, a
                           # mid-match joiner's fresh worker, a persistent
-                          # world) and a page: the lobby of 8 (co-op and
-                          # versus) and name tags, as screenshots
+                          # world) and a page: the lobby of 8 (co-op) and
+                          # 16 (versus) and name tags, as screenshots
                           # (--no-browser skips the page)
 node test/netload.js      # one room, 4 bots (--bots N: up to 8), 2 minutes
                           # on a busy colony: server ms/tick (the whole

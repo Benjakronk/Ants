@@ -122,7 +122,7 @@ function playersView(sim, slots) {
     if (!s) return null;
     const a = p.ant && p.ant.hp > 0 ? p.ant : null;
     return {
-      n: s.name, on: s.connected ? 1 : 0, a: a ? a.id : 0, bm: p.buildMat, c: p.col || 0,
+      n: s.name, on: s.connected ? 1 : 0, a: a ? a.id : 0, bm: p.buildMat, c: p.col || 0, h: s.hue,
       so: a ? Math.round(a.soil) : 0, th: a ? Math.round(a.thatch) : 0,
       dp: p.deathPos ? pt(p.deathPos) : null,
     };

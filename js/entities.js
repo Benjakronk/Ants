@@ -42,6 +42,14 @@ const LOAD_CAP = 100;
 const PLAYER_COLORS = ['#ffe080', '#80d0ff', '#ff9ec8', '#a8f080',
   '#ffa448', '#c4a0ff', '#f4f4f4', '#40e8c8'];
 
+// player i's colour: online the one the server gave it (no one else on its
+// side has it -- versus 8v8 has sixteen players), else by index
+function playerColor(i) {
+  const p = G.players[i];
+  const h = p && p.hue !== undefined && p.hue !== null ? p.hue : i;
+  return PLAYER_COLORS[h % PLAYER_COLORS.length];
+}
+
 const ITEM_DEF = {
   seed:     { value: 5,  food: true },
   honeydew: { value: 8,  food: true },
@@ -1608,7 +1616,7 @@ class Ant {
       const ty = ey - Math.round(this.hh) - 6 - (G.tick >> 4) % 2;   // the tip
       ctx.fillStyle = '#100804';
       for (let i = 0; i < 4; i++) ctx.fillRect(ex - i - 1, ty - i - 1, 2 * i + 3, 2);
-      ctx.fillStyle = PLAYER_COLORS[this.playerIdx % PLAYER_COLORS.length];
+      ctx.fillStyle = playerColor(this.playerIdx);
       for (let i = 0; i < 3; i++) ctx.fillRect(ex - i, ty - i, 2 * i + 1, 1);
     }
   }

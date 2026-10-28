@@ -6,10 +6,10 @@
 // (notePlayers); saves keeping it (v8) and older saves migrated; a fresh
 // worker for a player with no free ant to take. Then the server as a child
 // process with raw clients: 8 in a co-op room (distinct ants and colours),
-// the 9th turned away, versus 4v4 (a 5th on a side refused), a mid-match
+// the 9th turned away, versus 8v8 (a 9th on a side refused), a mid-match
 // joiner getting a fresh worker, a persistent world balanced for a moving
 // average of the players in it. Last, a browser page: the lobby with 8 players
-// (co-op and versus) and play with several name tags, as screenshots.
+// (co-op) and 16 (versus), and play with several name tags, as screenshots.
 //   node test/eightprobe.js [--no-browser]
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -298,36 +298,46 @@ async function online() {
       sv.pop + sv.brood < sv.cap && sv.raise === 10 && sv.red >= 16, sv);
     for (const b of C) b.ws.close();
 
-    // ---- versus 4v4 ----------------------------------------------------------------
-    const V = await bots(port, ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9']);
+    // ---- versus 8v8 ----------------------------------------------------------------
+    const V = await bots(port, Array.from({ length: 17 }, (_, i) => 'V' + (i + 1)));
     all.push(...V);
     V[0].send({ t: 'create', mode: 'versus' });
     const vl = await V[0].wait(m => m.t === 'lobby');
-    for (const b of V.slice(1, 7)) { b.send({ t: 'join', code: vl.code }); await b.wait(m => m.t === 'lobby'); }
+    for (const b of V.slice(1, 15)) { b.send({ t: 'join', code: vl.code }); await b.wait(m => m.t === 'lobby'); }
     await sleep(200);
-    const sides = () => { const ms = V[0].msgs.filter(m => m.t === 'lobby'); const pl = ms[ms.length - 1].players.filter(Boolean); return pl.map(p => p.f); };
-    const s7 = sides();
-    // a red player tries black, where 4 already are
-    const redBot = V.slice(1, 7).find(b => { const ms = b.msgs.filter(m => m.t === 'lobby'); return ms[ms.length - 1].faction === 'red'; });
+    const lastLobby = () => { const ms = V[0].msgs.filter(m => m.t === 'lobby'); return ms[ms.length - 1]; };
+    const sides = () => lastLobby().players.filter(Boolean).map(p => p.f);
+    const s15 = sides();
+    // a red player tries black, where 8 already are
+    const redBot = V.slice(1, 15).find(b => { const ms = b.msgs.filter(m => m.t === 'lobby'); return ms[ms.length - 1].faction === 'red'; });
     redBot.send({ t: 'side', f: 'black' });
     const sf = await redBot.wait(m => m.t === 'error' && m.key === 'e_sideFull');
-    V[7].send({ t: 'join', code: vl.code });
-    await V[7].wait(m => m.t === 'lobby');
-    V[8].send({ t: 'join', code: vl.code });
-    const vfull = await V[8].wait(m => m.t === 'error' && m.key === 'e_full');
+    V[15].send({ t: 'join', code: vl.code });
+    await V[15].wait(m => m.t === 'lobby');
+    V[16].send({ t: 'join', code: vl.code });
+    const vfull = await V[16].wait(m => m.t === 'error' && m.key === 'e_full');
     await sleep(200);
-    const s8 = sides();
-    check('versus: 7 players split 4 black, 3 red; a 5th on black is refused; the 8th goes red (4v4), the 9th is turned away',
-      s7.filter(f => f === 'black').length === 4 && s7.filter(f => f === 'red').length === 3 && !!sf && !!vfull &&
-      s8.filter(f => f === 'black').length === 4 && s8.filter(f => f === 'red').length === 4, { s7, s8 });
+    const s16 = sides();
+    const vlob = lastLobby();
+    const hues = f => vlob.players.filter(p => p && p.f === f).map(p => p.h);
+    check('versus: 15 players split 8 black, 7 red; a 9th on black is refused; the 16th goes red (8v8), the 17th is turned away',
+      vlob.max === 16 && s15.filter(f => f === 'black').length === 8 && s15.filter(f => f === 'red').length === 7 && !!sf && !!vfull &&
+      s16.filter(f => f === 'black').length === 8 && s16.filter(f => f === 'red').length === 8, { s15, s16, max: vlob.max });
+    check('versus 8v8: 8 different colours on each side', new Set(hues('black')).size === 8 && new Set(hues('red')).size === 8 &&
+      hues('black').concat(hues('red')).every(h => h >= 0 && h < 8), { black: hues('black'), red: hues('red') });
     V[0].send({ t: 'start' });
-    await Promise.all(V.slice(0, 8).map(b => b.wait(m => m.t === 'world', 20000)));
-    for (let i = 0; i < 100 && !V.slice(0, 8).every(b => b.myAnt()); i++) await sleep(50);
+    await Promise.all(V.slice(0, 16).map(b => b.wait(m => m.t === 'world', 20000)));
+    for (let i = 0; i < 100 && !V.slice(0, 16).every(b => b.myAnt()); i++) await sleep(50);
     const vsv = await V[0].dev(`({ slots: playerSlots(), cols: G.players.map(p => p.col), mine: G.players.every(p => p.ant && p.ant.colony === G.colonies[p.col]),
-      pops: G.colonies.map(c => c.members().length), caps: G.colonies.map(c => c.caps.pop) })`);
-    check('versus 4v4 starts: every player plays an ant of its own side, both sides alike, balanced for 4', vsv && vsv.slots === 4 &&
-      vsv.cols.filter(c => c === 0).length === 4 && vsv.cols.filter(c => c === 1).length === 4 && vsv.mine &&
-      vsv.pops[0] === vsv.pops[1] && vsv.caps[0] === vsv.caps[1] && new Set(V.slice(0, 8).map(b => b.myAnt())).size === 8, vsv);
+      pops: G.colonies.map(c => c.members().length), caps: G.colonies.map(c => c.caps.pop),
+      free: G.colonies.map(c => G.ants.filter(a => a.hp > 0 && a.colony === c && a.playerIdx < 0 && a.caste === 'worker').length) })`);
+    check('versus 8v8 starts: every player plays an ant of its own side, both sides alike, balanced for 8, NPC workers left on each side',
+      vsv && vsv.slots === 8 && vsv.cols.filter(c => c === 0).length === 8 && vsv.cols.filter(c => c === 1).length === 8 && vsv.mine &&
+      vsv.pops[0] === vsv.pops[1] && vsv.caps[0] === vsv.caps[1] && vsv.free[0] >= 5 && vsv.free[0] === vsv.free[1] &&
+      new Set(V.slice(0, 16).map(b => b.myAnt())).size === 16, vsv);
+    // (the snapshots carry each player's colour)
+    const vh = await V[0].dev(`G.players.length`);
+    check('versus 8v8: 16 players in the match', vh === 16, vh);
     for (const b of V) b.ws.close();
 
     // ---- a mid-match joiner with no free ant: a fresh worker ---------------------
@@ -370,7 +380,8 @@ async function online() {
     // (followPlayers runs every in-game hour; here a few hours or days of them at once)
     const hours = n => W[0].dev(`(() => { for (let i = 0; i < ${n}; i++) followPlayers();
       return { s: playerSlots(), avg: +G.playerAvg.toFixed(2), present: G.present }; })()`);
-    const w3 = await W[0].dev('({ s: playerSlots(), present: G.present })');
+    // (the average as it was when they came: the server's clock moves it meanwhile)
+    const w3 = await W[0].dev('({ s: playerSlots(), present: G.present, avg: (G.playerAvg = 1) })');
     const brief = await hours(6);           // a quarter of a day with 3
     const long = await hours(66);           // three days with 3
     const raised = await W[0].dev(`G.colony.objectives.list.find(o => o.id === 'raise').need`);
@@ -415,6 +426,7 @@ async function screens(port) {
   });
   const key = async k => { await page.keyboard.press(k); await page.waitForTimeout(70); };
   const NAMES = ['BRAVOBRAVO12', 'CHARLIE', 'DELTA', 'ECHOECHO', 'FOXTROT', 'GOLFGOLFGOLF', 'HOTEL'];
+  const NAMES16 = NAMES.concat(['INDIA', 'JULIETTJULIE', 'KILO', 'LIMA', 'MIKEMIKE', 'NOVEMBER', 'OSCAR', 'PAPA']);
   const others = [];
   try {
     // title -> ONLINE -> name -> CREATE (co-op) -> the lobby
@@ -479,7 +491,7 @@ async function screens(port) {
     await page.evaluate(() => { leaveOnline('title'); G.menuSel = 0; });
     await page.waitForTimeout(300);
 
-    // versus: 4v4 in the lobby
+    // versus: 8v8 in the lobby (the compact layout)
     await key('ArrowDown'); await key('Enter');
     await key('Enter');                               // (the name remembered)
     await key('ArrowDown'); await key('Enter');      // CREATE A MATCH
@@ -488,17 +500,18 @@ async function screens(port) {
     await page.waitForFunction(() => G.state === 'lobby' && Net.code && Net.mode === 'versus', null, { timeout: 8000 });
     const vcode = await page.evaluate(() => Net.code);
     const vb = [];
-    for (const n of NAMES) {
+    for (const n of NAMES16) {
       const [b] = await bots(port, [n]);
       b.send({ t: 'join', code: vcode });
       await b.wait(m => m.t === 'lobby');
       vb.push(b);
     }
-    await page.waitForFunction(() => Net.players.filter(Boolean).length === 8, null, { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => Net.players.filter(Boolean).length === 16, null, { timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(200);
-    const vp = await page.evaluate(() => lobbyPlaces().map(p => [p.pl.f, p.x]));
-    check('the versus lobby: black on the left, red on the right, 4 each', vp.length === 8 &&
-      vp.every(p => (p[0] === 'red') === (p[1] === 166)) && vp.filter(p => p[0] === 'red').length === 4, vp);
+    const vp = await page.evaluate(() => lobbyPlaces().map(p => [p.pl.f, p.x, p.y]));
+    check('the versus lobby: black on the left, red on the right, 8 each, all clear of the notes below (y < 146)', vp.length === 16 &&
+      vp.every(p => (p[0] === 'red') === (p[1] === 166)) && vp.filter(p => p[0] === 'red').length === 8 &&
+      Math.max(...vp.map(p => p[2])) + 7 < 146 && new Set(vp.map(p => p[1] + ',' + p[2])).size === 16, vp);
     await page.screenshot({ path: 'test/shot-8-vs-lobby.png' });
     for (const b of vb) b.ws.close();
     // Norwegian: the same lobby's strings have their glyphs (langprobe checks every string)

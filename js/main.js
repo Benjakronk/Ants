@@ -1124,7 +1124,7 @@ function drawNameTags(camx, camy, vw, vh) {
     const r = { x: ex - (w >> 1), y: ey - 1, w, h: 10 };
     ctx.fillStyle = 'rgba(16,8,4,0.7)';
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    drawTextCS(ctx, p.name, ex, ey, PLAYER_COLORS[i % PLAYER_COLORS.length]);
+    drawTextCS(ctx, p.name, ex, ey, playerColor(i));
     keep.push(r);
     Labels.rects.push(r);
   }
@@ -1713,7 +1713,7 @@ function drawMapAnts(mx, my, sx, sy, wx0, wy0, wx1, wy1) {
       ctx.fillStyle = '#000000';
       ctx.fillRect(x - 1, y, 2, 2);
     }
-    ctx.fillStyle = a.playerIdx >= 0 ? PLAYER_COLORS[a.playerIdx % PLAYER_COLORS.length]
+    ctx.fillStyle = a.playerIdx >= 0 ? playerColor(a.playerIdx)
       : red ? enemyDot(a.colony) : a.caste === 'queen' ? '#ff40c0' : '#e0a060';
     const sz = a.playerIdx >= 0 && (G.tick >> 3) % 2 ? 3 : 2;
     ctx.fillRect(x - 1, y - 1, sz, sz);
@@ -1892,7 +1892,7 @@ function updateTitle() {
     switch (items[G.menuSel].id) {
       case 'solo': G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
       case 'online': G.state = 'netname'; Net.err = null; break;
-      case 'help': G.prevState = 'title'; G.state = 'help'; break;
+      case 'help': openHelp('solo'); G.prevState = 'title'; G.state = 'help'; break;
       case 'sound': Sfx.toggleMute(); break;
       case 'crt': document.getElementById('crt').classList.toggle('off'); break;
       case 'lang': setLang(LANG === 0); break;
@@ -1999,28 +1999,47 @@ function updateIntro() {
   }
 }
 
+// the help screen: pages for a mode (see helpPages), over whatever opened
+// it -- its own state from the title and the solo pause menu; online an
+// overlay (G.help) on the lobby or the menu, the world running on under it
+function openHelp(mode) { G.help = { mode, page: 0 }; }
+
 function drawHelp() {
+  const pages = helpPages(G.help ? G.help.mode : 'solo');
+  const pg = pages[Math.min(G.help ? G.help.page : 0, pages.length - 1)];
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  drawTextCS(ctx, L('ui_howto'), VIEW_W / 2, 12, '#ffa040', 2);
+  drawTextCS(ctx, pg.title, VIEW_W / 2, 12, '#ffa040', 2);
   let y = 32;
-  for (const [line, color] of helpText()) {
+  for (const [line, color] of pg.lines) {
     if (line) drawText(ctx, line, 24, y, color);
     y += 9;
   }
-  drawTextC(ctx, L('ui_escBack'), VIEW_W / 2, 186, '#706050');
+  const keys = pages.length > 1 ? L('ui_helpKeys', G.help.page + 1, pages.length) : L('ui_escBack');
+  drawTextC(ctx, keys, VIEW_W / 2, 186, '#706050');
+}
+
+// the help screen's keys: Left/Right turn the pages, Esc (Enter, Space)
+// closes it. Returns false once closed.
+function helpKeys() {
+  const h = G.help, n = helpPages(h.mode).length;
+  if (tookPress('ArrowLeft') || tookPress('KeyA')) { h.page = (h.page + n - 1) % n; Sfx.play('menu'); }
+  if (tookPress('ArrowRight') || tookPress('KeyD')) { h.page = (h.page + 1) % n; Sfx.play('menu'); }
+  if (tookPress('Escape') || tookPress('Enter') || tookPress('Space')) { G.help = null; Sfx.play('menu'); return false; }
+  return true;
 }
 
 function updateHelp() {
-  if (tookPress('Escape') || tookPress('Enter') || tookPress('Space')) {
-    G.state = G.prevState === 'pause' ? 'pause' : G.prevState;
-    Sfx.play('menu');
-  }
+  if (!G.help) openHelp('solo');
+  if (!helpKeys()) G.state = G.prevState === 'pause' ? 'pause' : G.prevState;
 }
 
 function pauseItems() {
   // (online nothing pauses: the menu just covers the running world)
-  if (G.online) return [{ id: 'resume', label: L('ui_resume') }, { id: 'leave', label: L(G.mode === 'world' ? 'ui_leaveWorld' : 'ui_leaveMatch') }];
+  if (G.online) {
+    return [{ id: 'resume', label: L('ui_resume') }, { id: 'help', label: L('ui_help') },
+      { id: 'leave', label: L(G.mode === 'world' ? 'ui_leaveWorld' : 'ui_leaveMatch') }];
+  }
   const items = [
     { id: 'resume', label: L('ui_resume') },
     { id: 'save', label: L('ui_saveGame') },
@@ -2032,6 +2051,7 @@ function pauseItems() {
 }
 
 function drawPause() {
+  if (G.help) { drawHelp(); return; }   // (online: the help over the running world)
   drawPlay();
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -2054,6 +2074,7 @@ function updatePause() {
     Net.frame();
     worldTick();
     if (G.state !== 'pause') return;
+    if (G.help) { helpKeys(); return; }
   }
   if (tookPress('Escape') || (G.online && tookPress('KeyP'))) { G.state = 'play'; return; }
   const items = pauseItems();
@@ -2068,7 +2089,8 @@ function updatePause() {
         G.state = 'play';
         break;
       case 'help':
-        G.prevState = 'pause'; G.state = 'help';
+        openHelp(G.online ? G.mode : 'solo');
+        if (!G.online) { G.prevState = 'pause'; G.state = 'help'; }
         break;
       case 'hints':
         Tut.setOn(!Tut.on);
@@ -2095,7 +2117,7 @@ function drawTakeover() {
   // (the panel widens for a long title, in big letters)
   const pw = Math.min(VIEW_W - 8, Math.max(180, textWidth(title) * 2 + 16));
   bevelPanel(Math.round((VIEW_W - pw) / 2), 30, pw, 140);
-  const pcol = PLAYER_COLORS[LOCAL % PLAYER_COLORS.length];
+  const pcol = playerColor(LOCAL);
   if (tk.live) {
     drawTextCS(ctx, L('ui_switchAnt'), VIEW_W / 2, 38, pcol, 2);
     drawTextC(ctx, L('ui_lendLegs'), VIEW_W / 2, 58, '#c8b890');
@@ -2434,6 +2456,9 @@ function drawNetOpen() {
     const pl = m.players + '/' + m.max;
     drawText(ctx, pl, 288 - textWidth(pl), y, '#80d0ff');
     drawText(ctx, L('ui_hostIs', m.host), 32, y + 9, '#a09070');
+    // (a match already under way: joiners pick an ant from the colony)
+    const st = L(m.on ? 'ui_underWay' : 'ui_inLobby');
+    drawText(ctx, st, 288 - textWidth(st), y + 9, m.on ? '#ffb040' : '#a09070');
   });
   drawBrowseFoot('ui_noOpen', list);
 }
@@ -2533,48 +2558,58 @@ function lobbySides() {
   return n;
 }
 
-// the lobby's player list: two columns of LOBBY_ROWS (co-op: the first four
-// players on the left, the rest on the right; versus: black left, red right),
-// the empty places dimmed
-const LOBBY_ROWS = 4, LOBBY_Y = 104, LOBBY_COL = [10, 166];
+// the lobby's player list: two columns (co-op: the first four players on
+// the left, the rest on the right; versus: black left, red right), the empty
+// places dimmed. Four rows of 10 px under the big room code -- or, versus
+// with more than four a side, up to eight rows of 8 px under a smaller one
+const LOBBY_COL = [10, 166];
+function lobbyLayout() {
+  const rows = Net.mode === 'versus' ? Math.max(1, Math.min(8, Math.ceil(Net.max / 2))) : 4;
+  return rows > 4 ? { rows, y: 82, dy: 8, compact: true } : { rows, y: 104, dy: 10, compact: false };
+}
 function lobbyPlaces() {
   const vs = Net.mode === 'versus';
+  const { rows, y: y0, dy } = lobbyLayout();
   const out = [];
   const fill = [0, 0];
   Net.players.forEach((pl, i) => {
     if (!pl) return;
-    const c = vs ? (pl.f === 'red' ? 1 : 0) : Math.min(1, Math.floor(fill[0] / LOBBY_ROWS));
-    const r = vs ? fill[c]++ : fill[0]++ % LOBBY_ROWS;
-    if (r < LOBBY_ROWS) out.push({ pl, i, x: LOBBY_COL[c], y: LOBBY_Y + r * 10 });
+    const c = vs ? (pl.f === 'red' ? 1 : 0) : Math.min(1, Math.floor(fill[0] / rows));
+    const r = vs ? fill[c]++ : fill[0]++ % rows;
+    if (r < rows) out.push({ pl, i, x: LOBBY_COL[c], y: y0 + r * dy });
   });
   return out;
 }
 
 function drawLobby() {
+  if (G.help) { drawHelp(); return; }
   const vs = Net.mode === 'versus';
   netBackdrop(L(vs ? 'ui_modeVersus' : 'ui_modeCoop'));
-  drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, 32, '#b09060');
-  drawTextCS(ctx, Net.code || '----', VIEW_W / 2, 42, '#ffe040', 4);
-  drawTextC(ctx, L('ui_shareCode'), VIEW_W / 2, 72, '#806e58');
+  const lay = lobbyLayout(), rows = lay.rows;
+  // (compact: the room code at half size, no line under it)
+  drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, lay.compact ? 30 : 32, '#b09060');
+  drawTextCS(ctx, Net.code || '----', VIEW_W / 2, lay.compact ? 39 : 42, '#ffe040', lay.compact ? 2 : 4);
+  if (!lay.compact) drawTextC(ctx, L('ui_shareCode'), VIEW_W / 2, 72, '#806e58');
   // (the head count and public/private on one line)
   const n = Net.players.filter(Boolean).length;
   const pc = L('ui_lobbyPlayers', n, Net.max), pv = L(Net.pub ? 'ui_lobbyPub' : 'ui_lobbyPriv');
   const px = Math.round(VIEW_W / 2 - (textWidth(pc) + 18 + textWidth(pv)) / 2);
-  drawText(ctx, pc, px, 82, '#c8b890');
-  drawText(ctx, pv, px + textWidth(pc) + 18, 82, Net.pub ? '#a8e8a0' : '#a09070');
+  const py = lay.compact ? 58 : 82;
+  drawText(ctx, pc, px, py, '#c8b890');
+  drawText(ctx, pv, px + textWidth(pc) + 18, py, Net.pub ? '#a8e8a0' : '#a09070');
   // versus: a heading over each side's column
   const side = vs ? lobbySides() : null;
-  const sideMax = Math.min(LOBBY_ROWS, Math.ceil(Net.max / 2));
+  const sideMax = vs ? rows : 0;
   if (vs) {
-    drawTextC(ctx, L('ui_black') + ' ' + side[0] + '/' + sideMax, LOBBY_COL[0] + 73, 93, '#d8d4e4');
-    drawTextC(ctx, L('ui_red') + ' ' + side[1] + '/' + sideMax, LOBBY_COL[1] + 73, 93, '#ff7060');
+    drawTextC(ctx, L('ui_black') + ' ' + side[0] + '/' + sideMax, LOBBY_COL[0] + 73, lay.y - 11, '#d8d4e4');
+    drawTextC(ctx, L('ui_red') + ' ' + side[1] + '/' + sideMax, LOBBY_COL[1] + 73, lay.y - 11, '#ff7060');
   }
   // the empty places, then the players
   for (let c = 0; c < 2; c++) {
-    const have = vs ? side[c] : Math.max(0, Math.min(LOBBY_ROWS, n - c * LOBBY_ROWS));
-    const room = vs ? sideMax : Math.max(0, Math.min(LOBBY_ROWS, Net.max - c * LOBBY_ROWS));
+    const have = vs ? side[c] : Math.max(0, Math.min(rows, n - c * rows));
+    const room = vs ? sideMax : Math.max(0, Math.min(rows, Net.max - c * rows));
     for (let r = have; r < room; r++) {
-      const x = LOBBY_COL[c], y = LOBBY_Y + r * 10;
+      const x = LOBBY_COL[c], y = lay.y + r * lay.dy;
       ctx.fillStyle = '#2a1e14';
       ctx.fillRect(x + 1, y - 1, 9, 9);
       ctx.fillStyle = '#0c0805';
@@ -2583,7 +2618,7 @@ function drawLobby() {
   }
   const host = Net.you === Net.host && Net.roomState === 'lobby';
   for (const { pl, i, x, y } of lobbyPlaces()) {
-    const col = PLAYER_COLORS[i % PLAYER_COLORS.length];
+    const col = PLAYER_COLORS[(pl.h !== undefined && pl.h !== null ? pl.h : i) % PLAYER_COLORS.length];
     // (the host's cursor, for a kick)
     if (host && i === G.lobbySel && i !== Net.you) drawText(ctx, '\x06', x - 9, y, '#ffe040');
     ctx.fillStyle = '#000000';
@@ -2615,6 +2650,9 @@ function drawLobby() {
 
 function updateLobby() {
   Net.poll();
+  if (G.state !== 'lobby') return;
+  if (G.help) { helpKeys(); return; }
+  if (tookPress('KeyH')) { openHelp(Net.mode === 'versus' ? 'versus' : 'coop'); Sfx.play('menu'); return; }
   if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); return; }
   if (Net.roomState !== 'lobby' || Net.status !== 'open') return;
   // versus: pick a side
@@ -2647,7 +2685,7 @@ function updateLobby() {
 function leaveOnline(state) {
   Net.leave();
   G.online = false; G.running = false;
-  G.takeover = null; G.objScreen = null; G.showMap = false;
+  G.takeover = null; G.objScreen = null; G.showMap = false; G.help = null;
   LOCAL = 0; G.colIdx = 0; G.mode = 'solo';
   G.rebornNote = null;
   G.state = state; G.menuSel = state === 'title' ? 1 : 0;
@@ -2682,6 +2720,7 @@ function netOnWorldReady(fresh) {
   G.running = true;
   enterWorld('net');
   G.rebornNote = null;
+  if (!wasPlaying) G.help = null;   // (the lobby's help, closed as the match starts)
   if (fresh && Net.reborn) {
     // our persistent world started over (its colony lost): no welcome, no
     // tutorial again -- JOIN THE COLONY says what happened, the sim's
@@ -2700,6 +2739,7 @@ function netOnWorldReady(fresh) {
       pushMsg(Ln('m_coopStart', Net.players.filter(Boolean).length), '#80ff80');
     }
     if (!Tut.active()) pushMsg(L('m_objHint'), '#ffd890');
+    pushMsg(L('m_helpHint'), '#ffd890');
   }
   if (!wasPlaying) { G.state = 'play'; Sfx.play('select'); }
 }

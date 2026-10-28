@@ -378,11 +378,14 @@ function newWorld(seed, playerCount, mode, slots) {
   const c = G.colonies[0];
   const vs = G.mode === 'versus';
   // the royal households: ours, and the rival's across the forest (in
-  // versus the same household on both sides; in co-op a rival grown to
-  // match the players, see SLOT_RIVAL)
-  populateColony(c, BLACK_WORKERS, BLACK_SOLDIERS);
+  // versus the same household on both sides, a worker more for each player
+  // beyond the first on the bigger side -- its players take ants the colony
+  // has, and an 8v8 would otherwise leave hardly any to forage; in co-op a
+  // rival grown to match the players, see SLOT_RIVAL)
+  const vw = vs ? BLACK_WORKERS + playerSlots() - 1 : BLACK_WORKERS;
+  populateColony(c, vw, BLACK_SOLDIERS);
   const rx = n => n + Math.round(n * (slotScale(SLOT_RIVAL) - 1));
-  populateColony(G.colonies[1], vs ? BLACK_WORKERS : rx(RED_WORKERS), vs ? BLACK_SOLDIERS : rx(RED_SOLDIERS));
+  populateColony(G.colonies[1], vs ? vw : rx(RED_WORKERS), vs ? BLACK_SOLDIERS : rx(RED_SOLDIERS));
 
   // player ants, side by side at the entrance
   const used = [];
@@ -1132,7 +1135,7 @@ function takeOver(pIdx, caste, refX, refY) {
   p.ant = a;
   p.deathPos = null;
   p.input = newInput();
-  G.msg('m_nowPlaying', [{ caste: a.caste }], PLAYER_COLORS[pIdx % PLAYER_COLORS.length], pIdx);
+  G.msg('m_nowPlaying', [{ caste: a.caste }], playerColor(pIdx), pIdx);
   return a;
 }
 

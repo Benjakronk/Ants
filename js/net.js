@@ -452,16 +452,16 @@ const Net = {
         p.name = null; p.online = false; p.antId = 0; p.deathPos = null;
       } else {
         p.name = v.n; p.online = !!v.on; p.antId = v.a; p.buildMat = v.bm;
-        p.soil = v.so; p.thatch = v.th; p.deathPos = v.dp; p.col = v.c || 0;
+        p.soil = v.so; p.thatch = v.th; p.deathPos = v.dp; p.col = v.c || 0; p.hue = v.h;
       }
       // (versus: a red player sees through the red colony's eyes)
       if (i === LOCAL) G.colIdx = p.col || 0;
       // tell the others who came, went, dropped out and came back
       if (i !== LOCAL && this.ready) {
-        if (v && !was.name) { pushMsg(L('m_netJoined', v.n), PLAYER_COLORS[i % PLAYER_COLORS.length]); Sfx.play('select'); }
+        if (v && !was.name) { pushMsg(L('m_netJoined', v.n), playerColor(i)); Sfx.play('select'); }
         else if (!v && was.name) { pushMsg(L('m_netLeft', was.name), '#c0a080'); Sfx.play('menu'); }
         else if (v && was.on && !v.on) { pushMsg(L('m_netDropped', v.n), '#c0a080'); Sfx.play('menu'); }
-        else if (v && !was.on && v.on) { pushMsg(L('m_netBack', v.n), PLAYER_COLORS[i % PLAYER_COLORS.length]); Sfx.play('select'); }
+        else if (v && !was.on && v.on) { pushMsg(L('m_netBack', v.n), playerColor(i)); Sfx.play('select'); }
       }
     }
     G.players.length = Math.max(list.length, LOCAL + 1);
