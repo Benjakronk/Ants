@@ -936,7 +936,10 @@ class Colony {
       // little score)
       this.crystals++;
       this.stats.crystalsFound++;
-      if (who && who.playerIdx >= 0 && G.players[who.playerIdx]) G.players[who.playerIdx].stats.crystals++;
+      if (who && who.playerIdx >= 0 && G.players[who.playerIdx]) {
+        G.players[who.playerIdx].stats.crystals++;
+        G.players[who.playerIdx].stats.seek++;   // (seeker's work, see jobValue)
+      }
       this.score += 20;
       this.progress('crystal', 1);
       objEvent('crystals', 1, this);
@@ -947,7 +950,9 @@ class Colony {
       // the colony passes a forager's leaf on to the fungus garden
       this.feedGarden(this.gardenNear(this.storage.x, this.storage.y, 1e5), LEAF_UNITS);
     } else {
-      const v = Math.min(Number(item.value) || 0, this.caps.food - this.food);
+      // (a forager's load is worth more: see JOB_CARRY in game.js)
+      const worth = (Number(item.value) || 0) * (who && onJob(who, 'forager') ? JOB_CARRY : 1);
+      const v = Math.min(worth, this.caps.food - this.food);
       this.food += v;
       this.stats.foodGathered += v;
       if (who && who.playerIdx >= 0) {
@@ -1245,6 +1250,8 @@ class Colony {
           }
           // (only news if raiders were actually seen at the nest lately)
           if (r.warned && raiders.length && r.t - (r.nearT || 0) < 1200) target.say(this.player ? 'm_raidOverP' : 'm_raidOver', [], '#e0c080');
+          // (turned back at the nest: its defenders at home get the guard credit)
+          if (r.warned && !looted && target.player) raidRepelled(target);
           this.say('m_raidBack', [Math.round(r.stolen)], '#e0c080');
         }
       } else if (!raiders.length) {
@@ -1300,7 +1307,8 @@ class Colony {
 
   // player pIdx calls a raid (Z): the colony's fit NPCs march on the enemy's
   // nest the way the red AI's raiders do -- soldiers to fight, workers to
-  // carry off food -- and the players go along as they like
+  // carry off food -- and the players go along as they like. Returns true
+  // if a raid set out.
   callRaid(pIdx) {
     const no = key => { G.msg(key, [Math.ceil((this.raidReadyT - G.tick) / 60)], '#ff8040', pIdx); G.sfx('clank'); };
     if (this.raid) return no('m_raidOn');
@@ -1311,6 +1319,7 @@ class Colony {
     if (!n) return no('m_raidFew');
     G.msg('m_raidGo', [n], '#ff8040', null, this.idx);
     this.sfx('danger');
+    return true;
   }
 
   // a raider at the enemy's stores takes what it can carry
@@ -1751,6 +1760,7 @@ function relicIn(it, c, who) {
     c.score += RELIC_SCORE;
     c.crystals += RELIC_CRYSTALS;
     c.say('m_relicHome', [RELIC_CRYSTALS, st ? st.got : 1], '#ffe040');
+    if (who && who.playerIdx >= 0 && G.players[who.playerIdx]) G.players[who.playerIdx].stats.seek += 3;
     c.sfx('task');
     const r = relicFoe(c);
     if (r) r.say('m_relicHomeFoe', [], '#ff9040');
@@ -1760,6 +1770,7 @@ function relicIn(it, c, who) {
     if (st && st.id === it.id) { st.ph = 'denied'; st.id = 0; }
     c.score += RELIC_DENY;
     c.say('m_relicDeniedUs', [RELIC_DENY], '#ffe040');
+    if (who && who.playerIdx >= 0 && G.players[who.playerIdx]) G.players[who.playerIdx].stats.seek++;
     c.sfx('task');
     if (owner) owner.say('m_relicDenied', [], '#ff7040');
     G.fx('dirt', at.x, at.y - 4, 8);

@@ -293,6 +293,8 @@ function handle(cl, m) {
       return;
     }
     case 'pub': { const err = room.setPublic(cl, bool(m.on)); if (err) fail(cl, err); return; }
+    // the lobby: the job this player would like (anything else: any)
+    case 'jobpref': { const err = room.setJobPref(slot, typeof m.j === 'string' ? m.j : null); if (err) fail(cl, err); return; }
     case 'kick': {
       const err = Number.isInteger(m.idx) ? room.kick(cl, m.idx) : null;
       if (err) fail(cl, err);
@@ -322,8 +324,11 @@ function handle(cl, m) {
       inp.paint = inp.plan && (m.paint === 1 || m.paint === 2) ? m.paint : 0;
       return;
     }
-    case 'act': case 'abil': case 'mat': case 'mark': case 'raid':
+    case 'act': case 'abil': case 'mat': case 'mark': case 'raid': case 'job':
       slot.shots[m.t] = Math.min(3, slot.shots[m.t] + 1);
+      return;
+    case 'jobset':   // (the O screen's job page: a job by name)
+      if (typeof m.j === 'string' && room.sim.JOBS.includes(m.j)) slot.jobSet = m.j;
       return;
     case 'buy':
       if (typeof m.id === 'string' && room.sim.UPGRADE_IDS.includes(m.id) && slot.buys.length < 4) slot.buys.push(m.id);

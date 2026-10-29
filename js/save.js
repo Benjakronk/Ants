@@ -22,9 +22,11 @@ const SAVE_PREFIX = 'maur_world_';
 // count this year; a seed item's colony and whether it was dropped; older:
 // none out, nothing brought home yet). Worlds made from v11 on also have
 // the contested crystal field (crystalField) -- in their terrain, which the
-// save keeps as it is either way.
-// restoreWorld still loads v2-v10 saves (missing fields get defaults).
-const SAVE_VERSION = 11;
+// save keeps as it is either way. v12: each player's job and its season's
+// goals so far (pjobs: { j, b: the goals' base, d: those met}; the tally's
+// job counts ride in pstats; older saves: a job given afresh on loading).
+// restoreWorld still loads v2-v11 saves (missing fields get defaults).
+const SAVE_VERSION = 12;
 
 // run-length encode the terrain bytes: [val, lo(count), hi(count)] triplets
 function rleEncode(arr) {
@@ -165,6 +167,7 @@ function serializeWorld() {
     wear: T.wearList(),
     buildMats: G.players.map(p => p.buildMat),
     pstats: G.players.map(p => p.stats),
+    pjobs: G.players.map(p => ({ j: p.job || null, b: p.jb || null, d: p.jgDone || 0 })),
     nextId: ENT_ID,
     ants: G.ants.filter(a => a.hp > 0).map(serializeAnt),
     brood: G.brood.filter(b => !b.dead).map(serializeBrood),

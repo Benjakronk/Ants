@@ -335,3 +335,45 @@ that march out from their own nest. This is also the foundation for versus.
    - The CRT filter toggles on `V` everywhere (C switches ants in play, and
      toggled the filter from overlays and menus).
    `test/raidprobe.js`.
+11. **Jobs.** Players in test sessions were lost (what to do, where to go,
+   how the colony works): now every player has a job -- a nudge, never a
+   lock (`J` the next one, the `O` screen's new **YOUR JOB** page picks one;
+   free, any time). `JOBS` in game.js: **FORAGER**, **BUILDER**, **GUARD**,
+   **SEEKER**. A job sets the guide arrow (`jobTarget` in main.js: food /
+   the blueprint, the winter gate, a cramped chamber, the mound / a raid,
+   an enemy seed carrier, an intruder, the bitten queen, the nest / our
+   seed, our raid's target, the crystal field), the season's goal on the
+   HUD's first row (`jobGoal`: food stored 60, px built + dug/4 300 or a
+   dig task finished, guard points 8, seeker points 3 in a FULL year, x
+   sqrt of the year's share; met once a season: a toast, +50 for a player's first goal of the season; the colony's
+   task line takes the row a third of the time) and a small perk on the
+   job (sim-side): FORAGER +25% food a load stored, BUILDER a stamp/fill
+   every 6 ticks instead of 8 (+33%), GUARD +20% bite within `TERRITORY`
+   (600 px) of its nest, SEEKER +15% walking speed beyond it (`jobSpeed`
+   in `steerAnt`, so the client's prediction agrees). NPCs follow lightly:
+   a guard's rally near home puts the soldiers on patrol round the nest
+   (`rallyPatrol`), a forager's find with more food about calls up to 3
+   idle workers within 700 px (`forageCall`, 20 s apart). Assignment
+   (`assignJobs`, `pickJob`): lobby preferences (`J` in the lobby,
+   `jobpref`; versus only shown to one's own side) first, then by team
+   size (`JOB_FILL`: 1 the need, 2 F B, 3 +G, 4 +F, 5 +S, 8 F3 B2 G2 S1;
+   fewer than four: the colony's need takes the last place) and need
+   (`colonyNeed`); late joiners and a world's newcomers what the side
+   lacks most; solo the need. The colony asks (`jobAsks`: guards for a
+   threatened nest, seekers when the seed falls, builders for an open nest
+   in winter, foragers in a lean late autumn; 45 s between asks, 3 min
+   between the same, not while all have that job). Tallies `guard`,
+   `patrol`, `seek`, `digTasks` in the player's stats; highlights add
+   **BEST GUARD** and **TOP SEEKER** (forager and builder reuse theirs) and
+   each player's job; the scoreboard and the takeover screen show the job
+   (the takeover preselects its caste); the personal page lists the job's
+   tracks first; a help page per mode. Protocol: `job` one-shot (ONESHOTS),
+   `jobset` (by name, like `buy`), `jobpref`; view keys `j0`/`j1` (each
+   side only its own). Save v12 (`pjobs`; older saves get jobs afresh).
+   Balance (activeyear, its bot now a FORAGER as a solo world gives):
+   SHORT seeds 1-3 3/3/3 stars, FULL seed 1 3 stars. Load (netload
+   --versus, back to back with HEAD on this machine): 4.08, 3.80, 3.70
+   ms/tick against HEAD's 3.63, 3.26 -- the noise is about as wide; in
+   process, the same seeded world with and without jobs shows no cost of
+   the jobs' own code (checkJob/jobAsks once a second, `jobsView` small).
+   `test/jobprobe.js`.

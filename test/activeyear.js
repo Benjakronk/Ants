@@ -40,7 +40,8 @@ function year(seed) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), ctx, { filename: f });
   }
   const run = code => vm.runInContext(code, ctx);
-  run(`newWorld(${seed}, 1, 'solo', 1, '${LEN}')`);
+  // (a job, as a new solo world gives one: the colony's need, a FORAGER in spring)
+  run(`newWorld(${seed}, 1, 'solo', 1, '${LEN}'); assignJobs();`);
   run(`globalThis.BITE = ${BITE}; globalThis.CASUAL = ${CASUAL};`);
   if (IDLE) run('releasePlayer(0)');
   // the bot lives inside the sim's context (it reads and drives the same G)

@@ -15,8 +15,20 @@ const BIND = {
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['KeyC'], scores: ['Tab'],
   build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'], obj: ['KeyO'],
-  arrow: ['KeyG'], skipHint: ['KeyH'], plan: ['KeyB'], raid: ['KeyZ'],
+  arrow: ['KeyG'], skipHint: ['KeyH'], plan: ['KeyB'], raid: ['KeyZ'], job: ['KeyJ'],
 };
+
+// the jobs (see JOBS in game.js) as the screens show them: an icon (font
+// glyphs of their own), a colour, a name
+const JOB_ICON = { forager: '\x1D', builder: '\x1E', guard: '\x1F', seeker: '\x07' };
+const JOB_COLOR = { forager: '#a8e8a0', builder: '#e8b070', guard: '#ff9070', seeker: '#80e0ff' };
+function jobName(j) { return JOBS.includes(j) ? L('job_' + j) : L('job_any'); }
+// player i's job goal this season (offline the sim's; online the server's j key)
+function myJobGoal(i) {
+  const p = G.players[i];
+  if (!p || !p.job) return null;
+  return G.online ? p.jg || null : jobGoal(p);
+}
 
 // per-viewer settings kept in this browser (never in the sim or a save)
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -316,6 +328,7 @@ function readInput() {
   if (tookAction('act')) inp.act = true;
   if (tookAction('abil')) inp.abil = true;
   if (tookAction('raid')) inp.raid = true;
+  if (tookAction('job')) inp.job = true;
   if (tookAction('buildMat')) inp.buildMat = true;
 }
 
@@ -389,6 +402,7 @@ function enterWorld(slot) {
 // (a new solo world's year is as long as picked on the slot list)
 function startNewWorld(slot) {
   newWorld((Math.random() * 0xFFFFFFFF) >>> 0, 1, 'solo', 1, G.crLen);
+  assignJobs();   // (one player: the job the colony needs most)
   enterWorld(slot);
   Tut.start(true);
 }
@@ -480,6 +494,8 @@ function updatePlay() {
     }
     readInput();
   }
+  // (J works over the switch overlay and the O screen too: it picks the next job)
+  if ((G.takeover || G.objScreen) && tookAction('job')) G.players[LOCAL].input.job = true;
 
   // online the server steps the world; we draw its snapshots
   if (G.online) Net.frame(); else stepSim();
@@ -575,7 +591,9 @@ function updateCamera() {
 function openTakeover(refX, refY, live) {
   const types = takeoverOptions(LOCAL);
   if (types.length === 0) return false;
-  G.takeover = { types, sel: 0, refX, refY, live };
+  // (the caste the player's job suits comes preselected; any will do)
+  const pl = G.players[LOCAL], k = pl && pl.job ? types.findIndex(t => t.caste === JOB_CASTE[pl.job]) : -1;
+  G.takeover = { types, sel: Math.max(0, k), refX, refY, live };
   Sfx.play('menu');
   return true;
 }
@@ -610,9 +628,9 @@ function updateTakeover() {
 // crystal upgrades. Like the switch overlay it never pauses the world; a
 // purchase goes to the sim through the input struct (input.buy).
 // ---------------------------------------------------------------------------
-// (a persistent world has a third page: its history; the last is always
-// the player's own personal milestones)
-function objPageIds() { return G.mode === 'world' ? ['obj', 'upg', 'hist', 'pm'] : ['obj', 'upg', 'pm']; }
+// (then the jobs; a persistent world has its history next; the last is
+// always the player's own personal milestones)
+function objPageIds() { return G.mode === 'world' ? ['obj', 'upg', 'job', 'hist', 'pm'] : ['obj', 'upg', 'job', 'pm']; }
 function objPages() { return objPageIds().length; }
 
 function updateObjScreen() {
@@ -621,7 +639,19 @@ function updateObjScreen() {
   const n = objPages();
   if (tookPress('ArrowLeft') || tookPress('KeyA')) { os.page = (os.page + n - 1) % n; Sfx.play('menu'); }
   if (tookPress('ArrowRight') || tookPress('KeyD')) { os.page = (os.page + 1) % n; Sfx.play('menu'); }
-  if (os.page !== 1) return;
+  const pid = objPageIds()[os.page];
+  if (pid === 'job') {
+    // the jobs: up/down picks one (from ours), Enter takes it up
+    const pl = G.players[LOCAL];
+    if (os.jsel === undefined) os.jsel = Math.max(0, JOBS.indexOf(pl && pl.job));
+    const u = JOBS.length;
+    if (tookPress('ArrowUp') || tookPress('KeyW')) { os.jsel = (os.jsel + u - 1) % u; Sfx.play('menu'); }
+    if (tookPress('ArrowDown') || tookPress('KeyS')) { os.jsel = (os.jsel + 1) % u; Sfx.play('menu'); }
+    if ((tookPress('Enter') || tookPress('Space')) && pl) { pl.input.jobSet = JOBS[os.jsel]; Sfx.play('select'); }
+    return;
+  }
+  os.jsel = undefined;
+  if (pid !== 'upg') return;
   const u = UPGRADE_IDS.length;
   if (tookPress('ArrowUp') || tookPress('KeyW')) { os.sel = (os.sel + u - 1) % u; Sfx.play('menu'); }
   if (tookPress('ArrowDown') || tookPress('KeyS')) { os.sel = (os.sel + 1) % u; Sfx.play('menu'); }
@@ -656,7 +686,7 @@ function drawObjScreen() {
   }
   bevelPanel(PX, PY, PW, PH);
   const pid = objPageIds()[os.page] || 'obj';
-  const title = L({ obj: 'ui_objectives', upg: 'ui_upgrades', hist: 'ui_history', pm: 'ui_personal' }[pid]);
+  const title = L({ obj: 'ui_objectives', upg: 'ui_upgrades', job: 'ui_jobs', hist: 'ui_history', pm: 'ui_personal' }[pid]);
   drawTextCS(ctx, title, VIEW_W / 2, PY + 6, '#ffa040');
   drawText(ctx, '<', 18, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
   drawText(ctx, '>', 297, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
@@ -733,6 +763,8 @@ function drawObjScreen() {
     drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
   } else if (pid === 'pm') {
     drawPersonalPage(R);
+  } else if (pid === 'job') {
+    drawJobPage(R);
   } else if (pid === 'hist') {
     // a persistent world's story: each year's flight (or the colony lost),
     // the newest first, with the legacy it banked
@@ -786,9 +818,41 @@ function drawObjScreen() {
   }
 }
 
+// the O screen's job page: our job and its goal this season, the four jobs
+// (each with where the arrow takes it, its perk and the caste it suits),
+// what the colony needs most now, the keys
+function drawJobPage(R) {
+  const os = G.objScreen, pl = G.players[LOCAL];
+  const mine = pl && pl.job, g = myJobGoal(LOCAL);
+  if (mine) {
+    drawText(ctx, JOB_ICON[mine] + ' ' + L('ui_jobYours', jobName(mine)), 20, 26, JOB_COLOR[mine]);
+    const gs = g ? (g.done ? L('ui_jobMet') : L('jg_' + mine, g.n, g.need)) : '';
+    drawText(ctx, gs, R - textWidth(gs), 26, g && g.done ? '#80ff80' : '#ffe080');
+  } else drawText(ctx, L('ui_jobNone'), 20, 26, '#a09070');
+  const sel = os.jsel === undefined ? Math.max(0, JOBS.indexOf(mine)) : os.jsel;
+  JOBS.forEach((j, k) => {
+    const y = 40 + k * 23, on = j === mine;
+    if (k === sel) drawText(ctx, '\x06', 18, y, '#ffe040');
+    drawText(ctx, JOB_ICON[j], 28, y, JOB_COLOR[j]);
+    drawText(ctx, jobName(j), 36, y, k === sel ? '#ffe040' : on ? JOB_COLOR[j] : '#e8e0c8');
+    if (on) drawText(ctx, '\x19', 36 + textWidth(jobName(j)) + 6, y, '#80ff80');
+    const cs = L('ui_jobCaste', casteName(JOB_CASTE[j]));
+    drawText(ctx, cs, R - textWidth(cs), y, '#806e58');
+    drawText(ctx, L('jd_' + j), 36, y + 9, '#c8b890');
+  });
+  groove(18, 133, 284);
+  drawTextC(ctx, L('ui_jobNeed', jobName(colonyNeed(G.colony))), VIEW_W / 2, 139, '#ffd890');
+  drawTextC(ctx, L('ui_jobKeys'), VIEW_W / 2, 150, '#a09070');
+  drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
+}
+
+// the personal milestones that match each job (shown first on their page)
+const JOB_PM = { forager: ['forager', 'milker'], builder: ['builder', 'digger'], guard: ['hunter', 'slayer'], seeker: ['prospector'] };
+
 // the O screen's last page: the local player's own milestones (see
 // PERSONAL in game.js) -- each track's name, its tiers as stars, the next
-// tier's goal and how far along it is (a check mark once all three are in)
+// tier's goal and how far along it is (a check mark once all three are in);
+// the tracks of the player's job first, marked with its icon
 function drawPersonalPage(R) {
   const p = G.players[LOCAL];
   const st = p && p.stats && p.stats.pm ? p.stats : newPlayerStats();
@@ -797,8 +861,11 @@ function drawPersonalPage(R) {
   const you = p && p.name ? p.name : L('ui_you');
   drawText(ctx, you, R - textWidth(you), 26, playerColor(LOCAL));
   let y = 39;
-  for (const t of PERSONAL) {
+  const first = (p && JOB_PM[p.job]) || [];
+  const tracks = PERSONAL.filter(t => first.includes(t.id)).concat(PERSONAL.filter(t => !first.includes(t.id)));
+  for (const t of tracks) {
     const tier = st.pm[t.id] || 0, full = tier >= t.tiers.length;
+    if (first.includes(t.id)) drawText(ctx, JOB_ICON[p.job], 12, y, JOB_COLOR[p.job]);
     drawText(ctx, L('pm_' + t.id), 20, y, full ? '#80ff80' : tier ? '#e8e0c8' : '#a09070');
     for (let k = 0; k < t.tiers.length; k++) drawText(ctx, '\x15', 96 + k * 6, y, k < tier ? '#ffd030' : '#3a2c1c');
     const need = t.tiers[Math.min(tier, t.tiers.length - 1)];
@@ -1546,12 +1613,23 @@ function drawMatSwatch(x, y, mat) {
 // short form: the task line is the shorter one). The name tags keep clear
 // of all of it (topLayout().rects).
 // ---------------------------------------------------------------------------
+// With a job the first row is the job's: its icon and the season's goal
+// (or GOAL MET); the colony's task takes its turn there (a third of the
+// time), and a task just done has the row while it blinks.
 const TOP_ROWS = [3, 13];
+const JOB_TURN = 540;   // frames: the job line two thirds of it, an open task the rest
 function topLayout() {
-  const out = { task: null, obj: null, strip: null, rects: [] };
+  const out = { task: null, job: null, obj: null, strip: null, rects: [] };
   if (!G.colony) return out;
   const rows = [];
-  const t = G.colony.tasks.find(t => !t.done) || G.colony.tasks.find(t => t.done && t.doneT > 0);
+  let t = G.colony.tasks.find(t => !t.done) || G.colony.tasks.find(t => t.done && t.doneT > 0);
+  const g = myJobGoal(LOCAL);
+  if (g && !(t && t.done) && !(t && G.frame % JOB_TURN >= JOB_TURN * 2 / 3)) {
+    const str = JOB_ICON[g.job] + ' ' + (g.done ? L('ui_jobDone', jobName(g.job)) : L('jg_' + g.job, g.n, g.need));
+    out.job = { str, y: TOP_ROWS[0], color: g.done ? '#80ff80' : JOB_COLOR[g.job] };
+    rows.push(out.job);
+    t = null;
+  }
   if (t) {
     let str;
     if (t.done) str = L('m_complete', taskText(t));
@@ -1584,7 +1662,7 @@ function topLayout() {
     const right = out.strip && out.strip.y === out.obj.y ? out.strip.x - 8 : VIEW_W - 8;
     if (4 + textWidth(out.obj.str + ' (O)') < right) out.obj.str += ' (O)';
   }
-  for (const r of [out.task, out.obj]) if (r) out.rects.push({ x: 0, y: r.y - 1, w: textWidth(r.str) + 6, h: 10 });
+  for (const r of [out.job, out.task, out.obj]) if (r) out.rects.push({ x: 0, y: r.y - 1, w: textWidth(r.str) + 6, h: 10 });
   if (out.strip) out.rects.push({ x: out.strip.x - 2, y: out.strip.y - 1, w: out.strip.w + 6, h: 10 });
   return out;
 }
@@ -1654,6 +1732,7 @@ function relicStatus(rs) {
 function drawTaskAndMsgs() {
   if (G.showMap || G.objScreen) return;   // (the map and the O panel cover the screen)
   const top = topLayout();
+  if (top.job) drawTextS(ctx, top.job.str, 4, top.job.y, top.job.color);
   if (top.task && !top.task.blink) drawTextS(ctx, top.task.str, 4, top.task.y, top.task.color);
   if (top.obj) drawTextS(ctx, top.obj.str, 4, top.obj.y, top.obj.color);
   if (top.strip) {
@@ -1768,6 +1847,10 @@ function guidePoint(me) {
   const carryFood = me.carry && ITEM_DEF[me.carry.kind];
   if (Tut.active() === 'food') return carryFood ? storageTarget(me) : foodTarget(me);
   if (carryFood) return storageTarget(me);
+  // a job: where it wants us (see jobTarget); with nothing there, the
+  // season's work as before
+  const pl = G.players[LOCAL];
+  if (pl && pl.job) { const jt = jobTarget(me, pl.job); if (jt) return jt; }
   if (col.active('gather')) return foodTarget(me);
   const o = G.objectives && G.objectives.list.find(o => !o.done);
   const at = (p, color, icon) => ({ x: p.x, y: p.y, color, icon });
@@ -1803,6 +1886,111 @@ function guidePoint(me) {
     return at(q || r.entrance, '#ff6050', '\x11');
   }
   return null;
+}
+
+// the guide arrow for a job (see JOBS in game.js), or null (nothing to show):
+// FORAGER the nearest food (loose food, the fallen fruit, else an aphid);
+// BUILDER the blueprint, else in winter the entrance to gate, a cramped
+// chamber to dig out, in summer the mound; GUARD a raid on the nest, an
+// enemy running off with a golden seed, an intruder at home, the queen
+// under attack, else the nest (from afar its entrance, near it the queen);
+// SEEKER our golden seed lying out there, our raid's target, else the
+// crystal field in the middle (none once there: dig)
+function jobTarget(me, job) {
+  const col = G.colony;
+  const at = (p, color, icon) => p ? { x: p.x, y: p.y, color, icon } : null;
+  const ic = JOB_ICON[job], cl = JOB_COLOR[job];
+  if (job === 'forager') return forageTarget(me);
+  if (job === 'builder') {
+    const pp = planTarget(me);
+    if (pp) return pp;
+    if (G.isWinter() && !col.sealed) return at(col.entrance, '#8ce8ff', ic);
+    const ch = crampedChamber(col, me);
+    if (ch) return at(ch, cl, ic);
+    if (G.season === SUMMER || col.mound.size < MOUND_WARM) return at(col.entrance, '#d8b860', '\x10');
+    return null;
+  }
+  if (job === 'guard') {
+    const raid = raidAlert();
+    if (raid) return { x: raid.x, y: raid.y - 6, color: '#ff4030', icon: '!' };
+    for (const it of G.items) {
+      const c = it.kind === 'relic' && !it.dead ? it.carried : null;
+      if (c && c.colony !== col && Math.abs(c.x - col.x) < RELIC_ALARM) return at(c, '#ff7040', '\x1C');
+    }
+    // (an intruder at home: an enemy ant, or a predator, near the nest)
+    let foe = null, bd = Infinity;
+    const near = e => Math.abs(e.x - col.x) < 450 && Math.abs(e.y - col.entrance.y) < 350;
+    for (const a of G.ants) {
+      if (a.hp <= 0 || a.colony === col || !near(a)) continue;
+      const d = dist2(a.x, a.y, me.x, me.y);
+      if (d < bd) { bd = d; foe = a; }
+    }
+    for (const b of G.bugs) {
+      if (b.dead || !b.predator || !near(b)) continue;
+      const d = dist2(b.x, b.y, me.x, me.y);
+      if (d < bd) { bd = d; foe = b; }
+    }
+    if (foe) return at(foe, '#ff6050', '!');
+    const q = col.queen();
+    if (q && (q.hitT > G.tick || G.tick - q.hitT < 120)) return at(q, '#ff4030', '\x11');
+    return Math.abs(me.x - col.x) > 300 || !nestDeep(me) ? at(col.entrance, cl, ic) : at(q || col.queenCh, cl, '\x11');
+  }
+  if (job === 'seeker') {
+    const rs = relicState();
+    if (rs && rs.ph === 'lying') return { x: rs.x, y: rs.y, color: '#ffd040', icon: '\x1C' };
+    const r = G.rival;
+    if (r && col.raid && col.raid.phase === 'march' && G.colonies[col.raid.target]) return at(G.colonies[col.raid.target].entrance, '#ff8040', '!');
+    if (!r) return null;
+    const mx = Math.round((col.x + r.x) / 2);
+    const fy = T.surf[Math.max(0, Math.min(WORLD_W - 1, mx))] + 290;
+    return Math.abs(me.x - mx) < 150 && me.y > fy - 120 ? null : { x: mx, y: fy, color: cl, icon: '\x13' };
+  }
+  return null;
+}
+
+// a forager's next find: the nearest loose food on our side of the forest,
+// or the fallen fruit, whichever is nearer; else an aphid to milk
+function forageTarget(me) {
+  const t = foodTarget(me), cs = G.contested;
+  let best = t, bd = t ? dist2(t.x, t.y, me.x, me.y) : Infinity;
+  if (cs && cs.active && dist2(cs.x, cs.y, me.x, me.y) < bd) { best = { x: cs.x, y: cs.y, color: '#ffb040', icon: '\x03' }; bd = 0; }
+  if (best) return best;
+  for (const b of G.bugs) {
+    if (b.kind !== 'aphid' || b.dead || Math.abs(b.x - G.colony.x) > FORAGE_R) continue;
+    const d = dist2(b.x, b.y, me.x, me.y);
+    if (d < bd) { bd = d; best = { x: b.x, y: b.y, color: '#a8e8a0', icon: JOB_ICON.forager }; }
+  }
+  return best;
+}
+
+// the nearest planned pixel of our blueprint (looked up a few times a
+// second: the plan holds thousands)
+const PlanSeek = { f: -99, x: 0, y: 0, t: null };
+function planTarget(me) {
+  const plan = G.colony.plan;
+  if (!plan.size) return null;
+  const S = PlanSeek;
+  if (G.frame - S.f < 15 && Math.abs(me.x - S.x) < 30 && Math.abs(me.y - S.y) < 30 && (!S.t || plan.has(S.t.i))) return S.t;
+  let bi = -1, bd = Infinity;
+  for (const i of plan.keys()) {
+    const x = i % WORLD_W, y = (i / WORLD_W) | 0;
+    const d = dist2(x, y, me.x, me.y);
+    if (d < bd) { bd = d; bi = i; }
+  }
+  S.f = G.frame; S.x = me.x; S.y = me.y;
+  S.t = bi < 0 ? null : { i: bi, x: bi % WORLD_W, y: (bi / WORLD_W) | 0, color: planColor(plan.get(bi)), icon: JOB_ICON.builder };
+  return S.t;
+}
+
+// a marked chamber still too cramped to count, nearest us
+function crampedChamber(col, me) {
+  let best = null, bd = Infinity;
+  for (const ch of col.chambers) {
+    if (ch.area >= CH_MIN_AREA) continue;
+    const d = dist2(ch.x, ch.y, me.x, me.y);
+    if (d < bd) { bd = d; best = ch; }
+  }
+  return best;
 }
 
 // the nearest storage (the main cache or a storage chamber)
@@ -2202,7 +2390,9 @@ function drawScoreboard() {
     for (const r of g) {
       const st = r.p.stats, off = G.online && !r.p.online;
       if (r.i === LOCAL) drawText(ctx, '\x06', 8, y, '#ffe040');
-      drawText(ctx, r.name, 16, y, off ? '#706050' : playerColor(r.i));
+      // (its job's icon: our own side's only -- the enemy's jobs are never sent)
+      if (r.p.job) drawText(ctx, JOB_ICON[r.p.job], 16, y, off ? '#706050' : JOB_COLOR[r.p.job]);
+      drawText(ctx, r.name, 23, y, off ? '#706050' : playerColor(r.i));
       const pm = !G.online || r.p.pmKnown ? pmCount(st) : '-';
       [st.kills, st.deaths, Math.round(st.food), st.dug, st.built, pm].forEach((v, k) => {
         const s = String(v);
@@ -2565,6 +2755,7 @@ function drawTakeover() {
   }
   // (the rebirth note's second line pushes the list down)
   const dy = !tk.live && G.online && !G.players[LOCAL].deathPos && G.rebornNote ? 12 : 0;
+  const job = G.players[LOCAL] && G.players[LOCAL].job;
   drawTextC(ctx, L('ui_continueAs'), VIEW_W / 2, 70 + dy, pcol);
   for (let i = 0; i < tk.types.length; i++) {
     const t = tk.types[i];
@@ -2572,7 +2763,10 @@ function drawTakeover() {
     const label = t.fresh ? L('ui_freshWorker') : casteName(t.caste) + '  X' + t.count;
     if (sel) drawText(ctx, '\x06', 92, 84 + dy + i * 12, '#ffe040');
     drawText(ctx, label, 104, 84 + dy + i * 12, sel ? '#ffe040' : '#c8b890');
+    // (the caste our job suits: its icon beside it)
+    if (job && JOB_CASTE[job] === t.caste) drawText(ctx, JOB_ICON[job], 110 + textWidth(label), 84 + dy + i * 12, JOB_COLOR[job]);
   }
+  if (job) drawTextC(ctx, L('ui_jobSuits', JOB_ICON[job] + jobName(job), casteName(JOB_CASTE[job])), VIEW_W / 2, 84 + dy + Math.max(3, tk.types.length) * 12 + 6, JOB_COLOR[job]);
   drawTextC(ctx, tk.live ? L('ui_switchKeys') : L('ui_takeOver'),
     VIEW_W / 2, 160, '#a09070');
 }
@@ -2745,6 +2939,9 @@ function drawOverBrief(s, y) {
 function drawHighlights(s) {
   const hl = s.hl;
   drawTextCS(ctx, L('ui_highlights'), VIEW_W / 2, 6, '#ffa040', 2);
+  // (more than six awards -- the jobs' too: rows of 8 px, and the rest
+  // of the page a row lower)
+  const many = hl.awards.length > 6, ady = many ? 8 : 9, off = many ? 8 : 0;
   let y = 26;
   for (const a of hl.awards) {
     drawText(ctx, awardLabel(a.k), 24, y, a.k === 'mvp' ? '#ffe040' : '#c8b890');
@@ -2755,9 +2952,9 @@ function drawHighlights(s) {
     drawText(ctx, hlName(s, a.i), 124, y, playerColor(a.i));
     const v = awardValue(a);
     drawText(ctx, v, 296 - textWidth(v), y, '#a09070');
-    y += 9;
+    y += ady;
   }
-  groove(12, 82, 296);
+  groove(12, 82 + off, 296);
   const vs = !!s.versus;
   const best = list => list.slice().sort((a, b) => b.mvp - a.mvp || a.i - b.i);
   // (co-op: best first, more than four split over both columns)
@@ -2767,22 +2964,24 @@ function drawHighlights(s) {
   for (let c = 0; c < 2; c++) {
     if (!cols[c].length && !vs) continue;
     const x0 = X[c];
-    if (vs) drawText(ctx, L(c ? 'ui_red' : 'ui_black'), x0 + 7, 87, c ? '#ff7060' : '#d8d4e4');
-    else drawText(ctx, L('ui_hlPlayer'), x0 + 7, 87, '#806e58');
+    if (vs) drawText(ctx, L(c ? 'ui_red' : 'ui_black'), x0 + 7, 87 + off, c ? '#ff7060' : '#d8d4e4');
+    else drawText(ctx, L('ui_hlPlayer'), x0 + 7, 87 + off, '#806e58');
     const mh = L('ui_hlMvp');
-    drawText(ctx, mh, x0 + 118 - textWidth(mh), 87, '#806e58');
-    drawText(ctx, '\x1B', x0 + 137, 87, '#806e58');
+    drawText(ctx, mh, x0 + 118 - textWidth(mh), 87 + off, '#806e58');
+    drawText(ctx, '\x1B', x0 + 137, 87 + off, '#806e58');
     cols[c].slice(0, 8).forEach((r, k) => {
-      const yy = 96 + k * 8, me = r.i === LOCAL;
+      const yy = 96 + off + k * 8, me = r.i === LOCAL;
       if (me) drawText(ctx, '\x06', x0, yy, '#ffe040');
-      drawText(ctx, String(r.n || L('ui_you')).slice(0, 12), x0 + 7, yy, playerColor(r.i));
+      // (the job it ended the match on -- both sides', the match is over)
+      if (r.j && JOB_ICON[r.j]) drawText(ctx, JOB_ICON[r.j], x0 + 7, yy, JOB_COLOR[r.j]);
+      drawText(ctx, String(r.n || L('ui_you')).slice(0, 12), x0 + 14, yy, playerColor(r.i));
       const m = String(r.mvp);
       drawText(ctx, m, x0 + 118 - textWidth(m), yy, me ? '#ffe040' : '#c8b890');
       const p = String(r.pmNew.length);
       drawText(ctx, p, x0 + 142 - textWidth(p), yy, r.pmNew.length ? '#ffd030' : '#706050');
     });
   }
-  groove(12, 162, 296);
+  groove(12, 162 + off, 296);
   // our own personal milestones this match: each track's best new tier
   const r = hlRow(s, LOCAL);
   if (r) {
@@ -2790,9 +2989,9 @@ function drawHighlights(s) {
     for (const [id, tier] of r.pmNew) top[id] = Math.max(top[id] || 0, tier);
     const names = Object.keys(top).map(id => L('pm_' + id) + '\x15'.repeat(top[id]));
     const str = names.length ? '\x1B ' + fitList(names, 290, ' ') : L('ui_noPmMatch');
-    drawTextC(ctx, str, VIEW_W / 2, 167, names.length ? '#ffd030' : '#806e58');
+    drawTextC(ctx, str, VIEW_W / 2, 167 + off * 0.75, names.length ? '#ffd030' : '#806e58');
   }
-  drawTextC(ctx, L('ui_hlKeys'), VIEW_W / 2, 181, (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
+  drawTextC(ctx, L('ui_hlKeys'), VIEW_W / 2, 181 + off, (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
 }
 
 function updateGameOver() {
@@ -3204,6 +3403,8 @@ function drawLobby() {
     if (!pl.on) tags.push(L('ui_offline'));
     const tg = tags.join(' ');
     if (tg) drawText(ctx, tg, x + 146 - textWidth(tg), y, !pl.on ? '#806e58' : '#a09070');
+    // (its preferred job, an icon left of the tags -- versus, our side's only)
+    if (JOB_ICON[pl.j]) drawText(ctx, JOB_ICON[pl.j], x + 146 - textWidth(tg) - (tg ? 10 : 4), y, pl.on ? JOB_COLOR[pl.j] : '#706050');
   }
   let note = Net.you === Net.host ? L('ui_hostStart') : L('ui_waitHost');
   if (Net.roomState === 'play') note = L('ui_inProgress');
@@ -3214,7 +3415,8 @@ function drawLobby() {
   drawTextC(ctx, note, VIEW_W / 2, 152, !up ? '#706050' : warn ? '#ff5040' : host && (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
   const keys = [vs && Net.roomState === 'lobby' ? L('ui_sideKeys') : null, host ? L('ui_lobbyHostKeys') : null].filter(Boolean);
   keys.forEach((k, i) => drawTextC(ctx, k, VIEW_W / 2, 163 + i * 9, '#806e58'));
-  drawTextC(ctx, L('ui_lobbyLeave'), VIEW_W / 2, 182, '#706050');
+  const myPref = Net.players[Net.you] && Net.players[Net.you].j;
+  drawTextC(ctx, L('ui_lobbyLeave', jobName(myPref)), VIEW_W / 2, 182, myPref ? '#a09070' : '#706050');
   if (Net.err !== 'e_sides') drawNetErr(144);
   if (Net.status === 'lost') drawNetLost();
 }
@@ -3226,6 +3428,13 @@ function updateLobby() {
   if (tookPress('KeyH')) { openHelp(Net.mode === 'versus' ? 'versus' : 'coop'); Sfx.play('menu'); return; }
   if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); return; }
   if (Net.roomState !== 'lobby' || Net.status !== 'open') return;
+  // J: the job we'd like (ANY, then each in turn; the match start honours it)
+  if (tookAction('job')) {
+    const cur = Net.players[Net.you] && Net.players[Net.you].j;
+    const k = JOBS.indexOf(cur);
+    Net.send({ t: 'jobpref', j: k + 1 < JOBS.length ? JOBS[k + 1] : 'any' });
+    Sfx.play('menu');
+  }
   // versus: pick a side
   if (Net.mode === 'versus') {
     const l = tookPress('ArrowLeft') || tookPress('KeyA'), r = tookPress('ArrowRight') || tookPress('KeyD');

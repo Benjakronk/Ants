@@ -457,6 +457,14 @@ const Net = {
       // our side's golden seed (see server/snapshot.js buildView)
       if (!G.relics) G.relics = newRelics();
       G.relics.side[Number(key.slice(1))] = v || undefined;
+    } else if (key[0] === 'j') {
+      // our side's jobs (see server/snapshot.js jobsView): each player's job
+      // and its goal this season (the other side's: unknown, null)
+      v.forEach((r, i) => {
+        const p = ensurePlayer(i);
+        p.job = r ? JOBS[r[0]] || null : null;
+        p.jg = r ? { job: p.job, n: r[1], need: r[2], done: !!r[3] } : null;
+      });
     } else if (key[0] === 'q') {
       // our side's personal milestones (see server/snapshot.js personalView):
       // the tiers, and the counts the scoreboard doesn't carry
@@ -621,6 +629,8 @@ const Net = {
     if (inp.buildMat) { inp.buildMat = false; this.send({ t: 'mat' }); }
     if (inp.mark) { inp.mark = false; this.send({ t: 'mark' }); }
     if (inp.raid) { inp.raid = false; this.send({ t: 'raid' }); }
+    if (inp.job) { inp.job = false; this.send({ t: 'job' }); }
+    if (inp.jobSet) { this.send({ t: 'jobset', j: inp.jobSet }); inp.jobSet = null; }
     if (inp.buy) { this.send({ t: 'buy', id: inp.buy }); inp.buy = null; }
   },
 

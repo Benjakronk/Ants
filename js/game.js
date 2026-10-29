@@ -148,10 +148,13 @@ function newInput() {
   // presses the sim consumes; buy is a one-shot upgrade id (or null).
   // Plan mode (held state too): plan -- the ant braces and the keys move the
   // client's cursor instead; px, py -- the cursor in world pixels; paint --
-  // 1 while it paints the blueprint, 2 while it erases
+  // 1 while it paints the blueprint, 2 while it erases. job: a one-shot J
+  // (the next job, see cycleJob); jobSet: a job picked by name on the O
+  // screen (one-shot, like buy)
   return {
     dx: 0, dy: 0, bite: false, act: false, abil: false,
     build: false, buildMat: false, mark: false, raid: false, buy: null,
+    job: false, jobSet: null,
     plan: false, px: 0, py: 0, paint: 0,
   };
 }
@@ -169,11 +172,16 @@ function newPlayer(ant) {
   // name: what the others call this player online (null offline);
   // stats: the scoreboard's tally (see newPlayerStats); planLast: where the
   // plan brush last painted in this stroke ({ x, y, mode }, or null);
-  // planWarned: told "the plan is full" in this stroke already
+  // planWarned: told "the plan is full" in this stroke already; job: the
+  // player's job (JOBS, or null until one is given), jobPref: the one it
+  // asked for in the lobby (null: any), jb: the season's base for the job
+  // goals (see noteJobSeason), jgDone: the goals met this season (a bit a
+  // job), callT: when a forager may next call workers to a find
   return {
     ant, input: newInput(), deathPos: null, buildMat: M_PACKED, buildWarned: false,
     buildFailT: 0, refuseT: 0, coldT: 0, col: 0, name: null, stats: newPlayerStats(),
     planLast: null, planWarned: false,
+    job: null, jobPref: null, jb: null, jgDone: 0, callT: 0,
   };
 }
 
@@ -186,10 +194,17 @@ function newPlayer(ant) {
 // winter surface, crystals carried home, aphids milked, plan pixels painted,
 // seasons lived through without dying (and whether it died this season);
 // pm: the tier reached in each track; pmLog: [track, tier, year] as earned.
+// The jobs' tallies (see JOBS; counted whatever the job, as the rest are):
+// guard -- foes killed near home (TERRITORY; 2 for a predator or an armed
+// ant) and raids turned back while there; patrol -- seconds on the GUARD
+// job near home; seek -- crystals home 1, a golden seed home 3, denied 1, a
+// raid called 2; digTasks -- the colony's dig tasks this player's digging
+// finished; jobGoals -- job goals met
 function newPlayerStats() {
   return {
     kills: 0, deaths: 0, food: 0, dug: 0, built: 0,
     preds: 0, care: 0, frost: 0, crystals: 0, milked: 0, planned: 0, lives: 0, diedSeason: false,
+    guard: 0, patrol: 0, seek: 0, digTasks: 0, jobGoals: 0,
     pm: {}, pmLog: [], yb: null,
   };
 }
@@ -289,6 +304,318 @@ function noteSeasonLived() {
 }
 
 // ---------------------------------------------------------------------------
+// jobs: every player has one -- a nudge toward where the colony needs hands,
+// never a lock (J, or the O screen's job page, switches it: free, any time).
+// A job sets where the guide arrow points (the client's jobTarget), the
+// player's goal for the season (the HUD's top line: jobGoal) and a small
+// perk while the player does that job where it is done (sim-side, so the
+// server's word): FORAGER +25% food in each load it stores (JOB_CARRY),
+// BUILDER a build stamp or blueprint fill every JOB_BUILD_CD ticks instead
+// of BUILD_CD (+33%), GUARD +20% bite (JOB_BITE) within TERRITORY of its own
+// nest, SEEKER +15% walking speed (JOB_SPEED) beyond it. Its colony's NPCs
+// follow lightly: a GUARD's rally (Q) near home sends the soldiers on
+// patrol round the nest rather than at its heels into the forest, and a
+// FORAGER that picks up food where more lies calls up to FORAGE_CALL_N
+// idle workers of its colony there. Nursing stays the nurse caste's, on
+// any job. Who gets what: assignJobs at a match's start (the lobby's
+// preferences first, then by JOB_FILL and what the colony needs, see
+// colonyNeed), pickJob for a late joiner (what the side lacks most); and
+// the colony asks for hands when its need shifts (jobAsks: toasts to the
+// side, rate-limited).
+// ---------------------------------------------------------------------------
+const JOBS = ['forager', 'builder', 'guard', 'seeker'];
+// the caste a job suits (the takeover screen preselects it; any will do)
+const JOB_CASTE = { forager: 'worker', builder: 'worker', guard: 'soldier', seeker: 'soldier' };
+// a team's jobs by its size: the first n of these (8: three foragers, two
+// builders, two guards, a seeker; fewer than four: the colony's need takes
+// the last place if it isn't among them -- one player: just the need)
+const JOB_FILL = ['forager', 'builder', 'guard', 'forager', 'seeker', 'builder', 'guard', 'forager'];
+const TERRITORY = 600;      // px (x) from its own nest: home ground (the guard's perk, the seeker's beyond)
+const JOB_CARRY = 1.25;     // FORAGER: food a load is worth in the stores
+const JOB_BITE = 1.2;       // GUARD: bite damage near home
+const JOB_SPEED = 1.15;     // SEEKER: walking speed away from home
+const JOB_BUILD_CD = 6;     // BUILDER: ticks between build stamps (everyone else BUILD_CD, 8)
+// the season's goal in a FULL year (a shorter year's seasons are shorter:
+// x the square root of its share -- SHORT 0.71, QUICK 0.58): food stored;
+// px built plus a quarter of the px dug (or one of the colony's dig tasks
+// finished); guard points; seeker points (see newPlayerStats)
+const JOB_GOAL = { forager: 60, builder: 300, guard: 8, seeker: 3 };
+const JOB_GOAL_SCORE = 50;  // the colony's score for a goal met
+// a forager's call: up to this many idle workers, within this of the find,
+// at most once in this many ticks, to a spot with more food within FORAGE_RICH_R
+const FORAGE_CALL_N = 3, FORAGE_CALL_R = 700, FORAGE_CALL_CD = 60 * 20, FORAGE_RICH_R = 160;
+// the colony's asks: at most one in ASK_GAP ticks, the same one in ASK_SAME
+const ASK_GAP = 60 * 45, ASK_SAME = 60 * 180;
+
+// the season's number since the world began (the job goals' clock)
+function seasonKey() { return (G.year - 1) * 4 + G.season; }
+
+// what a tally has done for `job`, all told (see JOB_GOAL)
+function jobValue(st, job) {
+  if (!st) return 0;
+  switch (job) {
+    case 'forager': return Math.floor(st.food || 0);
+    case 'builder': return Math.floor((st.built || 0) + (st.dug || 0) / 4);
+    case 'guard': return (st.guard || 0) + Math.floor((st.patrol || 0) / 60);
+    case 'seeker': return st.seek || 0;
+  }
+  return 0;
+}
+function jobNeed(job) { return Math.max(1, Math.round((JOB_GOAL[job] || 1) * Math.sqrt(yearShare()))); }
+
+// a new season (or a player new to its job goals): every job's count
+// starts from what the tally has now
+function noteJobSeason(p) {
+  const k = seasonKey();
+  if (p.jb && p.jb.k === k) return;
+  p.jb = { k, dt: p.stats ? p.stats.digTasks || 0 : 0 };
+  for (const j of JOBS) p.jb[j] = jobValue(p.stats, j);
+  p.jgDone = 0;
+}
+
+// player p's goal this season: { job, n, need, done } (null without a job)
+function jobGoal(p) {
+  if (!p || !JOBS.includes(p.job) || !p.stats) return null;
+  noteJobSeason(p);
+  const need = jobNeed(p.job);
+  let n = Math.max(0, jobValue(p.stats, p.job) - (p.jb[p.job] || 0));
+  // (a builder whose digging finished one of the colony's dig tasks: done)
+  if (p.job === 'builder' && (p.stats.digTasks || 0) > p.jb.dt) n = Math.max(n, need);
+  return { job: p.job, n: Math.min(n, need), need, done: !!(p.jgDone & (1 << JOBS.indexOf(p.job))) };
+}
+
+// once a second for each player: a guard's rounds, and its goal met?
+function checkJob(pIdx) {
+  const p = G.players[pIdx];
+  if (!p || !p.job || !p.stats) return;
+  const col = playerColony(pIdx), a = p.ant && p.ant.hp > 0 ? p.ant : null;
+  // (a guard near home is on its rounds: a point a minute)
+  if (p.job === 'guard' && a && col && Math.abs(a.x - col.x) < TERRITORY) p.stats.patrol++;
+  const g = jobGoal(p);
+  if (!g || g.done || g.n < g.need) return;
+  // (the score once a season: switching jobs to meet a second goal is
+  // still told, but pays nothing more)
+  if (col && !p.jgDone) col.score += JOB_GOAL_SCORE;
+  p.jgDone |= 1 << JOBS.indexOf(p.job);
+  p.stats.jobGoals++;
+  G.msg('m_jobGoal', [{ key: 'job_' + p.job }, JOB_GOAL_SCORE], '@' + pIdx, pIdx);
+  G.sfx('task', a ? a.x : null, a ? a.y : null, 300, -1, pIdx);
+}
+
+// does ant `a` belong to a player on `job`? (an NPC never has one)
+function onJob(a, job) {
+  const p = a && a.playerIdx >= 0 ? G.players[a.playerIdx] : null;
+  return !!p && p.job === job;
+}
+// on its own colony's home ground?
+function atHome(a) { return !!a.colony && Math.abs(a.x - a.colony.x) < TERRITORY; }
+// the perks (see JOBS): a seeker's pace away from home (steerAnt -- the
+// online client predicts its own ant with it too), a guard's bite at home
+function jobSpeed(a) { return onJob(a, 'seeker') && !atHome(a) ? JOB_SPEED : 1; }
+function jobBite(a) { return onJob(a, 'guard') && atHome(a) ? JOB_BITE : 1; }
+
+// player pIdx takes up `job`; why: the message telling it so (none: quiet).
+// Returns true if that is a change.
+function setJob(pIdx, job, why) {
+  const p = G.players[pIdx];
+  if (!p || !JOBS.includes(job)) return false;
+  const was = p.job;
+  p.job = job;
+  if (!p.stats) p.stats = newPlayerStats();
+  noteJobSeason(p);
+  if (why) G.msg(why, [{ key: 'job_' + job }, { key: 'jt_' + job }], '@' + pIdx, pIdx);
+  return was !== job;
+}
+// J: the next job in turn
+function cycleJob(pIdx) {
+  const p = G.players[pIdx];
+  if (!p) return;
+  const i = JOBS.indexOf(p.job);
+  setJob(pIdx, JOBS[(i + 1) % JOBS.length], 'm_jobNow');
+  const a = p.ant;
+  G.sfx('menu', a ? a.x : null, a ? a.y : null, 300, -1, pIdx);
+}
+
+// something threatens colony c's nest: an enemy raid on the march toward
+// it, an enemy carrying a golden seed near it, its queen bitten lately
+// (a reason key, or null)
+function nestThreat(c) {
+  for (const o of G.colonies) if (o !== c && o.raid && o.raid.target === c.idx && o.raid.phase === 'march') return 'raid';
+  if (relicThreat(c)) return 'seed';
+  const qh = c.queenHit;
+  if (qh && qh.col !== c.idx && G.tick - qh.t < 300 && c.queen()) return 'queen';
+  return null;
+}
+// late autumn with the stores short of what the winter wants
+function winterShort(c) {
+  return G.season === AUTUMN && seasonFrac() >= 0.5 && c.food < 0.6 * objNeed(objDef('stockpile'), G.year);
+}
+// the job colony c needs most now
+function colonyNeed(c) {
+  if (!c) return 'forager';
+  if (nestThreat(c)) return 'guard';
+  if (G.isWinter() && !c.sealed) return 'builder';
+  const rs = G.relics && G.relics.side[c.idx];
+  if (rs && rs.ph === 'lying') return 'seeker';
+  if (winterShort(c) || c.food < 40) return 'forager';
+  if (c.plan.size >= 200) return 'builder';
+  return 'forager';
+}
+// how many of each job a team of n wants (see JOB_FILL)
+function jobWants(n, c) {
+  const list = JOB_FILL.slice(0, Math.max(1, Math.min(JOB_FILL.length, n)));
+  const need = colonyNeed(c);
+  if (list.length < 4 && !list.includes(need)) list[list.length - 1] = need;
+  // (more than eight a side: round again)
+  for (let k = JOB_FILL.length; k < n; k++) list.push(JOB_FILL[k % JOB_FILL.length]);
+  const want = {};
+  for (const j of JOBS) want[j] = 0;
+  for (const j of list) want[j]++;
+  return want;
+}
+// the job colony c's team lacks most, with `have` of each (ties: what the
+// colony needs, then JOB_FILL's order)
+function lackingJob(want, have, c) {
+  const need = colonyNeed(c);
+  let best = null, bd = -Infinity;
+  for (const j of [need].concat(JOB_FILL)) {
+    const d = want[j] - (have[j] || 0);
+    if (d > bd) { bd = d; best = j; }
+  }
+  return best;
+}
+// the players on colony c's side (by index)
+function sidePlayers(c) {
+  const out = [];
+  G.players.forEach((p, i) => { if (p && playerColony(i) === c && (G.mode === 'solo' || p.name)) out.push(i); });
+  return out;
+}
+
+// a match begins: every played colony's players get their jobs -- those
+// who asked for one in the lobby first (p.jobPref), the rest what the team
+// still lacks for its size. Each is told.
+function assignJobs() {
+  for (const c of G.colonies) {
+    if (!c.player) continue;
+    const team = sidePlayers(c);
+    if (!team.length) continue;
+    const want = jobWants(team.length, c), have = {};
+    const give = (i, j) => { setJob(i, j, 'm_jobIs'); have[j] = (have[j] || 0) + 1; };
+    for (const i of team) if (JOBS.includes(G.players[i].jobPref)) give(i, G.players[i].jobPref);
+    for (const i of team) if (!JOBS.includes(G.players[i].jobPref)) give(i, lackingJob(want, have, c));
+  }
+}
+// a player joins a match under way (or a persistent world): its own
+// preference, else what its side lacks most
+function pickJob(pIdx) {
+  const p = G.players[pIdx];
+  if (!p) return null;
+  const c = playerColony(pIdx);
+  let j = JOBS.includes(p.jobPref) ? p.jobPref : null;
+  if (!j) {
+    const team = sidePlayers(c).filter(i => i !== pIdx);
+    const have = {};
+    for (const i of team) { const o = G.players[i].job; if (o) have[o] = (have[o] || 0) + 1; }
+    j = lackingJob(jobWants(team.length + 1, c), have, c);
+  }
+  p.jb = null;   // (its goals count from now)
+  setJob(pIdx, j, 'm_jobIs');
+  return j;
+}
+
+// the colony asks for hands as its need shifts: a toast to its side,
+// for anyone to answer -- the nest threatened (guards), its golden seed
+// fallen (seekers), winter with the nest open (builders), late autumn short
+// of stores (foragers). Rate-limited (ASK_GAP, ASK_SAME), and not while
+// every player of the side already has that job (or none has a job yet).
+// Every second.
+function jobAsks() {
+  for (const c of G.colonies) {
+    if (!c.player || c.defeated) continue;
+    const team = sidePlayers(c).filter(i => G.players[i].job);
+    if (!team.length) continue;
+    const ask = c.ask || (c.ask = { t: -1e9, k: {}, rid: 0 });
+    const rs = G.relics && G.relics.side[c.idx];
+    let key = null, job = null;
+    if (nestThreat(c)) { key = 'ask_guard'; job = 'guard'; }
+    else if (rs && rs.ph === 'lying' && rs.id && !rs.held && ask.rid !== rs.id) { key = 'ask_seek'; job = 'seeker'; }
+    else if (G.isWinter() && !c.sealed) { key = 'ask_build'; job = 'builder'; }
+    else if (winterShort(c)) { key = 'ask_forage'; job = 'forager'; }
+    if (!key || team.every(i => G.players[i].job === job)) continue;
+    if (G.tick - ask.t < ASK_GAP || G.tick - (ask.k[key] || -1e9) < ASK_SAME) continue;
+    ask.t = G.tick; ask.k[key] = G.tick;
+    if (key === 'ask_seek') ask.rid = rs.id;
+    c.say(key, [], '#ffd890');
+  }
+}
+
+// a guard soldier's rally near home (Q): the soldiers near it go round the
+// nest on patrol (their usual rounds, at once and for longer) instead of
+// falling in behind it; an escort it had is let go. Returns how many.
+function rallyPatrol(leader, radius) {
+  let n = 0;
+  for (const a of G.ants) {
+    if (n >= FOLLOW_MAX) break;
+    if (a === leader || a.hp <= 0 || a.playerIdx >= 0 || a.colony !== leader.colony ||
+        a.caste !== 'soldier' || a.raiding) continue;
+    if (dist2(a.x, a.y, leader.x, leader.y) > radius * radius) continue;
+    a.followIdx = -1; a.followT = 0;
+    if (a.state !== 'fight') { a.state = 'patrol'; a.stateT = FOLLOW_T; a.target = null; a.nav = null; a.patrolI = a.id; }
+    n++;
+  }
+  return n;
+}
+
+// a forager picked up food (or milked an aphid) at (x, y): if more lies
+// there, up to FORAGE_CALL_N idle workers of its colony within
+// FORAGE_CALL_R go and forage there (the forage state walks them out and
+// they pick what they find). Not in winter. Returns how many came.
+function forageCall(p, pIdx, col, x, y) {
+  if (G.isWinter() || G.tick < (p.callT || 0)) return 0;
+  const R2 = FORAGE_RICH_R * FORAGE_RICH_R;
+  let more = 0;
+  for (const it of G.items) {
+    if (it.dead || it.carried || !ITEM_DEF[it.kind] || !ITEM_DEF[it.kind].food) continue;
+    if (dist2(it.x, it.y, x, y) < R2) more++;
+  }
+  for (const b of G.bugs) if (b.kind === 'aphid' && !b.dead && b.milkCd <= 0 && dist2(b.x, b.y, x, y) < R2) more++;
+  if (!more) return 0;
+  const cand = [];
+  for (const o of G.ants) {
+    if (o.hp <= 0 || o.colony !== col || o.playerIdx >= 0 || o.caste !== 'worker' || o.raiding || o.carry) continue;
+    if (o.state !== 'idle' && !(o.state === 'forage' && !(o.target && o.target.called))) continue;
+    const d = dist2(o.x, o.y, x, y);
+    if (d < FORAGE_CALL_R * FORAGE_CALL_R) cand.push([d, o]);
+  }
+  cand.sort((u, v) => u[0] - v[0]);
+  const n = Math.min(FORAGE_CALL_N, more, cand.length);
+  for (let k = 0; k < n; k++) {
+    const o = cand[k][1];
+    o.state = 'forage'; o.nav = null; o.stateT = 0;
+    o.target = { x: Math.max(20, Math.min(WORLD_W - 20, x + (k - 1) * 12)), y: 0, far: Math.abs(o.x - x) > MARCH_R, called: true };
+  }
+  if (n) {
+    p.callT = G.tick + FORAGE_CALL_CD;
+    G.msg('m_forageCall', [n], '#a8e8a0', pIdx);
+  }
+  return n;
+}
+
+// a player's kill: near its own nest, a point (2 for a predator or an armed
+// ant) for the guard tally
+function guardKill(killer, victim, big) {
+  const c = G.colonies[killer.col || 0];
+  if (c && Math.abs(victim.x - c.x) < TERRITORY) killer.stats.guard += big ? 2 : 1;
+}
+// a raid on colony c turned back: its players at home then share the credit
+function raidRepelled(c) {
+  G.players.forEach((p, i) => {
+    const a = p && p.ant;
+    if (a && a.hp > 0 && p.stats && playerColony(i) === c && Math.abs(a.x - c.x) < TERRITORY) p.stats.guard += 2;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // the end of a match (or a persistent world's year): each player's numbers
 // and the awards. MVP: a weighted score of everything (MVP_W); TOP DIGGER,
 // BUILDER and FORAGER, MOST KILLS: the most of each (none for nothing);
@@ -297,9 +624,13 @@ function noteSeasonLived() {
 // player index). yearOnly: a persistent world's flight counts the year
 // just gone only, from each tally's `yb` (its numbers at the year's start,
 // pmN: its pmLog's length then; see noteYearBase). Returns { players:
-// [{ i, n (name), c (colony), st: [kills, deaths, food, dug, built, care,
-// preds], mvp, pm (tiers reached in all), pmNew: [[track, tier]] }], awards:
-// [{ k, i, v }] } -- the players with a slot (online: a name) only.
+// [{ i, n (name), c (colony), j (its job at the end), st: [kills, deaths,
+// food, dug, built, care, preds, guard points, seeker points], mvp, pm
+// (tiers reached in all), pmNew: [[track, tier]] }], awards: [{ k, i, v }]
+// } -- the players with a slot (online: a name) only. The jobs' awards:
+// TOP FORAGER and TOP BUILDER are the old ones (food stored, px built);
+// BEST GUARD and TOP SEEKER count the guard and seeker points (see
+// jobValue) -- whatever the job, like the rest.
 // ---------------------------------------------------------------------------
 const MVP_W = { kills: 30, preds: 60, food: 2, dug: 0.02, built: 0.1, care: 12, crystals: 40, deaths: -15, pm: 20 };
 const SURVIVOR_MIN = 100;
@@ -310,6 +641,8 @@ const AWARDS = [
   { k: 'forager', v: r => r.st[2] },
   { k: 'killer', v: r => r.st[0] },
   { k: 'survivor', v: r => -r.st[1], ok: r => r.mvp >= SURVIVOR_MIN },
+  { k: 'guard', v: r => r.st[7] },
+  { k: 'seeker', v: r => r.st[8] },
 ];
 function matchHighlights(yearOnly) {
   const rows = [];
@@ -318,10 +651,11 @@ function matchHighlights(yearOnly) {
     const s = p.stats, b = yearOnly ? s.yb : null;
     const d = k => Math.max(0, (Number(s[k]) || 0) - (b ? Number(b[k]) || 0 : 0));
     const pmNew = s.pmLog.slice(b ? Math.min(s.pmLog.length, b.pmN || 0) : 0).map(e => [e[0], e[1]]);
-    const st = [d('kills'), d('deaths'), Math.round(d('food')), d('dug'), d('built'), d('care'), d('preds')];
+    const st = [d('kills'), d('deaths'), Math.round(d('food')), d('dug'), d('built'), d('care'), d('preds'),
+      d('guard') + Math.floor(d('patrol') / 60), d('seek')];
     let mvp = st[0] * MVP_W.kills + st[6] * MVP_W.preds + st[2] * MVP_W.food + st[3] * MVP_W.dug +
       st[4] * MVP_W.built + st[5] * MVP_W.care + d('crystals') * MVP_W.crystals + st[1] * MVP_W.deaths + pmNew.length * MVP_W.pm;
-    rows.push({ i, n: p.name || null, c: p.col || 0, st, mvp: Math.max(0, Math.round(mvp)), pm: pmCount(s), pmNew });
+    rows.push({ i, n: p.name || null, c: p.col || 0, j: p.job || null, st, mvp: Math.max(0, Math.round(mvp)), pm: pmCount(s), pmNew });
   });
   const awards = [];
   for (const a of AWARDS) {
@@ -343,7 +677,7 @@ function noteYearBase() {
     const s = p && p.stats;
     if (!s) continue;
     s.yb = { pmN: s.pmLog.length };
-    for (const k of ['kills', 'deaths', 'food', 'dug', 'built', 'care', 'preds', 'crystals']) s.yb[k] = s[k];
+    for (const k of ['kills', 'deaths', 'food', 'dug', 'built', 'care', 'preds', 'crystals', 'guard', 'patrol', 'seek']) s.yb[k] = s[k];
   }
 }
 
@@ -649,6 +983,7 @@ function rebirthWorld(seed) {
   const o = G.over || {};
   const keep = {
     legacy: G.legacy, gen: G.gen, names: G.players.map(p => p.name), slots: playerSlots(), avg: G.playerAvg,
+    jobs: G.players.map(p => p.job),   // (the players keep their jobs into the new colony)
     history: G.history.concat([{ gen: G.gen, year: G.year, out: 'lost', reason: o.reason || 'r_extinct', legacy: 0 }]),
   };
   // (balanced for as many players as the old colony was)
@@ -658,6 +993,7 @@ function rebirthWorld(seed) {
   G.gen = keep.gen + 1;
   G.history = keep.history.slice(-HISTORY_MAX);
   keep.names.forEach((n, i) => { ensurePlayer(i).name = n; });
+  keep.jobs.forEach((j, i) => { if (j) setJob(i, j); });
   // (why, then what now: the players read them in that order)
   G.msg(o.reason === 'r_queen' ? 'r_queen' : 'r_extinct', [], '#ff7060');
   G.msg('m_reborn', [G.gen, G.legacy], '#ffb040');
@@ -794,8 +1130,19 @@ function restoreWorld(d, playerCount) {
     if (BUILD_MATS.includes(bm)) pl.buildMat = bm;
     // v10: the player's tally and personal milestones (older: from nothing)
     if (v >= 10 && Array.isArray(d.pstats)) pl.stats = restoreStats(d.pstats[p]);
+    // v12: its job and the season's goals so far (older: a job given afresh, below)
+    const pj = v >= 12 && Array.isArray(d.pjobs) ? d.pjobs[p] : null;
+    if (pj && JOBS.includes(pj.j)) {
+      pl.job = pj.j;
+      if (pj.b && typeof pj.b === 'object' && Number.isFinite(Number(pj.b.k))) {
+        pl.jb = { k: Math.floor(Number(pj.b.k)), dt: Math.max(0, Number(pj.b.dt) || 0) };
+        for (const j of JOBS) pl.jb[j] = Math.max(0, Number(pj.b[j]) || 0);
+      }
+      pl.jgDone = Math.max(0, Math.floor(Number(pj.d) || 0)) & 15;
+    }
     G.players.push(pl);
   }
+  G.players.forEach((p, i) => { if (!p.job) pickJob(i); });
 
   for (const c of G.colonies) c.recalcChambers();
   G.running = true;
@@ -1094,7 +1441,7 @@ function steerAnt(a, dx, dy, build) {
     else if (dx !== 0) a.dir = dx;          // turn to face the aim
     return;
   }
-  const SPEED = a.speedNow() * 1.5;
+  const SPEED = a.speedNow() * 1.5 * jobSpeed(a);   // (a seeker's pace away from home)
   a.vx = dx * SPEED;
   if (dx !== 0) a.dir = dx;
 
@@ -1158,6 +1505,13 @@ function controlPlayer(pIdx) {
     col.buyUpgrade(inp.buy, pIdx);
     inp.buy = null;
   }
+  // the job (J: the next one; the O screen: one by name) -- dead or alive
+  if (inp.job) { inp.job = false; cycleJob(pIdx); }
+  if (inp.jobSet) {
+    const j = inp.jobSet;
+    inp.jobSet = null;
+    if (JOBS.includes(j) && j !== p.job) { setJob(pIdx, j, 'm_jobNow'); G.sfx('menu', a ? a.x : null, a ? a.y : null, 300, -1, pIdx); }
+  }
   if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = inp.raid = false; p.planLast = null; return; }
   const c = a.def;
 
@@ -1185,7 +1539,8 @@ function controlPlayer(pIdx) {
       if (d < bd) { bd = d; bit = o; }
     }
     if (bit) {
-      bit.hurt(a.dmgNow(), ux * 1.2, uy * 0.6 - 0.3, a);
+      // (a guard bites harder at home, see jobBite)
+      bit.hurt(a.dmgNow() * jobBite(a), ux * 1.2, uy * 0.6 - 0.3, a);
       bit.lastHitBy = 'player';
       bit.lastHitIdx = pIdx; bit.lastHitT = G.tick;   // (for the scoreboard's kills)
       G.sfx('bite', a.x, a.y);
@@ -1211,7 +1566,12 @@ function controlPlayer(pIdx) {
         // expansion: digging out natural ground inside a marked chamber
         // claims that room for it (and counts for the dig task). Re-biting
         // your own packed earth or thatch doesn't.
-        if (col.claimDug(bx, by, res.natural)) col.progress('dig', res.natural);
+        if (col.claimDug(bx, by, res.natural)) {
+          const dt = col.active('dig');
+          col.progress('dig', res.natural);
+          // (the bite that finished the dig task: a builder's goal for the season)
+          if (dt && dt.done) p.stats.digTasks++;
+        }
         // underground harvest: crystals and mushrooms tumble out of the wall
         if (res.crystals > 1) {
           G.items.push(G.makeItem('crystal', bx, by));
@@ -1255,7 +1615,7 @@ function controlPlayer(pIdx) {
         G.msg(load === 'soil' ? 'm_noSoil' : 'm_noThatch', [], '#ff8040', pIdx);
       }
     } else {
-      a.buildCd = BUILD_CD;
+      a.buildCd = p.job === 'builder' ? JOB_BUILD_CD : BUILD_CD;   // (a builder's perk)
       let n = 0, fx = null;
       if (next) {
         const placed = next.list.length ? T.placeAt(next.list, next.mat, null, Math.floor(a[load])) : [];
@@ -1297,7 +1657,8 @@ function controlPlayer(pIdx) {
   // call a raid on the enemy's nest (the colony's NPCs march; see callRaid)
   if (inp.raid) {
     inp.raid = false;
-    col.callRaid(pIdx);
+    // (a raid called is seeker's work)
+    if (col.callRaid(pIdx)) p.stats.seek += 2;
   }
 
   // caste ability: soldiers rally, nurses heal
@@ -1308,16 +1669,18 @@ function controlPlayer(pIdx) {
         // still catching its breath
       } else {
         // with a foe in sight everyone near turns on it; either way the
-        // soldiers near fall in behind the player
+        // soldiers near fall in behind the player -- a guard at home sends
+        // them round the nest on patrol instead (see rallyPatrol)
         const n = rallyAllies(a, RALLY_R);
-        const f = rallyFollow(a, pIdx, RALLY_R);
+        const guard = p.job === 'guard' && atHome(a);
+        const f = guard ? rallyPatrol(a, RALLY_R) : rallyFollow(a, pIdx, RALLY_R);
         if (n < 0 && f === 0) {
           G.msg('m_noRally', [], null, pIdx);
         } else {
           a.abilCd = 600;
           p.stats.care += Math.max(0, n) + f;
           if (n >= 0) G.msg(n > 0 ? 'm_rally' : 'm_rallyAlone', [n], '#ff8040', pIdx);
-          else G.msg('m_follow', [f], '#ff8040', pIdx);
+          else G.msg(guard ? 'm_patrol' : 'm_follow', [f], '#ff8040', pIdx);
           G.sfx('danger', a.x, a.y);
         }
       }
@@ -1396,6 +1759,8 @@ function controlPlayer(pIdx) {
       if (it) {
         it.carried = a; a.carry = it;
         G.sfx('pickup', a.x, a.y);
+        // (a forager's find: idle workers come to forage there too)
+        if (p.job === 'forager' && ITEM_DEF[it.kind] && ITEM_DEF[it.kind].food) forageCall(p, pIdx, col, it.x, it.y);
       } else if (broodNear) {
         broodNear.carried = a; a.carry = broodNear;
         G.msg('m_carrying', [{ brood: broodNear.kind }], null, pIdx);
@@ -1432,6 +1797,7 @@ function controlPlayer(pIdx) {
           p.stats.milked++;
           G.msg('m_milked', [], null, pIdx);
           G.sfx('milk', a.x, a.y);
+          if (p.job === 'forager') forageCall(p, pIdx, col, aphid.x, aphid.y);
         }
       }
     }
@@ -1521,8 +1887,10 @@ function takeOver(pIdx, caste, refX, refY) {
 function stepSim() {
   G.tick++;
   if (G.mode === 'world' && G.tick % AVG_STEP === 0) followPlayers();
-  // (the personal milestones: once a second, the players in turn)
-  for (let p = G.tick % 60; p < G.players.length; p += 60) checkPersonal(p);
+  // (the personal milestones and the job goals: once a second, the players
+  // in turn; the colonies' asks for hands once a second)
+  for (let p = G.tick % 60; p < G.players.length; p += 60) { checkPersonal(p); checkJob(p); }
+  if (G.tick % 60 === 30) jobAsks();
 
   for (let p = 0; p < G.players.length; p++) controlPlayer(p);
 
@@ -1539,7 +1907,10 @@ function stepSim() {
       G.items.push(G.makeItem('corpse', a.x, a.y));
       a.colony.stats.antsDied++;
       const killer = killerOf(a);
-      if (killer) killer.stats.kills++;
+      if (killer) {
+        killer.stats.kills++;
+        guardKill(killer, a, a.caste === 'soldier' || a.caste === 'queen' || a.raiding);
+      }
       // (versus: every ant down is a rival slain for the other side)
       if (G.mode === 'versus') for (const o of G.colonies) if (o !== a.colony) o.stats.rivalsSlain = (o.stats.rivalsSlain || 0) + 1;
       if (a.playerIdx >= 0) {
@@ -1589,7 +1960,7 @@ function stepSim() {
       G.items.push(it);
       G.fx('blood', b.x, b.y, 8);
       const killer = killerOf(b);
-      if (killer) killer.stats.kills++;
+      if (killer) { killer.stats.kills++; guardKill(killer, b, b.predator); }
       if (killer && b.predator) killer.stats.preds++;
       // (versus: the kill counts for the nest it was nearer to)
       const by = G.mode === 'versus' ? nestNearest(b.x) : G.colonies[0];

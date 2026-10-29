@@ -193,6 +193,24 @@ function personalView(sim, slots, vs) {
   return out;
 }
 
+// the view keys for the jobs: 'j' + colony index, by player index (null for
+// players not on that side): [job (an index into JOBS), the season's goal:
+// done so far, needed, met (1/0)]. Each side sees only its own key in
+// versus -- the enemy's jobs are its own business, like its milestones.
+// Small, so every snapshot (a J press shows at once); unchanged, not resent.
+function jobsView(sim, slots) {
+  const G = sim.G, out = {};
+  for (const c of G.colonies) {
+    if (!c.player) continue;
+    out['j' + c.idx] = G.players.map((p, i) => {
+      if (!slots[i] || !p || !p.job || (p.col || 0) !== c.idx) return null;
+      const g = sim.jobGoal(p);
+      return g ? [sim.JOBS.indexOf(p.job), g.n, g.need, g.done ? 1 : 0] : null;
+    });
+  }
+  return out;
+}
+
 // the view key for the players (names, ants, loads), from the room's slots
 function playersView(sim, slots) {
   return sim.G.players.map((p, i) => {
@@ -251,8 +269,9 @@ function clientSnapshot(frame, cl, edits) {
   for (const k in frame.view) {
     let v = frame.view[k], s = frame.viewJson[k];
     // (versus: the other side's colony only by its public face; its
-    // milestones, tasks, stocks, personal milestones and golden seed not at all)
-    if (frame.vs && 'cotkqr'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
+    // milestones, tasks, stocks, personal milestones, golden seed and jobs
+    // not at all)
+    if (frame.vs && 'cotkqrj'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
       if (k[0] !== 'c') continue;
       v = frame.pub[k]; s = frame.pubJson[k];
     }
@@ -341,4 +360,4 @@ function terrainHash(m) {
   return h >>> 0;
 }
 
-module.exports = { terrainHash, fog, SIGHT_X, SIGHT_Y, buildFrame, viewJson, playersView, scoresView, personalView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };
+module.exports = { terrainHash, fog, SIGHT_X, SIGHT_Y, buildFrame, viewJson, playersView, scoresView, personalView, jobsView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };

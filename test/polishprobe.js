@@ -242,6 +242,7 @@ const path = require('path');
   const ga = await page.evaluate(() => {
     const c = G.colony;
     c.food = 100; c.tasks = [];      // (no gather task: it would point at food)
+    G.players[0].job = null;         // (no job either: its arrow comes first -- see jobprobe)
     G.objectives.list.forEach(o => { o.done = o.id !== 'raise'; });   // the active one: raise -> the nursery
     const a = standAt(c.x - 700, T.surf[c.x - 700] - 4);
     for (let i = 0; i < 200; i++) updateCamera();

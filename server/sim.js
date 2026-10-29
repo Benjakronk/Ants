@@ -40,6 +40,7 @@ function createSim() {
     serializeWorld: ctx.serializeWorld, restoreWorld: ctx.restoreWorld, worldSummary: ctx.worldSummary,
     rebirthWorld: ctx.rebirthWorld, notePlayers: ctx.notePlayers, playerSlots: ctx.playerSlots,
     newPlayerStats: ctx.newPlayerStats, PERSONAL: run('PERSONAL'),
+    JOBS: run('JOBS'), assignJobs: ctx.assignJobs, pickJob: ctx.pickJob, jobGoal: ctx.jobGoal,
   };
 }
 

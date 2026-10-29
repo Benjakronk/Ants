@@ -286,12 +286,12 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   await page.waitForFunction(() => !!localAnt(), null, { timeout: 5000 }).catch(() => {});
   await key('o');
   const op = await page.evaluate(() => objPages());
-  await key('ArrowLeft');                  // (back round past page 4, PERSONAL MILESTONES,
-  await key('ArrowLeft');                  // to page 3: WORLD HISTORY)
+  await key('ArrowLeft');                  // (back round past page 5, PERSONAL MILESTONES,
+  await key('ArrowLeft');                  // to page 4: WORLD HISTORY -- after the jobs' page)
   await page.waitForTimeout(150);
   const hp = await page.evaluate(() => G.objScreen && G.objScreen.page);
   await page.screenshot({ path: 'test/shot-world-history.png' });
-  check('the O screen has a WORLD HISTORY page in a persistent world', op === 4 && hp === 2);
+  check('the O screen has a WORLD HISTORY page in a persistent world', op === 5 && hp === 3, { op, hp });
   await key('Escape');
   // the world starts over under the page: JOIN THE COLONY says why, no
   // welcome and no tutorial again; once an ant is picked, the reason first

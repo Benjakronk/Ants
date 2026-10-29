@@ -25,7 +25,8 @@ const MODES = ['coop', 'versus'];   // (what a player may create; 'world' is the
 const LENS = ['full', 'short', 'quick'];   // a match's year: 48, 24 or 16 minutes (see YEAR_LENS in colony.js)
 const FACTIONS = ['black', 'red'];  // by colony index
 const SIDE_MAX = cfg.SIDE_MAX;   // versus: players a side at most (the room holds two sides)
-const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark', raid: 'raid' };
+const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark', raid: 'raid', job: 'job' };
+const JOB_IDS = ['forager', 'builder', 'guard', 'seeker'];   // (JOBS in game.js; a lobby preference is one, or null: any)
 
 // a uniform random 32-bit seed / an unguessable reconnect token
 const randSeed = () => crypto.randomBytes(4).readUInt32LE(0);
@@ -118,7 +119,8 @@ class Room {
       idx, name: cl.name, token: randToken(), client: null, connected: false, lostAt: null,
       antId: 0, faction, hue: this.pickHue(faction, null),
       input: { dx: 0, dy: 0, bite: false, build: false, plan: false, px: 0, py: 0, paint: 0 },
-      shots: { act: 0, abil: 0, mat: 0, mark: 0, raid: 0 }, buys: [], take: null,
+      shots: { act: 0, abil: 0, mat: 0, mark: 0, raid: 0, job: 0 }, buys: [], take: null, jobSet: null,
+      jobPref: null,   // (the job it asked for in the lobby; null: any)
       inL: null, inN: 0,
     };
     this.slots[idx] = slot;
@@ -129,6 +131,9 @@ class Room {
       p.name = slot.name;
       p.stats = this.sim.newPlayerStats();   // (an old slot's tally isn't the newcomer's)
       p.col = this.colOf(slot);
+      // (a late joiner: the job its side lacks most)
+      p.jobPref = null;
+      this.sim.pickJob(idx);
       // (more players than the world was balanced for: it grows to match)
       if (this.sim.notePlayers(this.balanceFor())) this.log(`room ${this.label()}: now balanced for ${this.sim.playerSlots()} players`);
       this.sendWorld(cl);
@@ -152,6 +157,9 @@ class Room {
     if (this.state === 'play') {
       if (slot.antId) this.sim.reclaimAnt(slot.idx, slot.antId);
       slot.antId = 0;
+      // (a slot from before the jobs, say: one now)
+      const p = this.sim.G.players[slot.idx];
+      if (p && !p.job) this.sim.pickJob(slot.idx);
       this.sim.notePlayers(this.balanceFor());
       this.sendWorld(cl);
     } else if (this.state === 'over') {
@@ -231,6 +239,15 @@ class Room {
     return null;
   }
 
+  // a player's preferred job (null: any), honoured first when the match
+  // starts (see assignJobs)
+  setJobPref(slot, j) {
+    if (this.state !== 'lobby') return 'e_started';
+    slot.jobPref = JOB_IDS.includes(j) ? j : null;
+    this.broadcastLobby();
+    return null;
+  }
+
   // public (listed under OPEN MATCHES) or private (by code only)
   setPublic(cl, on) {
     if (this.world || this.state !== 'lobby') return 'e_started';
@@ -273,9 +290,14 @@ class Room {
   }
 
   broadcastLobby() {
-    const players = this.slots.map(s => s && { n: s.name, on: s.connected ? 1 : 0, f: s.faction, h: s.hue });
+    // (j: a player's preferred job -- versus, only for its own side's eyes)
+    const vs = this.mode === 'versus';
+    const list = f => this.slots.map(s => s && { n: s.name, on: s.connected ? 1 : 0, f: s.faction, h: s.hue,
+      j: !vs || s.faction === f ? s.jobPref || null : null });
+    const byF = { black: list('black'), red: vs ? list('red') : null };
     for (const s of this.slots) {
       if (!s || !s.client) continue;
+      const players = vs ? byF[s.faction] || byF.black : byF.black;
       s.client.send({
         t: 'lobby', code: this.code, mode: this.mode, state: this.state, max: this.cap(),
         you: s.idx, host: this.host ? this.host.idx : -1, token: s.token, faction: s.faction, players,
@@ -312,10 +334,13 @@ class Room {
       const p = sim.ensurePlayer(s.idx);
       p.name = s.name;
       p.col = this.colOf(s);
+      p.jobPref = s.jobPref || null;
       if (vs) sim.joinColony(s.idx, p.col);
       // (someone who dropped out in the lobby finds its ant waiting)
       if (!s.connected) { const a = sim.releasePlayer(s.idx); s.antId = a ? a.id : 0; }
     }
+    // the jobs: the preferences first, then by the team's size and need
+    sim.assignJobs();
     this.log(`room ${this.code}: ${this.mode} match started (${this.len}), ${this.slots.length} player(s)` +
       (vs ? ' (' + this.sides().join(' v ') + ')' : '') + `, seed ${seed}`);
     this.broadcastLobby();
@@ -363,6 +388,7 @@ class Room {
         if (s.shots[k] > 0 && !inp[ONESHOTS[k]]) { inp[ONESHOTS[k]] = true; s.shots[k]--; }
       }
       if (s.buys.length && inp.buy == null) inp.buy = s.buys.shift();
+      if (s.jobSet && inp.jobSet == null) { inp.jobSet = s.jobSet; s.jobSet = null; }
       if (s.take) {
         const caste = s.take;
         s.take = null;
@@ -454,6 +480,7 @@ class Room {
     // (each side's personal milestones, refreshed with the scores)
     if (this.scoresT === sim.G.tick) this.pms = S.personalView(sim, this.slots, this.mode === 'versus');
     if (this.pms) Object.assign(frame.view, this.pms);
+    Object.assign(frame.view, S.jobsView(sim, this.slots));
     S.viewJson(frame);
     const edits = this.dirty.length ? S.encodeEdits(sim, this.dirty) : [];
     this.dirty = [];

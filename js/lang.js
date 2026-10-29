@@ -373,7 +373,7 @@ const STR = {
   ui_hostStart: ['ENTER: START THE MATCH', 'ENTER: START SPILLET'],
   ui_waitHost: ['WAITING FOR THE HOST TO START...', 'VENTER PÅ AT VERTEN STARTER...'],
   ui_inProgress: ['THE MATCH IS ON - JOINING...', 'SPILLET ER I GANG - BLIR MED...'],
-  ui_lobbyLeave: ['H: HOW TO PLAY   ESC: LEAVE', 'H: SLIK SPILLER DU   ESC: FORLAT'],
+  ui_lobbyLeave: ['H: HOW TO PLAY   J: JOB {0}   ESC: LEAVE', 'H: SLIK SPILLER DU   J: JOBB {0}   ESC: FORLAT'],
   ui_scores: ['SCORES', 'POENG'],
   ui_scoreCols: ['KILLS,DEATHS,FOOD,DUG,BUILT', 'DREP,DØD,MAT,GRAVD,BYGD'],
   ui_helpKeys: ['LEFT/RIGHT: PAGE {0}/{1}   ESC: BACK', 'VENSTRE/HØYRE: SIDE {0}/{1}   ESC: TILBAKE'],
@@ -518,6 +518,51 @@ const STR = {
   awv_killer_1: ['1 KILL', '1 DREP'],
   awv_survivor: ['{0} DEATHS', '{0} DØDSFALL'],
   awv_survivor_1: ['1 DEATH', '1 DØDSFALL'],
+  aw_guard: ['BEST GUARD', 'BESTE VAKT'],
+  aw_seeker: ['TOP SEEKER', 'BESTE LETER'],
+  awv_guard: ['{0} PTS', '{0} POENG'],
+  awv_seeker: ['{0} PTS', '{0} POENG'],
+
+  // the jobs (see JOBS in game.js): names, what each is about (jt: a few
+  // words for the toast that gives it; jd: the O screen's line, with its
+  // perk), the HUD's goal line (jg), the colony's asks
+  job_forager: ['FORAGER', 'SANKER'],
+  job_builder: ['BUILDER', 'BYGGER'],
+  job_guard: ['GUARD', 'VAKT'],
+  job_seeker: ['SEEKER', 'LETER'],
+  job_any: ['ANY', 'VALGFRI'],
+  jt_forager: ['BRING FOOD HOME', 'BÆR MAT HJEM'],
+  jt_builder: ['BUILD AND DIG FOR THE NEST', 'BYGG OG GRAV FOR TUA'],
+  jt_guard: ['DEFEND THE NEST AND QUEEN', 'FORSVAR TUA OG DRONNINGEN'],
+  jt_seeker: ['CRYSTALS AND THE GOLDEN SEED', 'KRYSTALLER OG GULLFRØET'],
+  jd_forager: ['FOOD, FRUIT, APHIDS. +25% FOOD PER LOAD', 'MAT, FRUKT, BLADLUS. +25% MAT PER LAST'],
+  jd_builder: ['PLANS, CHAMBERS, MOUND. BUILDS 33% FASTER', 'PLANER, KAMRE, TUE. BYGGER 33% RASKERE'],
+  jd_guard: ['NEST, QUEEN, RAIDERS. +20% BITE AT HOME', 'TUA, DRONNINGEN, RØVERE. +20% BITT HJEMME'],
+  jd_seeker: ['CRYSTALS, GOLDEN SEED. +15% SPEED AFAR', 'KRYSTALLER, GULLFRØ. +15% FART LANGT UTE'],
+  jg_forager: ['FORAGER: FOOD HOME {0}/{1}', 'SANKER: MAT HJEM {0}/{1}'],
+  jg_builder: ['BUILDER: BUILT {0}/{1}', 'BYGGER: BYGD {0}/{1}'],
+  jg_guard: ['GUARD: DEFENCE {0}/{1}', 'VAKT: FORSVAR {0}/{1}'],
+  jg_seeker: ['SEEKER: FINDS {0}/{1}', 'LETER: FUNN {0}/{1}'],
+  m_jobIs: ['YOUR JOB: {0} - {1}', 'DIN JOBB: {0} - {1}'],
+  m_jobNow: ['NEW JOB: {0} - {1}', 'NY JOBB: {0} - {1}'],
+  m_jobGoal: ['\x19 {0} GOAL MET THIS SEASON! +{1}', '\x19 {0}-MÅLET NÅDD DENNE ÅRSTIDEN! +{1}'],
+  m_patrol: ['{0} SOLDIERS GO ON PATROL ROUND THE NEST', '{0} SOLDATER PATRULJERER RUNDT TUA'],
+  m_patrol_1: ['1 SOLDIER GOES ON PATROL ROUND THE NEST', '1 SOLDAT PATRULJERER RUNDT TUA'],
+  m_forageCall: ['{0} WORKERS COME TO FORAGE HERE', '{0} ARBEIDERE KOMMER FOR Å SANKE HER'],
+  m_forageCall_1: ['A WORKER COMES TO FORAGE HERE', 'EN ARBEIDER KOMMER FOR Å SANKE HER'],
+  ask_guard: ['THE NEST NEEDS GUARDS! (J)', 'TUA TRENGER VAKTER! (J)'],
+  ask_forage: ['FORAGERS WANTED: WINTER IS NEAR (J)', 'SANKERE TRENGS: VINTEREN NÆRMER SEG (J)'],
+  ask_seek: ['A GOLDEN SEED FELL: SEEKERS! (J)', 'ET GULLFRØ FALT: LETERE! (J)'],
+  ask_build: ['BUILDERS: SEAL THE NEST! (J)', 'BYGGERE: STENG TUA! (J)'],
+  ui_jobs: ['YOUR JOB', 'DIN JOBB'],
+  ui_jobYours: ['YOU: {0}', 'DU: {0}'],
+  ui_jobMet: ['GOAL MET \x19', 'MÅLET NÅDD \x19'],
+  ui_jobDone: ['{0}: GOAL MET \x19', '{0}: MÅLET NÅDD \x19'],
+  ui_jobNone: ['NO JOB YET', 'INGEN JOBB ENNÅ'],
+  ui_jobCaste: ['SUITS A {0}', 'PASSER EN {0}'],
+  ui_jobNeed: ['THE COLONY NEEDS A {0} MOST NOW', 'KOLONIEN TRENGER EN {0} MEST NÅ'],
+  ui_jobKeys: ['UP/DOWN + ENTER: TAKE IT UP   J: THE NEXT', 'OPP/NED + ENTER: TA DEN   J: NESTE'],
+  ui_jobSuits: ['{0}: SUITS A {1}', '{0}: PASSER EN {1}'],
   ui_highlights: ['HIGHLIGHTS', 'HØYDEPUNKTER'],
   ui_hlPlayer: ['PLAYER', 'SPILLER'],
   ui_hlMvp: ['MVP', 'POENG'],
@@ -701,7 +746,7 @@ function helpText() {
     ['  F (HOLD) / B .. BYGG / BYGGEPLAN', '#c8b890'],
     ['  R ............. JORD / STRÅ / MAURPORT', '#c8b890'],
     ['  X ............. MERK KAMMER / BLADLUSLY', '#c8b890'],
-    ['  O ............. MÅL / OPPGRADERINGER', '#c8b890'],
+    ['  O / J ......... MÅL / BYTT JOBB', '#c8b890'],
     ['M: KART  G: PIL  H: HOPP OVER TIPS  ESC: PAUSE', '#a09070'],
     ['BÆR MAT TIL LAGERET. MERK KAMRE FOR Å VOKSE.', '#a8e8a0'],
     ['AL OPP PRINSESSER OM HØSTEN: NESTE VÅR', '#a8e8a0'],
@@ -718,7 +763,7 @@ function helpText() {
     ['  F (HOLD) / B .. BUILD / BLUEPRINT', '#c8b890'],
     ['  R ............. EARTH / THATCH / ANT GATE', '#c8b890'],
     ['  X ............. MARK CHAMBER / APHID SHELTER', '#c8b890'],
-    ['  O ............. OBJECTIVES / UPGRADES', '#c8b890'],
+    ['  O / J ......... OBJECTIVES / NEXT JOB', '#c8b890'],
     ['M: MAP  G: GUIDE ARROW  H: SKIP HINT  ESC: PAUSE', '#a09070'],
     ['BRING FOOD TO STORAGE. MARK CHAMBERS TO GROW.', '#a8e8a0'],
     ['RAISE PRINCESSES IN AUTUMN: THE NEXT', '#a8e8a0'],
@@ -771,6 +816,44 @@ function helpPages(mode) {
     'YOUR OWN PERSONAL MILESTONES: O, THE LAST PAGE.',
   ]);
   const controls = page(L('ui_howto'), helpText());
+  // the jobs (see JOBS in game.js): what each is for, its perk, how to
+  // switch, and how a job is given (online by the match, solo the need)
+  const solo = mode === 'solo';
+  const jobs = page(no ? 'JOBBENE' : 'JOBS', no ? [
+    'HVER SPILLER HAR EN JOBB: ET DYTT, ALDRI ET BÅND.',
+    'PILEN (G) VISER HVOR JOBBEN VIL HA DEG, ØVERSTE',
+    'LINJE MÅLET DENS DENNE ÅRSTIDEN. BYTT NÅR DU',
+    'VIL, GRATIS: J, ELLER JOBBSIDEN PÅ O.',
+    ['\x1D SANKER: MAT, FRUKT OG BLADLUS HJEM', H],
+    '  +25% MAT PER LAST. KALLER LEDIGE ARBEIDERE.',
+    ['\x1E BYGGER: PLANER, KAMRE, STRÅTUA', H],
+    '  BYGGER 33% RASKERE. VINTER: STENG TUA.',
+    ['\x1F VAKT: TUA, DRONNINGEN, RØVERNE', H],
+    '  +20% BITT HJEMME. Q SENDER SOLDATER PÅ RUNDE.',
+    ['\x07 LETER: KRYSTALLER, GULLFRØET, TOKT (Z)', H],
+    '  +15% FART LANGT HJEMMEFRA.',
+    '',
+    ['KOLONIEN ROPER PÅ DET DEN TRENGER: SVAR!', WIN],
+    solo ? 'ALENE FÅR DU JOBBEN KOLONIEN TRENGER MEST.' : 'KAMPEN DELER UT JOBBENE. ØNSK DEG EN MED J',
+    solo ? 'AMMER LEGER, HVA JOBBEN ENN ER.' : 'I LOBBYEN. AMMER LEGER, HVA JOBBEN ENN ER.',
+  ] : [
+    'EVERY PLAYER HAS A JOB: A NUDGE, NEVER A LOCK.',
+    'THE ARROW (G) SHOWS WHERE IT WANTS YOU, THE TOP',
+    'LINE ITS GOAL THIS SEASON. SWITCH ANY TIME,',
+    'FREE: J, OR THE JOB PAGE ON O.',
+    ['\x1D FORAGER: FOOD, FRUIT AND APHIDS HOME', H],
+    '  +25% FOOD PER LOAD. CALLS IDLE WORKERS.',
+    ['\x1E BUILDER: PLANS, CHAMBERS, THE MOUND', H],
+    '  BUILDS 33% FASTER. WINTER: SEAL THE NEST.',
+    ['\x1F GUARD: THE NEST, THE QUEEN, RAIDERS', H],
+    '  +20% BITE AT HOME. Q SENDS SOLDIERS ON PATROL.',
+    ['\x07 SEEKER: CRYSTALS, THE GOLDEN SEED, RAIDS (Z)', H],
+    '  +15% SPEED FAR FROM HOME.',
+    '',
+    ['THE COLONY CALLS FOR WHAT IT NEEDS: ANSWER IT!', WIN],
+    solo ? 'ALONE, YOU GET THE JOB THE COLONY NEEDS MOST.' : 'THE MATCH HANDS OUT THE JOBS: ASK FOR ONE IN',
+    solo ? 'NURSES HEAL, WHATEVER THEIR JOB.' : 'THE LOBBY WITH J. NURSES HEAL, WHATEVER THE JOB.',
+  ]);
   // the golden seed (see updateRelics): co-op and a persistent world fetch
   // theirs from beyond the red AI's nest; versus, each side its own, past
   // the other's -- and guards the other's
@@ -873,7 +956,7 @@ function helpPages(mode) {
     ['LOST: THE QUEEN DIES WITH NO PRINCESS, OR', LOSE],
     ['EVERY ANT DIES.', LOSE],
     'EVERY PLAYER ALSO HAS PERSONAL MILESTONES (O).',
-  ]), seed, todo, controls];
+  ]), seed, jobs, todo, controls];
   if (mode === 'versus') return [page(no ? 'MOT HVERANDRE' : 'THE VERSUS MATCH', no ? [
     'SVART MOT RØD: HVER SIDE SPILLER SIN EGEN',
     'KOLONI. REDENE STARTER LIKE. ETT ÅR: 48, 24',
@@ -908,7 +991,7 @@ function helpPages(mode) {
     'OR 8 OF 12 MILESTONES (O), MORE ANTS THAN THEM.',
     '',
     ['LOSE YOUR QUEEN WITH NO HEIR AND YOU LOSE.', LOSE],
-  ]), seed, todo, controls];
+  ]), seed, jobs, todo, controls];
   if (mode === 'world') return [page(no ? 'EN VARIG VERDEN' : 'A PERSISTENT WORLD', no ? [
     'EN KOLONI SOM LEVER PÅ SERVEREN. KOM OG GÅ',
     'SOM DU VIL: DEN SOVER NÅR INGEN ER DER, OG',
@@ -943,6 +1026,6 @@ function helpPages(mode) {
     ['OVER ON A NEW MAP - ITS LEGACY IS KEPT.', LOSE],
     '',
     'O: MILESTONES, UPGRADES AND THE WORLD HISTORY',
-  ]), seed, todo, controls];
-  return [controls, todo, seed];
+  ]), seed, jobs, todo, controls];
+  return [controls, todo, jobs, seed];
 }

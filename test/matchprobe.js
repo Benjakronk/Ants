@@ -450,7 +450,9 @@ async function screens(port) {
       hud.len === 'short' && hud.day === 7200 && /^.SPRING \d\/3 (\x1C\d\/3 )?.\d+:\d\d$/.test(hud.strip) && hud.right <= 316 && !hud.overlap && hud.belowMsgs, hud);
     await page.screenshot({ path: 'test/shot-match-hud.png' });
     // the other players' tags keep clear of it: everyone along the top of
-    // the view (the render model's ants, moved for one layout)
+    // the view (the render model's ants, moved for one layout) -- just
+    // under the two top rows (the job's line, the milestone's), where a tag
+    // above its ant would cover them
     const tags = await page.evaluate(() => {
       const cx = Math.round(G.cam.x), cy = Math.round(G.cam.y);
       G.msgs = [];   // (the toasts are kept clear of too: none now)
@@ -458,7 +460,7 @@ async function screens(port) {
       for (let i = 0; i < G.players.length; i++) {
         const a = G.players[i].ant;
         if (!a || i === LOCAL) continue;
-        a.x = cx + 20 + k * 44; a.y = cy + 14; k++;
+        a.x = cx + 20 + k * 44; a.y = cy + 26; k++;
       }
       const v = playerView(), n0 = Labels.rects.length;
       drawNameTags(Math.round(G.cam.x), Math.round(G.cam.y), v.vw, v.vh);

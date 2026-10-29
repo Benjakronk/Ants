@@ -364,7 +364,7 @@ function relicChecks() {
     back.junk = G.relics.side[0];
     return back;
   })()`);
-  check('v11 saves keep the seeds (each side\'s state, the year\'s count, the item\'s colony and drop)', sv.v === 11 && sv.ok && sv.same &&
+  check('v11 saves keep the seeds (each side\'s state, the year\'s count, the item\'s colony and drop)', sv.v >= 11 && sv.ok && sv.same &&
     sv.item && sv.item.rcol === 0 && sv.item.dropped && sv.item.id && sv.ph === 'lying' && sv.got === 2, sv);
   check('...a v10 save loads with none out yet; junk is cleaned', sv.v10.ok && sv.v10.relics === '{"k":-1,"wk":-1,"side":[]}' && sv.v10.items === 0 &&
     sv.junk.ph === 'wait' && sv.junk.got === 3 && sv.junk.until === 0, sv);

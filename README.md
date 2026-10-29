@@ -63,13 +63,14 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 | Pick up / use | `E` |
 | Caste ability (soldier: rally, nurse: heal) | `Q` |
 | Call a raid on the enemy nest | `Z` |
+| Your job: the next one (forager, builder, guard, seeker) | `J` |
 | Switch ant | `C` |
 | Scoreboard (hold) | `Tab` |
 | Build (hold) | `F` |
 | Plan mode: draw a blueprint (`Space` plan, `X` erase, `B`/`Esc` done) | `B` |
 | Change build material (earth / thatch / ant gate) | `R` |
 | Mark chamber (or, by a tree, an aphid shelter) | `X` |
-| Objectives / crystal upgrades / personal milestones | `O` (`←`/`→` page, `Enter` buy) |
+| Objectives / crystal upgrades / your job / personal milestones | `O` (`←`/`→` page, `Enter` buy or take the job) |
 | Guide arrow on / off | `G` |
 | Skip the current hint | `H` |
 
@@ -112,8 +113,11 @@ offers four ways in:
 
 The lobby lists everyone in their colours, in two columns of four (versus:
 black on the left, red on the right, up to eight each under a smaller room
-code; a player who dropped out is dimmed). `H` opens the help: how the
-match works and how it's won, what to do through the year, the controls.
+code; a player who dropped out is dimmed). `J` picks the **job** you'd like
+(ANY, then each in turn -- its icon shows by your name, versus only to your
+own side; the match honours it when it starts, see *Jobs*). `H` opens the
+help: how the match works and how it's won, the golden seed, the jobs,
+what to do through the year, the controls.
 The host presses `Enter` to start, `Tab` to make the match public or
 private, and `Up`/`Down` + `X` to kick a player (who is told so). Someone
 who joins a match already under way picks an ant from the colony (**JOIN
@@ -158,9 +162,11 @@ back. When a match's year ends (the nuptial flight, or the colony lost)
 everyone sees the same end screen -- the result, and with `→` the
 **HIGHLIGHTS**: the awards (**MVP**, a weighted score of everything a
 player did; **TOP DIGGER**, **TOP BUILDER**, **TOP FORAGER**, **MOST
-KILLS**; **SURVIVOR**, the fewest deaths), every player's MVP score and
+KILLS**; **SURVIVOR**, the fewest deaths; the jobs' **BEST GUARD** and
+**TOP SEEKER**, by guard and seeker points -- the foragers and builders
+have theirs already), every player's job, MVP score and
 the personal milestones it earned this match (versus: both sides, a column
-each -- the enemy's milestones are shown only here), and your own by name.
+each -- the enemy's milestones and jobs are shown only here), and your own by name.
 The result page names the MVP and what you won. Matches are not saved;
 persistent worlds are (on the server).
 
@@ -201,6 +207,47 @@ brood room, the colony it needs before it raids and the size of its
 raids all by 10% a player beyond the first (8 players: x1.7, up to 17
 raiders; its queen lays at her usual pace). One player plays exactly the game as it was.
 
+### Jobs
+
+Every player has a **job** -- a nudge toward where the colony needs hands,
+never a lock: `J` switches to the next one, or pick one on the `O`
+screen's **YOUR JOB** page (`Up`/`Down`, `Enter`), any time, for free.
+
+| Job | The guide arrow points to | Its goal this season (the top line) | Perk while on the job | Suits |
+|---|---|---|---|---|
+| **FORAGER** | the nearest food (loose food, the fallen fruit, else an aphid); laden, the storage | food stored (60 in a FULL year) | each load stored worth **+25%** | worker |
+| **BUILDER** | the blueprint's nearest pixel, in winter the entrance to gate, a cramped chamber, the mound in summer | px built + a quarter of the px dug (300), or a dig task finished | build stamps and blueprint fills every 6 ticks instead of 8 (**+33%**) | worker |
+| **GUARD** | a raid on the nest, an enemy carrying a golden seed, an intruder at home, the queen bitten; else the nest (far off its entrance, near it the queen) | defence points (8): a foe slain near home 1 (a predator or an armed ant 2), a raid turned back while home 2, a minute on the rounds near home 1 | **+20%** bite within 600 px of its own nest | soldier |
+| **SEEKER** | our golden seed out there, our raid's target, the crystal field midway between the nests | finds (3): a crystal home 1, a golden seed home 3 (denied 1), a raid called 2 | **+15%** walking speed beyond 600 px of its own nest | soldier |
+
+A SHORT or QUICK year's goals are x0.71 / x0.58 (the square root of its
+share). A goal met is a toast for you (and +50 to the colony, for your first goal of the season), once a
+season; the next season counts afresh. The perks are the server's (and
+small); nursing stays the nurse caste's on any job. The colony's NPCs
+follow lightly: a GUARD soldier's rally (`Q`) near home sends the soldiers
+it reaches on patrol round the nest instead of falling in behind it (away
+from home it is the escort as before), and a FORAGER that picks up food
+(or milks an aphid) where more lies calls up to 3 idle workers within 700
+px to forage there (at most every 20 seconds). The switch overlay (`C`,
+or a death) preselects the caste the job suits.
+
+**Who gets which.** A match hands the jobs out at its start: first what
+each player asked for in the lobby, then by the team's size -- 1 player
+the job the colony needs most; 2 forager, builder; 3 + guard; 4 + a second
+forager; 5 + seeker; 6-8 a second builder, a second guard, a third forager
+(fewer than four: the colony's need takes the last place if it isn't among
+them). A late joiner (and a persistent world's newcomer) gets the job its
+side lacks most. A solo player gets the colony's need. **The colony asks**
+as its need shifts, a toast to its side for anyone to answer (`J`): **THE
+NEST NEEDS GUARDS** (a raid marching on it, an enemy carrying a golden seed
+near it, the queen bitten), **A GOLDEN SEED FELL: SEEKERS**, **BUILDERS:
+SEAL THE NEST** (winter with the entrance open), **FORAGERS WANTED: WINTER
+IS NEAR** (late autumn short of stores) -- one ask in 45 seconds at most,
+the same one every 3 minutes at most, and not while every player of the
+side already has that job. The scoreboard (`Tab`) shows each player's job
+icon (versus: your own side's only -- the enemy's jobs are never sent);
+the O screen's personal milestones list the job's tracks first.
+
 ### Getting started
 
 Spring of year 1 doubles as the tutorial: a hint panel above the HUD
@@ -210,7 +257,8 @@ blueprint), marking a chamber (`X`), the `O` screen and switching ants (`C`). Ea
 have done it; `H` skips one, and **HINTS** in the title or pause menu turns
 them off (your progress is remembered per world, in this browser only).
 
-The **guide arrow** (`G` toggles it, on by default) points the way to the
+The **guide arrow** (`G` toggles it, on by default) points where your job
+wants you (see *Jobs*); with nothing there for the job, the way to the
 season's next milestone — the nursery while you raise ants, the entrance
 for the mound or the seal, the roomiest royal chamber in autumn, the fallen
 fruit in summer; a load of food always to the nearest storage, the nearest
@@ -221,9 +269,12 @@ view with the target's sign beside it; in sight it bobs over the spot.
 The **goal strip** at the top right keeps the season in view: its name,
 the milestones done this season (x/3) and the time left in it (an
 hourglass, m:ss); from autumn the princesses raised (grown or growing),
-and in winter the time to the nuptial flight. It sits beside the task and
+and in winter the time to the nuptial flight. It sits beside the job and
 milestone lines (on whichever of the two top rows has room, shortened to
-an icon if it must); name tags keep clear of it.
+an icon if it must); name tags keep clear of it. The first row is your
+job's: its icon and the season's goal (e.g. `FORAGER: FOOD HOME 12/60`,
+then GOAL MET); the colony's task takes the row a third of the time, and a
+task just done has it while it blinks.
 
 The **HUD** has three groups: your ant (caste, health — it frosts over out
 in the winter cold — what it carries, the soil and thatch loads with the
@@ -565,7 +616,12 @@ it stands now -- a material or gone; versus: never the other side's). Once
 a second come the scoreboard (`sc`) and its side's personal milestones
 (`q0`/`q1`: each player's tiers as a digit a track and the counts behind
 them; versus: never the other side's -- they come with the end screen's
-`over`, with every player's numbers and the awards). A mid-game colony with
+`over`, with every player's numbers and the awards). The jobs come in
+every snapshot whose key changed (`j0`/`j1`: per player its job and the
+season's goal -- done, needed, met; versus: never the other side's). `J`
+is the one-shot `job` (server ONESHOTS), the O screen's pick `jobset`
+(a job by name, like `buy`), the lobby's preference `jobpref` (in the
+`lobby` message as each player's `j`, versus only to its own side). A mid-game colony with
 four to eight players costs each client about 3-8 KB/s on the wire.
 
 Headless tests (require `npm install` for Playwright):
@@ -621,6 +677,18 @@ node test/matchprobe.js   # the year's length (FULL/SHORT/QUICK days and
                           # page, the scoreboard, the end screens after a
                           # co-op match of 8 and versus of 16 (EN + NO), as
                           # screenshots (--no-browser skips the page)
+node test/raidprobe.js    # Z: a players' colony calls its raids; chambers near
+                          # the nest and capped
+node test/jobprobe.js     # jobs: assignment by team size, need and lobby
+                          # preference, a late joiner, J and the O page's
+                          # pick, each perk only on its job and where it
+                          # applies, a guard's rally on patrol, a forager's
+                          # call, the season's goal, the tallies, the asks
+                          # (rate-limited), job awards, worlds, v12 saves;
+                          # online (raw clients: the lobby's preference,
+                          # j0/j1 per side, the protocol); a page: lobby, HUD
+                          # line, O pages, switch overlay, scoreboard and
+                          # highlights (EN + NO) (--no-browser skips it)
 node test/relicprobe.js   # match round 2: the crystal field (genWorld as
                           # HEAD's), the golden seed (timing FULL/SHORT,
                           # reward, flight star, versus tie-break, denial,

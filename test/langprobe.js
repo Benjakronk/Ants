@@ -128,6 +128,45 @@ const path = require('path');
   if (rl.bad.length) console.log('  ', JSON.stringify(rl.bad));
   if (rl.same.length) console.log('  (same in both languages: ' + rl.same.join(', ') + ')');
 
+  // the jobs' strings (see JOBS in game.js): both languages, different
+  // words, the font's glyphs (above, the job icons among them), and each
+  // fits where it is drawn -- the HUD's job line beside the goal strip, the
+  // toasts (with their tokens), the O screen's job page (a line from x 36,
+  // the caste right of the name), the switch overlay's line, the awards,
+  // the lobby's key line with each preference
+  const jb = await page.evaluate(() => {
+    const bad = [], w = s => textWidth(String(s).replace(/\{\d\}/g, '888'));
+    const keys = Object.keys(STR).filter(k => /^(job_|jt_|jd_|jg_|ask_|m_job|m_patrol|m_forageCall|ui_job|aw_guard|aw_seeker|awv_guard|awv_seeker)/.test(k));
+    for (const lang of [0, 1]) {
+      LANG = lang;
+      for (const k of keys) {
+        if (!STR[k][lang]) bad.push(k + ': missing');
+        // (the job toasts' tokens are checked with the real words below)
+        if (w(L(k, 'SEEKER', 888)) > 316) bad.push(k + ': too wide');
+      }
+      for (const j of JOBS) {
+        for (const ch of JOB_ICON[j]) if (!FONT_GLYPHS[ch]) bad.push(j + ': no icon glyph');
+        if (4 + w(JOB_ICON[j] + ' ' + L('jg_' + j, 888, 888)) + 8 + w('\x04' + L('season_summer') + ' 3/3 \x1C3/3 \x1A11:59') > 316) bad.push('jg_' + j + ': beside the goal strip');
+        for (const m of ['m_jobIs', 'm_jobNow']) if (w(msgText({ key: m, args: [{ key: 'job_' + j }, { key: 'jt_' + j }] })) > 316) bad.push(m + '/' + j);
+        if (w(msgText({ key: 'm_jobGoal', args: [{ key: 'job_' + j }, 50] })) > 316) bad.push('m_jobGoal/' + j);
+        if (w(L('jd_' + j)) > 264) bad.push('jd_' + j + ': O page line');
+        if (36 + w(jobName(j)) + 12 + w(L('ui_jobCaste', casteName(JOB_CASTE[j]))) > 300) bad.push('ui_jobCaste/' + j);
+        if (w(L('ui_jobSuits', JOB_ICON[j] + jobName(j), casteName(JOB_CASTE[j]))) > 172) bad.push('ui_jobSuits/' + j + ': takeover panel');
+        if (w(L('ui_jobNeed', jobName(j))) > 284) bad.push('ui_jobNeed/' + j);
+      }
+      for (const j of JOBS.concat([null])) if (w(L('ui_lobbyLeave', jobName(j))) > 316) bad.push('ui_lobbyLeave/' + j);
+      for (const k of ['guard', 'seeker']) {
+        if (w(L('aw_' + k)) > 90) bad.push('aw_' + k + ': label too wide');
+        if (w(Ln('awv_' + k, 99999)) > 96) bad.push('awv_' + k + ': value too wide');
+      }
+    }
+    LANG = 0;
+    return { n: keys.length, bad, same: keys.filter(k => STR[k][0] === STR[k][1] && !/\{/.test(STR[k][0])) };
+  });
+  check('the jobs\' strings: both languages, different words, and they fit where they are drawn', jb.n >= 40 && !jb.bad.length && !jb.same.length, jb.n + ' strings');
+  if (jb.bad.length) console.log('  ', JSON.stringify(jb.bad));
+  if (jb.same.length) console.log('  (same in both languages: ' + jb.same.join(', ') + ')');
+
   // title menu: 5th item toggles language
   check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'PLAY SOLO'));
   for (let i = 0; i < 5; i++) { // down to LANGUAGE
