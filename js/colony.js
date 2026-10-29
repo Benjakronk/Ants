@@ -45,6 +45,9 @@ const CH_ROOM = 4;        // only air within reach of a (2*4+1) px open square
 const CH_NEAR = 40;       // X within this of a marker (in sight) cycles its type
 const CH_SPACING = 50;    // new markers keep this far from the others
 const CH_DEPTH = 30;      // markers go at least this far below the ground
+const CH_REACH = 500;     // a player's new marker within this of the entrance (x)...
+const CH_MAX = 16;        // ...and at most this many markers in all: a nest, not a
+                          // storage flag on every crystal vein across the map
 const CH_RECALC = 480;    // ticks between area recounts
 
 // the thatched mound: thatch built over the nest entrance. It warms the brood
@@ -151,6 +154,10 @@ const RAID_ANT_STALL = 1500; // ticks one raider may go without getting closer b
 const RAID_HOME_T = 9000;    // ticks the retreat may take before stragglers drop the raid (the walk home is ~6000)
 // what a raider may be busy with; any other state (a forage errand, a
 // rescue) means it lost the thread and is no longer one
+// a players' colony calls its own raids (Z): one at a time, the next no
+// sooner than RAID_CALL_CD ticks after the last one is home (real time,
+// whatever the year's length), never in winter
+const RAID_CALL_CD = 60 * 120;
 const RAID_STATES = ['raid', 'fight', 'flee', 'idle', 'home', 'return'];
 
 // more players (G.playerSlots, see playerSlots in game.js): each one beyond
@@ -870,6 +877,8 @@ class Colony {
       return;
     }
     if (this.chamberNear(a.x, a.y, CH_SPACING)) { refuse('m_markClose'); return; }
+    if (Math.abs(a.x - this.x) > CH_REACH) { refuse('m_markFar'); return; }
+    if (this.chambers.length >= CH_MAX) { refuse('m_markMany'); return; }
     const area = this.areaAt(a.x, a.y, null);
     if (area < CH_MIN_AREA) { refuse('m_markCramped'); return; }
     // (no dig-task credit: claiming a hollow isn't digging one)
@@ -1094,6 +1103,7 @@ class Colony {
     if (this.player) {
       if (G.tick % 60 === 0) updateObjectives(this);
       if (!this.defeated) this.updateExpansion(pop);
+      if (this.raid) this.updateRaid(pop);
       this.updateBuilders();
       // tasks
       this.taskT--;
@@ -1219,7 +1229,7 @@ class Colony {
         // the raiders draw near: the target colony is warned
         if (!r.warned && near < 600) {
           r.warned = true;
-          target.say('m_raid', [], '#ff5040');
+          target.say(this.player ? 'm_raidP' : 'm_raid', [], '#ff5040');
           target.sfx('danger');
         }
         // the thieves all laden: what the raid came for is won
@@ -1234,10 +1244,12 @@ class Colony {
             if (a.state === 'raid' || a.state === 'fight' || a.state === 'idle') { a.state = 'home'; a.target = null; }
           }
           // (only news if raiders were actually seen at the nest lately)
-          if (r.warned && raiders.length && r.t - (r.nearT || 0) < 1200) target.say('m_raidOver', [], '#e0c080');
+          if (r.warned && raiders.length && r.t - (r.nearT || 0) < 1200) target.say(this.player ? 'm_raidOverP' : 'm_raidOver', [], '#e0c080');
+          this.say('m_raidBack', [Math.round(r.stolen)], '#e0c080');
         }
       } else if (!raiders.length) {
         this.raid = null;
+        if (this.player) this.raidReadyT = G.tick + RAID_CALL_CD;
       } else if ((r.rt = (r.rt || 0) + 1) > RAID_HOME_T) {
         // stragglers that can't find their way home: just ants again
         for (const a of raiders) {
@@ -1245,9 +1257,11 @@ class Colony {
           if (a.state === 'home') { a.state = 'idle'; a.stateT = 60; a.nav = null; }
         }
         this.raid = null;
+        if (this.player) this.raidReadyT = G.tick + RAID_CALL_CD;
       }
       return;
     }
+    if (this.player) return;   // (the players call theirs: callRaid)
     if (G.isWinter() || G.day < 2 || G.day < this.lastRaidDay + raidGap()) return;
     // (against more players: a bigger colony before it goes, a bigger party)
     const rs = slotScale(SLOT_RIVAL);
@@ -1284,6 +1298,21 @@ class Colony {
     return team.length;
   }
 
+  // player pIdx calls a raid (Z): the colony's fit NPCs march on the enemy's
+  // nest the way the red AI's raiders do -- soldiers to fight, workers to
+  // carry off food -- and the players go along as they like
+  callRaid(pIdx) {
+    const no = key => { G.msg(key, [Math.ceil((this.raidReadyT - G.tick) / 60)], '#ff8040', pIdx); G.sfx('clank'); };
+    if (this.raid) return no('m_raidOn');
+    if (G.isWinter()) return no('m_raidWinter');
+    if (G.tick < (this.raidReadyT || 0)) return no('m_raidWait');
+    const enemy = this.enemy();
+    const n = enemy ? this.startRaid(enemy, RAID_MAX) : 0;
+    if (!n) return no('m_raidFew');
+    G.msg('m_raidGo', [n], '#ff8040', null, this.idx);
+    this.sfx('danger');
+  }
+
   // a raider at the enemy's stores takes what it can carry
   steal(a, enemy) {
     const v = Math.min(RAID_STEAL, Math.floor(enemy.food));
@@ -1294,7 +1323,7 @@ class Colony {
     loot.carried = a; a.carry = loot;
     G.items.push(loot);
     if (this.raid) {
-      if (!this.raid.stolen) enemy.say('m_raidSteal', [], '#ff5040');
+      if (!this.raid.stolen) enemy.say(this.player ? 'm_raidStealP' : 'm_raidSteal', [], '#ff5040');
       this.raid.stolen += v;
     }
     enemy.say('m_foodStolen', [v], '#ff7050');

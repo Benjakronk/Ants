@@ -322,7 +322,7 @@ function handle(cl, m) {
       inp.paint = inp.plan && (m.paint === 1 || m.paint === 2) ? m.paint : 0;
       return;
     }
-    case 'act': case 'abil': case 'mat': case 'mark':
+    case 'act': case 'abil': case 'mat': case 'mark': case 'raid':
       slot.shots[m.t] = Math.min(3, slot.shots[m.t] + 1);
       return;
     case 'buy':

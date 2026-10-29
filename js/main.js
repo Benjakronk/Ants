@@ -15,7 +15,7 @@ const BIND = {
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['KeyC'], scores: ['Tab'],
   build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'], obj: ['KeyO'],
-  arrow: ['KeyG'], skipHint: ['KeyH'], plan: ['KeyB'],
+  arrow: ['KeyG'], skipHint: ['KeyH'], plan: ['KeyB'], raid: ['KeyZ'],
 };
 
 // per-viewer settings kept in this browser (never in the sim or a save)
@@ -315,6 +315,7 @@ function readInput() {
   }
   if (tookAction('act')) inp.act = true;
   if (tookAction('abil')) inp.abil = true;
+  if (tookAction('raid')) inp.raid = true;
   if (tookAction('buildMat')) inp.buildMat = true;
 }
 
@@ -3364,8 +3365,9 @@ function netOnOver(over) {
 // ---------------------------------------------------------------------------
 function globalKeys() {
   if (G.state === 'netname' || G.state === 'netjoin') return;   // (letters are being typed)
-  // (in play C switches ants: the CRT filter is toggled from anywhere else)
-  if (G.state !== 'play' && tookPress('KeyC')) document.getElementById('crt').classList.toggle('off');
+  // (V: C switches ants in play, and a key that means two things by screen
+  // flipped the filter from overlays and menus)
+  if (tookPress('KeyV')) document.getElementById('crt').classList.toggle('off');
   if (tookPress('KeyN')) {
     const m = Sfx.toggleMute();
     if (G.state === 'play') pushMsg(L('m_sound', L(m ? 'w_off' : 'w_on')), '#80c0ff');

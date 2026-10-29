@@ -151,7 +151,7 @@ function newInput() {
   // 1 while it paints the blueprint, 2 while it erases
   return {
     dx: 0, dy: 0, bite: false, act: false, abil: false,
-    build: false, buildMat: false, mark: false, buy: null,
+    build: false, buildMat: false, mark: false, raid: false, buy: null,
     plan: false, px: 0, py: 0, paint: 0,
   };
 }
@@ -1158,7 +1158,7 @@ function controlPlayer(pIdx) {
     col.buyUpgrade(inp.buy, pIdx);
     inp.buy = null;
   }
-  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; p.planLast = null; return; }
+  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = inp.raid = false; p.planLast = null; return; }
   const c = a.def;
 
   // (plan mode: the ant braces, and the keys only move the cursor)
@@ -1293,6 +1293,11 @@ function controlPlayer(pIdx) {
   if (inp.mark) {
     inp.mark = false;
     if (!inp.plan) col.markChamber(a, pIdx);
+  }
+  // call a raid on the enemy's nest (the colony's NPCs march; see callRaid)
+  if (inp.raid) {
+    inp.raid = false;
+    col.callRaid(pIdx);
   }
 
   // caste ability: soldiers rally, nurses heal

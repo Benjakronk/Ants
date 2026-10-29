@@ -62,6 +62,7 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 | Bite / dig | `Space` |
 | Pick up / use | `E` |
 | Caste ability (soldier: rally, nurse: heal) | `Q` |
+| Call a raid on the enemy nest | `Z` |
 | Switch ant | `C` |
 | Scoreboard (hold) | `Tab` |
 | Build (hold) | `F` |
@@ -80,7 +81,7 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 - **`E`** picks up items, deposits food at any storage chamber, feeds
   hungry larvae, milks aphids for honeydew, and feeds leaves (or your
   thatch load) to a fungus garden.
-- `M` map · `Esc`/`P` pause · `N` sound · `C` CRT filter
+- `M` map · `Esc`/`P` pause · `N` sound · `V` CRT filter
 
 ### Playing online
 
@@ -342,7 +343,8 @@ to cycle it: **storage** (food capacity), **nursery** (brood and population),
 **barracks** (population and the soldier share), **royal chamber** (how
 often the queen lays, and room for princesses), **fungus garden** (leaves
 in, food out, even in winter), or remove it. A chamber's size is the open space
-around its marker; a cramped one counts for nothing. The HUD shows ants,
+around its marker; a cramped one counts for nothing. New markers go within
+500 px of the entrance, and a nest keeps at most 16. The HUD shows ants,
 brood and food against their capacity: when the stores are full, foragers
 wait with their loads until you dig and mark more storage. The generated
 nest houses about 20 ants: an idle colony fills it in a day and a half and
@@ -419,7 +421,14 @@ The bonus: fight into the red nest and **kill the red queen**. Don't go
 alone: as a soldier, press `Q` and the soldiers
 near you (up to eight) fall in behind you for 45 seconds, following you
 across the forest and down the red tunnels and fighting whatever they meet
-— with a few upgraded soldiers she can be taken in summer or autumn. With
+— with a few upgraded soldiers she can be taken in summer or autumn.
+Or press **`Z`** (any caste) to **call a raid**: the colony's fit NPCs —
+soldiers to fight, workers to carry off food, up to ten and never more
+than 40% of the colony — muster short of the enemy nest and go in
+together, exactly like the red raids; go along and lead them. One raid at
+a time, none in winter, and the colony needs two minutes after its raiders
+are home before it musters again. In versus the other side is warned of
+ENEMY raiders. With
 no princess to succeed her, the red colony falls apart — its ants stop
 raiding and slowly waste away — and the rival star at the flight is yours.
 If your ants dealt at least a quarter of the wounds she took lately you also

@@ -25,7 +25,7 @@ const MODES = ['coop', 'versus'];   // (what a player may create; 'world' is the
 const LENS = ['full', 'short', 'quick'];   // a match's year: 48, 24 or 16 minutes (see YEAR_LENS in colony.js)
 const FACTIONS = ['black', 'red'];  // by colony index
 const SIDE_MAX = cfg.SIDE_MAX;   // versus: players a side at most (the room holds two sides)
-const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark' };
+const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark', raid: 'raid' };
 
 // a uniform random 32-bit seed / an unguessable reconnect token
 const randSeed = () => crypto.randomBytes(4).readUInt32LE(0);
@@ -118,7 +118,7 @@ class Room {
       idx, name: cl.name, token: randToken(), client: null, connected: false, lostAt: null,
       antId: 0, faction, hue: this.pickHue(faction, null),
       input: { dx: 0, dy: 0, bite: false, build: false, plan: false, px: 0, py: 0, paint: 0 },
-      shots: { act: 0, abil: 0, mat: 0, mark: 0 }, buys: [], take: null,
+      shots: { act: 0, abil: 0, mat: 0, mark: 0, raid: 0 }, buys: [], take: null,
       inL: null, inN: 0,
     };
     this.slots[idx] = slot;

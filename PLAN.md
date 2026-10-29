@@ -321,3 +321,17 @@ that march out from their own nest. This is also the foundation for versus.
      always shown; a loose seed only within the other side's sight.
      No protocol version bump (an older page draws the seed as a seed).
    `test/relicprobe.js`.
+10. **Player raids, chamber reach, CRT key.**
+   - `Z` (any caste): `Colony.callRaid` sends the fit NPCs out through the
+     AI's own raid machine (`startRaid`, `updateRaid` now also watched for
+     a players' colony; it never starts one on its own). One at a time,
+     not in winter, `RAID_CALL_CD` (2 min real time) after the raiders are
+     home. Told to the colony (`m_raidGo`, `m_raidBack`); the target's
+     warnings say ENEMY raiders when the raiders are players' (`m_raidP`..).
+     One-shot input `raid` (client, server ONESHOTS).
+   - A player's new chamber marker within `CH_REACH` (500 px) of the
+     entrance and at most `CH_MAX` (16) markers: a player marked a storage
+     at every crystal vein it found.
+   - The CRT filter toggles on `V` everywhere (C switches ants in play, and
+     toggled the filter from overlays and menus).
+   `test/raidprobe.js`.

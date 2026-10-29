@@ -620,6 +620,7 @@ const Net = {
     if (inp.abil) { inp.abil = false; this.send({ t: 'abil' }); }
     if (inp.buildMat) { inp.buildMat = false; this.send({ t: 'mat' }); }
     if (inp.mark) { inp.mark = false; this.send({ t: 'mark' }); }
+    if (inp.raid) { inp.raid = false; this.send({ t: 'raid' }); }
     if (inp.buy) { this.send({ t: 'buy', id: inp.buy }); inp.buy = null; }
   },
 
