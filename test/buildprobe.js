@@ -399,7 +399,7 @@ const path = require('path');
       caps: G.colony.caps, surfHash: surfSum(),
     };
   });
-  check('save is version 8', saved.ok && saved.v === 8, saved.v);
+  check('save is version 9', saved.ok && saved.v === 9, saved.v);
   check('chambers round-trip', loaded.ok && loaded.chambers.join() === saved.chambers.join(), loaded.chambers);
   check('loads round-trip', loaded.soil === 37 && loaded.thatch === 12 && loaded.mat);
   check('packed earth and its wear round-trip', loaded.packed === saved.packed && loaded.packed > 0 &&

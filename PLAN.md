@@ -211,3 +211,29 @@ that march out from their own nest. This is also the foundation for versus.
    more than 8 at the nest; nothing near the 6 ms mark, so no new
    optimisation, and `CPU_BUDGET_MS` stays 10. Production's `server/.env`
    still says `MAX_PLAYERS=4` until edited (see deploy/README.md).
+7. **Blueprints.** Building was still hard to use: now a player plans and
+   the colony builds. `B` (plan mode): the ant braces, a client-side cursor
+   (no lag; up to `PLAN_REACH` 90 px from the ant, the view leaning toward
+   it) paints planned pixels on open air with a 3 px brush in the selected
+   material (`Space`; `X` erases; `B`/`Esc` done) into the colony's plan
+   (`Colony.plan`, at most 6000 px; shared by its players, never seen by the
+   other side in versus); planned pixels block nothing and leave the plan
+   once built over (`T.onSolid`). `F` by planned pixels (within 18 px)
+   fills them, nearest first and the held direction before the rest, a
+   clump of up to 12 per `BUILD_CD` from the load each takes (the next ones
+   blink); with nothing planned in reach the aimed stamp as before. The
+   colony's **build stock** (soil and thatch, 300 each + 50 a player beyond
+   the first): spoil overflowing a full load, everything NPCs dig on their
+   errands (`Ant.chew`, the workers' chamber digs), a load unloaded with `E`
+   at the storage. Idle workers (a colony with 30+ food; at most 3 and 15%
+   of its workers; out of the cold in winter) take a `build` errand: to the
+   nearest spot the stock can build (by the nest's tunnels or the surface
+   walk), 4 px every 20 ticks from the stock, never where anyone stands,
+   back to idle when the spot is done or the stock is dry; a spot not
+   reached in 40 s (or blocked) is shunned for a minute. Online: the plan
+   whole in the world message, then per-snapshot deltas of the pixels
+   changed (`pl`, runs of pixels as they stand now), the stocks a view key
+   of their own (`k0`/`k1`, private in versus); the input carries the
+   cursor and the brush, the sim holds the cursor to the reach and paints
+   the stroke between the spots it gets. Save v9 (the plan as runs, the
+   stocks; older saves: none). `test/planprobe.js`.

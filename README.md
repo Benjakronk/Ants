@@ -65,6 +65,7 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 | Switch ant | `C` |
 | Scoreboard (hold) | `Tab` |
 | Build (hold) | `F` |
+| Plan mode: draw a blueprint (`Space` plan, `X` erase, `B`/`Esc` done) | `B` |
 | Change build material (earth / thatch / ant gate) | `R` |
 | Mark chamber (or, by a tree, an aphid shelter) | `X` |
 | Objectives / crystal upgrades | `O` (`←`/`→` page, `Enter` buy) |
@@ -176,8 +177,8 @@ raiders; its queen lays at her usual pace). One player plays exactly the game as
 
 Spring of year 1 doubles as the tutorial: a hint panel above the HUD
 teaches one thing at a time — walking and climbing, biting and the soil
-load, carrying food to the storage, building (`F`, `R`), marking a chamber
-(`X`), the `O` screen and switching ants (`C`). Each hint stays until you
+load, carrying food to the storage, building (`F`, `R`; `B` plans a
+blueprint), marking a chamber (`X`), the `O` screen and switching ants (`C`). Each hint stays until you
 have done it; `H` skips one, and **HINTS** in the title or pause menu turns
 them off (your progress is remembered per world, in this browser only).
 
@@ -247,6 +248,33 @@ in mid-air it falls as usual. **Packed earth** is a tough wall
 that takes a worker three bites (a soldier two) and slows burrowing worms,
 centipedes and beetles just as much; **thatch** is light and breaks in one
 bite. Building never walls in an ant, brood or bug.
+
+**Blueprints.** Press **`B`** for plan mode: your ant braces where it is
+(in mid-air it lands first) and a cursor appears -- the direction keys move
+it (slowly at first, faster as you hold them), up to 90 px from your ant,
+and the view leans toward it. Hold **`Space`** to paint planned pixels with
+a small brush in the selected material (`R` switches), hold **`X`** to rub
+them out; `B` or `Esc` ends plan mode (a bar over the HUD shows the keys,
+the material, the plan's size and the stocks). A plan only marks open air,
+blocks nothing, and is your colony's: everyone playing it sees it (as a
+pulsing ghost in the material's colour, faintly on the `M` map) and adds to
+it; in versus the other side never sees yours. A colony plans at most 6000
+pixels. Then **fill it**: hold `F` by planned pixels (within about 18 px) and
+your ant fills them -- the nearest first, those in the held direction before
+the rest, a small clump at a time from the load each material takes (the
+pixels it fills next blink); with nothing planned in reach `F` builds where
+you aim, as before. **The workers help:** the colony keeps a **build stock**
+of soil and thatch (300 of each, 50 more per player beyond the first) --
+whatever spoil no longer fits a player's full load, whatever the NPCs dig
+on their errands, and any load you unload with `E` at the storage
+(empty-handed). While the colony isn't hungry, an idle worker now and then
+becomes a builder (at most 3 at once, and no more than 15% of the workers):
+it walks to the nearest spot of the plan the stocks can build, fills a few
+pixels every third of a second, and goes back to its chores when the spot
+is done or the stock runs dry; a spot it can't reach is left alone for a
+minute. Builders never dig for soil, never build where anyone stands, and in
+winter only work out of the cold. A planned pixel built over by anyone
+leaves the plan. The stocks show on the `O` screen.
 
 The third material is the **ant gate** (costs soil): your colony's ants walk
 through it as if it were open air, while bugs, worms, centipedes and rival
@@ -444,11 +472,16 @@ The protocol is JSON over one WebSocket (permessage-deflate on): `hello`,
 `enter` (a persistent world by name) / `resume` (token), `lobby`, `side`,
 `pub`, `kick`, `start`, `leave`; in a match the client sends held input
 (`in`, on change and every 100 ms) and presses as messages of their own
-(`act`, `abil`, `mat`, `mark`, `buy`, `take`). On joining it gets `world` (the seed, plus the
+(`act`, `abil`, `mat`, `mark`, `buy`, `take`); in plan mode the held
+input carries the cursor and the brush too (`plan`, `px`, `py`, `paint`;
+the sim holds the cursor to the ant's reach and paints the stroke between
+the spots it gets). On joining it gets `world` (the seed, plus the
 terrain as a deflated diff against what the seed generates, checked by a
-hash), then snapshots: entity records as integer arrays, the ids gone, the
-colony state that changed, its own events (messages, sounds, particles)
-and the terrain rects edited (run-length packed). A mid-game colony with
+hash, and its own colony's blueprint whole), then snapshots: entity records
+as integer arrays, the ids gone, the colony state that changed, its own
+events (messages, sounds, particles), the terrain rects edited (run-length
+packed) and its colony's blueprint changes (`pl`: runs of pixels, each as
+it stands now -- a material or gone; versus: never the other side's). A mid-game colony with
 four to eight players costs each client about 3-8 KB/s on the wire.
 
 Headless tests (require `npm install` for Playwright):
@@ -471,6 +504,15 @@ node test/rivalprobe.js   # the red colony: queen, brood, foraging, raids and
                           # theft, the contested fruit, the red queen slain,
                           # v5 saves + v4 migration; map and O screen
 node test/buildprobe.js   # soil loads, building, chambers, capacity, saves
+node test/planprobe.js    # blueprints: plan mode (B, Esc), the cursor's reach,
+                          # painting only air, erasing, materials, the cap; F
+                          # filling the plan (only planned pixels, from the
+                          # load, never walling an ant in) or the aimed stamp;
+                          # the stocks; NPC builders over several seeds (and
+                          # stopping with the stock empty); online co-op and
+                          # versus (each side only its own plan, small
+                          # deltas); v9 saves and older ones; screenshots
+                          # (--no-browser / --no-net skip parts)
 node test/polishprobe.js  # hints (advance, skip, off), the guide arrow and
                           # its toggle, the raid alert and theft notice,
                           # enemy health bars, plurals in both languages,

@@ -113,7 +113,8 @@ class Room {
     const faction = this.mode === 'versus' && sides[1] < sides[0] ? 'red' : 'black';
     const slot = {
       idx, name: cl.name, token: randToken(), client: null, connected: false, lostAt: null,
-      antId: 0, faction, hue: this.pickHue(faction, null), input: { dx: 0, dy: 0, bite: false, build: false },
+      antId: 0, faction, hue: this.pickHue(faction, null),
+      input: { dx: 0, dy: 0, bite: false, build: false, plan: false, px: 0, py: 0, paint: 0 },
       shots: { act: 0, abil: 0, mat: 0, mark: 0 }, buys: [], take: null,
       inL: null, inN: 0,
     };
@@ -296,6 +297,7 @@ class Room {
     const seed = randSeed();
     // (versus: the players take workers their colonies already have)
     sim.newWorld(seed, vs ? 0 : this.slots.length, this.mode, this.balanceFor());
+    sim.G.planSync = true;   // (the blueprints' changes go out as deltas)
     this.base = new Uint8Array(sim.T.m);
     sim.T.onEdit = (x0, y0, x1, y1) => { this.dirty.push([x0, y0, x1, y1]); };
     this.sim = sim;
@@ -319,16 +321,20 @@ class Room {
   }
 
   // the terrain (a diff against the seed's, deflated), the surface line and
-  // the wear; the next snapshot after it is a full one
+  // the wear, and the player's own colony's blueprint whole ([colony, packed
+  // runs], see planPack; the snapshots bring its changes); the next
+  // snapshot after it is a full one
   sendWorld(cl, full) {
     const T = this.sim.T, G = this.sim.G;
     const diff = full ? T.m : P.xorInto(new Uint8Array(T.m.length), T.m, this.base);
     const z = zlib.deflateSync(diff, { level: 6 });
+    const ci = this.colOf(cl.slot), col = G.colonies[ci];
     cl.send({
       t: 'world', v: P.VERSION, seed: this.seed, tick: G.tick, mode: this.mode, name: this.name,
       you: cl.slot.idx, w: this.sim.WORLD_W, h: this.sim.WORLD_H,
       full: full ? 1 : 0, terr: z.toString('base64'), hash: P.hashBytes(T.m),
       surf: P.packInt16(T.surf), wear: T.wearList(),
+      plan: col ? [ci].concat(col.planPacked()) : null,
     });
     cl.delta = S.freshDelta();
     cl.events = [];
@@ -346,6 +352,8 @@ class Room {
       const inp = p.input;
       inp.dx = s.input.dx; inp.dy = s.input.dy;
       inp.bite = s.input.bite; inp.build = s.input.build;
+      // (plan mode: the sim holds the cursor to the ant's reach itself)
+      inp.plan = s.input.plan; inp.px = s.input.px; inp.py = s.input.py; inp.paint = s.input.paint;
       if (s.inL !== null) s.inN++;
       // one-shot presses: one of each kind per tick, none lost
       for (const k in ONESHOTS) {
@@ -433,6 +441,8 @@ class Room {
     S.viewJson(frame);
     const edits = this.dirty.length ? S.encodeEdits(sim, this.dirty) : [];
     this.dirty = [];
+    // the blueprints' changes, each colony's for its own players only
+    const plans = sim.G.colonies.map(c => { const d = c.planDrain(); return d ? [c.idx].concat(d) : null; });
     // (test builds: now and then a hash of the terrain as this snapshot
     // leaves it, for the clients' to be checked against)
     const th = cfg.DEV && ++this.snapN % 20 === 0 ? S.terrainHash(sim.T.m) : undefined;
@@ -441,6 +451,8 @@ class Room {
       if (!cl || !cl.ready) continue;
       this.updateFocus(cl);
       const msg = S.clientSnapshot(frame, cl, edits);
+      const pl = plans[cl.colIdx || 0];
+      if (pl) msg.pl = pl;
       // (the client tick the server's ant has caught up with, for prediction)
       if (s.inL !== null && s.inN > 0) msg.l = s.inL + s.inN - 1;
       if (th !== undefined) msg.th = th;
@@ -500,6 +512,7 @@ class Room {
       this.base = new Uint8Array(sim.T.m);
     }
     sim.T.onEdit = (x0, y0, x1, y1) => { this.dirty.push([x0, y0, x1, y1]); };
+    sim.G.planSync = true;
     this.sim = sim;
     this.state = 'play';
     this.lastSnap = sim.G.tick;

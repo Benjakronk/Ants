@@ -90,6 +90,9 @@ function buildView(sim) {
       }),
       shelters: c.shelters.map(sh => ({ x: sh.x, y: sh.y })),
     };
+    // the builders' stocks, a key of their own (they change by the pixel
+    // as the ants dig; the blueprint itself goes as deltas, see room.js)
+    if (c.player) v['k' + c.idx] = { soil: Math.floor(c.stock.soil), thatch: Math.floor(c.stock.thatch) };
     if (c.objectives) v['o' + c.idx] = c.objectives;
     // (a done task counts down on the server; the client only needs "done")
     if (c.player) v['t' + c.idx] = c.tasks.map(t => Object.assign({}, t, { doneT: t.done ? 1 : 0 }));
@@ -177,8 +180,8 @@ function clientSnapshot(frame, cl, edits) {
   for (const k in frame.view) {
     let v = frame.view[k], s = frame.viewJson[k];
     // (versus: the other side's colony only by its public face; its
-    // milestones and tasks not at all)
-    if (frame.vs && 'cot'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
+    // milestones, tasks and stocks not at all)
+    if (frame.vs && 'cotk'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
       if (k[0] !== 'c') continue;
       v = frame.pub[k]; s = frame.pubJson[k];
     }

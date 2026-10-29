@@ -14,9 +14,10 @@ const SAVE_PREFIX = 'maur_world_';
 // who wounded its queen lately (the red-queen bonus needs a real hand in
 // her death). v7: the world's mode (a persistent world on the server),
 // its legacy points, history and generation. v8: the players the world is
-// balanced for (G.playerSlots; older saves: their player count).
-// restoreWorld still loads v2-v7 saves (missing fields get defaults).
-const SAVE_VERSION = 8;
+// balanced for (G.playerSlots; older saves: their player count). v9: each
+// colony's blueprint (planPack's runs of pixels) and its builders' stocks.
+// restoreWorld still loads v2-v8 saves (missing fields get defaults).
+const SAVE_VERSION = 9;
 
 // run-length encode the terrain bytes: [val, lo(count), hi(count)] triplets
 function rleEncode(arr) {
@@ -122,6 +123,8 @@ function serializeColony(c) {
     defeated: c.defeated, slain: c.slain, queenSeen: c.queenSeen,
     raid: c.raid, expandN: c.expandN, lastExpandDay: c.lastExpandDay, digJob: c.digJob,
     queenDmg: roundAll(c.queenDmg),
+    plan: c.planPacked(),
+    stock: { soil: Math.floor(c.stock.soil), thatch: Math.floor(c.stock.thatch) },
   };
 }
 

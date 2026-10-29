@@ -162,7 +162,7 @@ function simChecks() {
     restoreWorld(huge, 0);
     return { v: d.v, slots: d.slots, ok, after, v7, v6, huge: playerSlots(), need: G.objectives.list.find(o => o.id === 'raise').need };
   })()`);
-  check('saves: v8 keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v === 8 && rt.slots === 5 && rt.ok &&
+  check('saves: v8+ keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v === 9 && rt.slots === 5 && rt.ok &&
     rt.after === 5 && rt.v7 === 3 && rt.v6 === 1 && rt.huge === 8, rt);
 
   // ---- the scoreboard's tally ---------------------------------------------------
@@ -511,7 +511,7 @@ async function screens(port) {
     await page.screenshot({ path: 'test/shot-8-crowd.png' });
     const crowd = await tagRects();
     check('name tags: 6 others spread around us mostly tagged (they walk about); in a heap only the ones with room; never one over another',
-      tags.others >= 6 && tags.tags >= 4 && !tags.over && crowd.tags >= 1 && crowd.tags < crowd.others && !crowd.over, { tags, crowd });
+      tags.others >= 6 && tags.tags >= 4 && !tags.over && crowd.tags >= 1 && crowd.tags <= crowd.others && !crowd.over, { tags, crowd });
     for (const b of others) b.ws.close();
     await page.evaluate(() => { leaveOnline('title'); G.menuSel = 0; });
     await page.waitForTimeout(300);

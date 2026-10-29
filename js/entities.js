@@ -370,7 +370,7 @@ class Ant {
       // (an NPC chews out just its body: wide bites here, every time a big
       // soldier rubbed the entrance shaft, ate the nest mound into a crater)
       const r0 = Math.max(this.hw, this.hh) + (this.playerIdx < 0 ? 1 : 2.5);
-      T.dig(this.x, this.y, r0, undefined, this.own, spare);
+      this.chew(this.x, this.y, r0, undefined, this.own, spare);
       this.digCd = this.def.digCd;
       this.biteAnim = 6;
       G.fx('dirt', this.x, this.y, 2);
@@ -388,7 +388,7 @@ class Ant {
             }
           }
         }
-        if (!freed && spare) T.dig(this.x, this.y, r0, undefined, this.own);
+        if (!freed && spare) this.chew(this.x, this.y, r0, undefined, this.own);
       }
     }
 
@@ -424,7 +424,7 @@ class Ant {
         }
         this.climbing = false; this.ceiling = false; this.crotchT = 0;
         this.state = 'idle'; this.stateT = 60; this.target = null; this.nav = null;
-        T.dig(this.x, this.y + 4, Math.max(this.hw, this.hh) + 2, undefined, this.own, SPARE_THATCH);
+        this.chew(this.x, this.y + 4, Math.max(this.hw, this.hh) + 2, undefined, this.own, SPARE_THATCH);
         outer: for (let r = 4; r <= 16; r += 4) {
           for (const o of [[0, r], [r, 0], [-r, 0], [r, r], [-r, r], [0, -r]]) {
             if (!T.boxSolid(this.x + o[0], this.y + o[1], this.hw, this.hh, this.own)) {
@@ -481,6 +481,15 @@ class Ant {
       }
     }
     return false;
+  }
+
+  // the ant's own chewing (chewing free, a stuck goto's bite, a squeeze, a
+  // burrow): T.dig, and the spoil it brings up goes to its colony's stocks
+  // for the builders. (No ant digs FOR spoil: that dug craters.)
+  chew(cx, cy, r, power, own, spare) {
+    const res = T.dig(cx, cy, r, power, own, spare);
+    if (this.colony && (res.soil > 0 || res.thatch > 0)) this.colony.bank(res.soil, res.thatch);
+    return res;
   }
 
   // walk/climb/dig toward a point. The heart of NPC navigation: no pathfinding,
@@ -638,8 +647,8 @@ class Ant {
           if (T.digHasTarget(bx, by, digR, this.own, SPARE_BUILT)) hit = { bx, by };
         }
         if (hit) {
-          T.dig(hit.bx, hit.by, digR, c.digPow, this.own, SPARE_BUILT);
-          T.dig(this.x + ux * 2, this.y + uy * 2, digR * 0.8, 0, this.own, SPARE_BUILT); // clear around the body too
+          this.chew(hit.bx, hit.by, digR, c.digPow, this.own, SPARE_BUILT);
+          this.chew(this.x + ux * 2, this.y + uy * 2, digR * 0.8, 0, this.own, SPARE_BUILT); // clear around the body too
           G.fx('dirt', hit.bx, hit.by, 3);
           G.sfx('dig', hit.bx, hit.by, 200);
           this.digCd = this.digCdNow() + 6;
@@ -699,7 +708,7 @@ class Ant {
       const ux = dx / (dNow || 1), uy = dy / (dNow || 1);
       // (a sealed wall of packed earth does give way here, slowly: the
       // colony is never walled in for good -- but the thatch stays)
-      T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, this.own, SPARE_THATCH);
+      this.chew(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, this.own, SPARE_THATCH);
       const nx = this.x + ux * 2, ny = this.y + uy * 2;
       if (!T.boxSolid(nx, ny, 1.5, 1.5, this.own) && !T.boxHard(nx, ny, this.hw, this.hh)) {
         this.x = nx; this.y = ny;
@@ -946,7 +955,7 @@ class Ant {
         const nx = this.x + ux * 2, ny = this.y + uy * 2;
         if (T.boxSolid(nx, ny, 1.5, 1.5, this.own)) {
           // chew only what's actually in the way (don't erode the nest)
-          T.dig(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, this.own, SPARE_BUILT);
+          this.chew(this.x + ux * 3, this.y + uy * 3, Math.max(this.hw, this.hh) + 1, undefined, this.own, SPARE_BUILT);
           this.biteAnim = 6;
           if ((G.tick & 7) === 0) G.fx('dirt', this.x, this.y, 2);
         }
@@ -1571,6 +1580,36 @@ class Ant {
         break;
       }
 
+      case 'build': {
+        // a builder (see Colony.updateBuilders): to a spot on the colony's
+        // blueprint, then filling it from the stocks a few pixels a bite
+        // until the stocks run dry or nothing is left to build there
+        const tg = this.target;
+        if (!tg || !tg.build || this.carry || outInCold(this)) { this.endBuild(false); break; }
+        if (Math.hypot(tg.x - this.x, tg.y - this.y) > NPC_BUILD_R - 2) {
+          // on the way (it may take only so long, and a spot it can't get
+          // to is shunned -- like a goto failure; one built or rubbed out
+          // meanwhile is no errand at all)
+          if (!col.plan.has(tg.i)) { this.endBuild(false); break; }
+          this.stateT -= this.dt;
+          this.buildWalk(tg);
+          if (this.gotoFail || this.stateT <= 0) { this.gotoFail = false; this.endBuild(true); }
+          break;
+        }
+        // there: cling where it is (standing still on purpose: not the
+        // freeze detector's business) and build
+        if (this.climbing) this.climbV = 0;
+        this.freezeT = 0;
+        if (this.buildCd > 0) break;
+        this.buildCd = NPC_BUILD_CD;
+        const n = col.npcBuild(this);
+        if (n < 0) { this.endBuild(false); break; }
+        // (someone stands in the way bite after bite: try elsewhere)
+        this.buildBlockN = n > 0 ? 0 : (this.buildBlockN || 0) + 1;
+        if (this.buildBlockN > 8) this.endBuild(true);
+        break;
+      }
+
       case 'rescue': {
         // ferry eggs and larvae out of a threatened nursery, deep to the queen
         let danger = col.nurseryFoe(220);
@@ -1602,6 +1641,29 @@ class Ant {
         break;
       }
     }
+  }
+
+  // a builder's way to its spot of the blueprint: in the same place (the
+  // same nest, or both out in the open) and near, straight to it, climbing
+  // but never digging; else by the tunnels -- out of the nest it's in, into
+  // the spot's own one to the chamber nearest the spot -- or the long walk
+  // over the surface (see Colony.planSpot)
+  buildWalk(tg) {
+    const myIn = buriedInNest(this);
+    const d = Math.hypot(tg.x - this.x, tg.y - this.y);
+    if (myIn === tg.nest && d < NPC_BUILD_NEAR) { this.goto(tg.x, tg.y, false); return; }
+    if (myIn && myIn !== tg.nest) this.navTo('entrance', myIn);
+    else if (tg.nest) this.navTo(tg.key, tg.nest);
+    else if (Math.abs(tg.x - this.x) > NPC_BUILD_NEAR) this.march(tg.x);
+    else { this.goto(tg.x, tg.y, false); return; }
+    this.gotoFail = false;
+  }
+
+  // done building (or giving up: the spot is shunned a while)
+  endBuild(shun) {
+    if (shun && this.target && this.target.build) this.colony.planShunAt(this.target.x, this.target.y);
+    this.state = 'idle'; this.stateT = 60 + Math.random() * 120;
+    this.target = null; this.nav = null;
   }
 
   // back from a raid (home, or with the loot delivered)

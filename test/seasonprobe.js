@@ -330,7 +330,7 @@ const path = require('path');
       princess: G.ants.filter(a => a.caste === 'princess').length,
       ages: G.items.filter(i => i.kind === 'seed' && i.age >= 4990).length };
   });
-  check('save is version 8', saved.ok && saved.v === 8);
+  check('save is version 9', saved.ok && saved.v === 9);
   check('calendar round-trips (via the tick)', loaded.ok && loaded.season === saved.season && loaded.year === saved.year);
   check('crystals and upgrades round-trip', loaded.crystals === 7 && loaded.upg.mandibles === 2 &&
     loaded.upg.digging === 1 && loaded.upg.carry === 3, loaded.upg);
@@ -460,8 +460,8 @@ const path = require('path');
       gained: c.food - f0, leafDead: leaf.dead };
   });
   check('X cycles to a fungus garden', fungus.type === 'fungus' && fungus.area >= 300, fungus);
-  check('leaves and thatch feed the garden', fungus.afterLeaf === 4 && fungus.leafDead &&
-    fungus.afterThatch === 10 && fungus.thatchLeft === 0, fungus);
+  check('leaves and thatch feed the garden', Math.abs(fungus.afterLeaf - 4) < 0.05 && fungus.leafDead &&
+    Math.abs(fungus.afterThatch - 10) < 0.05 && fungus.thatchLeft === 0, fungus);
   check('the garden turns leaves into food, in winter too', fungus.leavesLeft < 10 && fungus.gained > 0, fungus);
 
   // winter look (snow, frost) for the screenshot

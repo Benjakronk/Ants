@@ -15,7 +15,7 @@ const BIND = {
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   bite: ['Space'], act: ['KeyE'], abil: ['KeyQ'], swap: ['KeyC'], scores: ['Tab'],
   build: ['KeyF'], buildMat: ['KeyR'], mark: ['KeyX'], obj: ['KeyO'],
-  arrow: ['KeyG'], skipHint: ['KeyH'],
+  arrow: ['KeyG'], skipHint: ['KeyH'], plan: ['KeyB'],
 };
 
 // per-viewer settings kept in this browser (never in the sim or a save)
@@ -56,6 +56,10 @@ Object.assign(G, {
   lobbySel: 0,        // the lobby's selected player (the host kicks)
   sidesWarnT: 0,      // versus lobby: the 'a player on each side' note flashes red until this frame
   rebornNote: null,   // a persistent world started over under us: { gen, reason } for JOIN THE COLONY
+  // plan mode (B): the ant braces and a cursor of our own (no network lag)
+  // paints the colony's blueprint; planCur is the cursor in world pixels,
+  // planSpd its speed (it speeds up while a direction is held)
+  planMode: false, planCur: null, planSpd: 0,
 });
 
 // an overlay that owns the screen: the HUD toasts wait (their timers stop)
@@ -284,14 +288,71 @@ function tookAction(action) {
 // copy the keyboard into the local player's input for this tick
 function readInput() {
   const inp = G.players[LOCAL].input;
-  inp.dx = (held('right') ? 1 : 0) - (held('left') ? 1 : 0);
-  inp.dy = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
-  inp.bite = held('bite');
-  inp.build = held('build');
+  const dx = (held('right') ? 1 : 0) - (held('left') ? 1 : 0);
+  const dy = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
+  const me = localAnt();
+  if (G.planMode && me) {
+    // plan mode: the keys move the cursor, Space paints, X (held) erases
+    movePlanCursor(me, dx, dy);
+    inp.dx = inp.dy = 0;
+    inp.bite = inp.build = false;
+    inp.plan = true;
+    inp.px = Math.round(G.planCur.x); inp.py = Math.round(G.planCur.y);
+    inp.paint = held('bite') ? 1 : held('mark') ? 2 : 0;
+    tookAction('mark');   // (X erases here: it marks no chamber)
+  } else {
+    inp.dx = dx; inp.dy = dy;
+    inp.bite = held('bite');
+    inp.build = held('build');
+    inp.plan = false; inp.paint = 0;
+    if (tookAction('mark')) inp.mark = true;
+  }
   if (tookAction('act')) inp.act = true;
   if (tookAction('abil')) inp.abil = true;
   if (tookAction('buildMat')) inp.buildMat = true;
-  if (tookAction('mark')) inp.mark = true;
+}
+
+// ---------------------------------------------------------------------------
+// plan mode (B): a cursor of the client's own paints the colony's blueprint
+// (the sim holds it to PLAN_REACH of the ant, as we do here)
+// ---------------------------------------------------------------------------
+function planOn() {
+  const me = localAnt();
+  if (!me) return;
+  G.planMode = true;
+  G.planSpd = 0;
+  // (it starts just ahead of the ant, where a build stamp would go)
+  G.planCur = { x: me.x + me.dir * 14, y: me.y };
+  clampPlanCursor(me);
+  Sfx.play('menu');
+  tutSaw('plan');
+}
+function planOff() {
+  if (!G.planMode) return;
+  G.planMode = false;
+  G.planCur = null;
+  const p = G.players[LOCAL];
+  if (p) { p.input.plan = false; p.input.paint = 0; }
+}
+// held to the reach around the ant and to the view (the camera follows)
+function clampPlanCursor(me) {
+  const c = G.planCur, v = playerView();
+  const dx = c.x - me.x, dy = c.y - me.y, d = Math.hypot(dx, dy);
+  if (d > PLAN_REACH) { c.x = me.x + dx / d * PLAN_REACH; c.y = me.y + dy / d * PLAN_REACH; }
+  c.x = Math.max(G.cam.x + 2, Math.min(G.cam.x + v.vw - 3, c.x));
+  c.y = Math.max(G.cam.y + 2, Math.min(G.cam.y + v.vh - 3, c.y));
+  c.x = Math.max(0, Math.min(WORLD_W - 1, c.x));
+  c.y = Math.max(0, Math.min(WORLD_H - 1, c.y));
+}
+// 1.2 px a frame at first (fine aim), speeding up to 3.5 while a direction is held
+function movePlanCursor(me, dx, dy) {
+  if (dx || dy) {
+    G.planSpd = Math.min(3.5, G.planSpd ? G.planSpd + 0.06 : 1.2);
+    const len = Math.hypot(dx, dy);
+    G.planCur.x += dx / len * G.planSpd;
+    G.planCur.y += dy / len * G.planSpd;
+  } else G.planSpd = 0;
+  clampPlanCursor(me);
 }
 
 function clearInput() {
@@ -389,18 +450,26 @@ function drawFlyers(camx, camy) {
 function updatePlay() {
   // the ant-selection overlay owns the keys while it's open (and the
   // objectives screen likewise; neither pauses the world)
+  // (plan mode ends with the ant -- or when an overlay takes the keys)
+  if (G.planMode && (!localAnt() || G.takeover || G.objScreen || G.showMap)) planOff();
   if (G.takeover) { updateTakeover(); clearInput(); }
   else if (G.objScreen) { clearInput(); updateObjScreen(); }
   else if (tookAction('obj')) {
+    planOff();
     G.objScreen = { page: 0, sel: 0 };
     Sfx.play('menu');
     clearInput();
     tutSaw('obj');
   } else if (tookAction('swap') && localAnt()) {
     const a = localAnt();
+    planOff();
     if (!openTakeover(a.x, a.y, true)) pushMsg(L('m_noSwitch'), '#ff8040');
     clearInput();
   } else {
+    // B: in and out of plan mode (Esc leaves it too, before it pauses)
+    if (tookAction('plan') || (G.planMode && tookPress('Escape'))) {
+      if (G.planMode) { planOff(); Sfx.play('menu'); } else planOn();
+    }
     readInput();
   }
 
@@ -465,8 +534,11 @@ function updateCamera() {
     p.y = Math.max(0, Math.min(WORLD_H - v.vh, p.y));
     return;
   }
-  const a = localAnt();
-  if (!a) return;
+  const me = localAnt();
+  if (!me) return;
+  // (plan mode: the view leans toward the cursor, halfway)
+  const c = G.planMode && G.planCur;
+  const a = c ? { x: (me.x + c.x) / 2, y: (me.y + c.y) / 2, dir: me.dir } : me;
   // focus point with a deadzone: pixel jiggle (digging, climbing) doesn't
   // shake the view; big jumps (takeover, load) snap it
   if (p.fx === undefined || Math.abs(a.x - p.fx) > 100 || Math.abs(a.y - p.fy) > 100) {
@@ -478,7 +550,7 @@ function updateCamera() {
   if (a.y > p.fy + DZY) p.fy = a.y - DZY;
   else if (a.y < p.fy - DZY) p.fy = a.y + DZY;
   // eased look-ahead so turning around doesn't yank the view
-  p.look += (a.dir * 24 - p.look) * 0.03;
+  p.look += ((c ? 0 : a.dir * 24) - p.look) * 0.03;
   const tx = p.fx - v.vw / 2 + p.look;
   const ty = p.fy - v.vh / 2 - 8;
   p.x += (tx - p.x) * 0.08;
@@ -618,6 +690,8 @@ function drawObjScreen() {
     // versus: our own queen's health (her fall with no heir loses the match)
     const oq = G.mode === 'versus' ? col.queen() : null;
     if (oq) rowR(L('ui_ourQueen', Math.max(1, Math.round(oq.hp / oq.maxHp * 100))), 131, oq.hp < oq.maxHp * 0.5 ? '#ff5040' : '#a8e8a0');
+    // (else the builders' stocks, and how much is planned)
+    else if (col.stock) rowR(L('ui_stockLine', Math.floor(col.stock.soil), Math.floor(col.stock.thatch), col.plan.size), 131, '#c8a070');
     // the rival: a rough head count (nobody counts red ants one by one;
     // in versus it is just the enemy, whichever side we're on)
     const r = G.rival;
@@ -948,9 +1022,11 @@ function drawViewport(vx, vy, vw, vh) {
   Particles.draw(ctx, camx, camy);
   if (G.flyers.length) drawFlyers(camx, camy);
 
-  // while building, show where the stamp will land (a red x: nowhere)
+  // while building, show where the stamp will land (a red x: nowhere) --
+  // or, by the blueprint, the planned pixels it fills next (drawn with it)
   const pl = G.players[LOCAL];
-  if (me && pl && pl.input.build) {
+  const planNextUp = me && pl && pl.input.build && !G.planMode ? planNext(me, G.colony, pl.input.dx, pl.input.dy) : null;
+  if (me && pl && pl.input.build && !planNextUp) {
     const aim = buildAim(me, pl.input.dx, pl.input.dy);
     if (aim) {
       const ex = Math.round(aim.bx - camx), ey = Math.round(aim.by - camy);
@@ -998,6 +1074,10 @@ function drawViewport(vx, vy, vw, vh) {
       ctx.fillRect(0, 0, vw, vh);
     }
   }
+  // the blueprint over the dark (it's a drawing, not the world), the plan
+  // cursor, and what F fills next
+  drawPlan(camx, camy, vw, vh, planNextUp);
+  if (G.planMode && me && G.planCur) drawPlanCursor(camx, camy, me);
   // labels over the dark (each in a free spot), then the guide arrows
   Labels.clear(camx, camy, vw, vh);
   if (G.online) drawNameTags(camx, camy, vw, vh);
@@ -1009,6 +1089,97 @@ function drawViewport(vx, vy, vw, vh) {
   drawGuides(camx, camy, vw, vh, me);
 
   ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// the blueprint (our colony's only): a ghost of each planned pixel in its
+// material's colour, a gentle pulse, its rim brighter; the plan cursor; in
+// plan mode a bar of keys over the HUD
+// ---------------------------------------------------------------------------
+const PLAN_LOOK = { [M_PACKED]: '#e09a5c', [M_THATCH]: '#f2e070', [M_GATE]: '#8ce8ff' };
+function planColor(m) { return PLAN_LOOK[m] || '#ffffff'; }
+
+// next: what F fills next (planNext), drawn bright over the ghost
+function drawPlan(camx, camy, vw, vh, next) {
+  const col = G.colony;
+  if (!col || !col.plan || !col.plan.size) return;
+  const W = WORLD_W, plan = col.plan;
+  const pulse = 0.5 + 0.5 * Math.sin(G.frame * 0.07);
+  const fill = {}, rim = {};
+  for (const [i, v] of plan) {
+    const x = i % W - camx;
+    if (x < 0 || x >= vw) continue;
+    const y = ((i / W) | 0) - camy;
+    if (y < 0 || y >= vh || T.m[i] !== M_AIR) continue;
+    const edge = !plan.has(i - 1) || !plan.has(i + 1) || !plan.has(i - W) || !plan.has(i + W);
+    const b = edge ? rim : fill;
+    (b[v] || (b[v] = [])).push(x, y);
+  }
+  // (brighter while planning)
+  const on = G.planMode ? 0.1 : 0;
+  for (const [b, a] of [[fill, 0.3 + 0.12 * pulse + on], [rim, 0.62 + 0.3 * pulse + on]]) {
+    ctx.globalAlpha = Math.min(1, a);
+    for (const v in b) {
+      ctx.fillStyle = planColor(Number(v));
+      const l = b[v];
+      for (let k = 0; k < l.length; k += 2) ctx.fillRect(l[k], l[k + 1], 1, 1);
+    }
+  }
+  ctx.globalAlpha = 1;
+  if (next && next.list.length) {
+    ctx.fillStyle = (G.frame >> 2) % 2 ? '#ffffff' : '#ffe040';
+    for (const i of next.list) ctx.fillRect(i % W - camx, ((i / W) | 0) - camy, 1, 1);
+  }
+}
+
+// the plan cursor: a crosshair and the brush's circle (in the material's
+// colour while it paints, red while it erases), and a faint ring of how far
+// from the ant it may go
+function drawPlanCursor(camx, camy, me) {
+  const pl = G.players[LOCAL], c = G.planCur;
+  const ex = Math.round(c.x - camx), ey = Math.round(c.y - camy);
+  const paint = pl.input.paint;
+  // (the ring in dots, light and dark by turns: it reads on sky and earth)
+  ctx.globalAlpha = 0.45;
+  const ax = me.x - camx, ay = me.y - camy;
+  for (let k = 0; k < 96; k++) {
+    const t = k / 96 * Math.PI * 2;
+    ctx.fillStyle = k % 2 ? '#f0e8d0' : '#201810';
+    ctx.fillRect(Math.round(ax + Math.cos(t) * PLAN_REACH), Math.round(ay + Math.sin(t) * PLAN_REACH), 1, 1);
+  }
+  ctx.globalAlpha = 1;
+  // the brush
+  const R = PLAN_BRUSH;
+  ctx.fillStyle = paint === 2 ? '#ff5040' : paint ? planColor(pl.buildMat) : (G.frame >> 4) % 2 ? '#e8e0c8' : planColor(pl.buildMat);
+  for (let oy = -R - 1; oy <= R + 1; oy++) {
+    for (let ox = -R - 1; ox <= R + 1; ox++) {
+      const d = Math.hypot(ox, oy);
+      if (d > R + 0.5 && d <= R + 1.5) ctx.fillRect(ex + ox, ey + oy, 1, 1);
+    }
+  }
+  // the crosshair, black-backed so it reads on sky and earth alike
+  const arms = [[-R - 5, 0, 3, 1], [R + 3, 0, 3, 1], [0, -R - 5, 1, 3], [0, R + 3, 1, 3]];
+  ctx.fillStyle = '#000000';
+  for (const [x, y, w, h] of arms) ctx.fillRect(ex + x - 1, ey + y - 1, w + 2, h + 2);
+  ctx.fillStyle = '#ffffff';
+  for (const [x, y, w, h] of arms) ctx.fillRect(ex + x, ey + y, w, h);
+  ctx.fillRect(ex, ey, 1, 1);
+}
+
+// plan mode's bar over the HUD: the keys, the material, the plan's size
+// and the colony's stocks
+function drawPlanBar() {
+  const col = G.colony, pl = G.players[LOCAL];
+  const y0 = VIEW_H - HUD_H - 30;
+  bevelPanel(10, y0, 300, 28);
+  drawTextC(ctx, L('ui_planKeys'), VIEW_W / 2, y0 + 4, '#ffe8a0');
+  drawMatSwatch(16, y0 + 16, pl.buildMat);
+  drawText(ctx, L(buildMatKey(pl.buildMat)), 25, y0 + 15, planColor(pl.buildMat));
+  const n = col.plan.size;
+  const ps = L('ui_planCount', n, PLAN_MAX);
+  drawText(ctx, ps, 160 - textWidth(ps) / 2, y0 + 15, n >= PLAN_MAX ? '#ff9040' : '#c8b890');
+  const st = L('ui_stockShort', Math.floor(col.stock.soil), Math.floor(col.stock.thatch));
+  drawText(ctx, st, 304 - textWidth(st), y0 + 15, '#c8a070');
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,7 +1516,8 @@ function drawTaskAndMsgs() {
     ctx.globalAlpha = 1;
     my += 10;
   }
-  const hint = drawHint();
+  // (plan mode: its bar of keys where the hint goes)
+  const hint = G.planMode && localAnt() ? (drawPlanBar(), true) : drawHint();
   if (raid && raid.banner) drawRaidBanner(raid, hint ? 132 : 160);
 }
 
@@ -1644,6 +1816,21 @@ function mapFruit(x, y) {
   ctx.fillRect(x, y - 3, 2, 1);
 }
 
+// our blueprint on a map, faintly: a dot for each map pixel it touches
+function mapPlan(mx, my, sx, sy, wx0, wy0) {
+  const plan = G.colony.plan;
+  if (!plan || !plan.size) return;
+  const seen = new Set();
+  ctx.fillStyle = 'rgba(140,232,255,0.55)';
+  for (const i of plan.keys()) {
+    const x = Math.round(mx + (i % WORLD_W - wx0) * sx), y = Math.round(my + (((i / WORLD_W) | 0) - wy0) * sy);
+    const k = x * 4096 + y;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    ctx.fillRect(x, y, 1, 1);
+  }
+}
+
 // M: the whole world in a panel, the nest close up below it, and a legend
 function drawMinimap() {
   const col = G.colony;
@@ -1668,6 +1855,7 @@ function drawMinimap() {
     mapDot(cx, cy, chamberCramped(ch) && (G.frame >> 4) % 2 ? '#ff4030' : CH_LOOK[ch.type].color, 1);
   }
   for (const g of G.gates) { const [gx, gy] = P(g.x, g.y); mapGate(gx, gy); }
+  mapPlan(mx, my, sx, sy, 0, 0);
   for (const sh of col.shelters) { const [hx, hy] = P(sh.x, sh.y); mapDome(hx, hy, '#8cc85a'); }
   // the rival nests: a flag in its colours over each entrance (grey once
   // its queen fell)
@@ -1743,6 +1931,7 @@ function drawNestInset(x, y, w, h) {
   ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
   const P = (px, py) => [Math.round(x + (px - wx0) * Z), Math.round(y + (py - wy0) * Z)];
   for (const g of G.gates) { const [gx, gy] = P(g.x, g.y); mapGate(gx, gy); }
+  mapPlan(x, y, Z, Z, wx0, wy0);
   drawMapAnts(x, y, Z, Z, wx0, wy0, wx0 + ww, wy0 + wh);
   for (const ch of col.chambers) {
     const [cx, cy] = P(ch.x, ch.y);

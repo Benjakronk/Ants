@@ -152,6 +152,72 @@ const SITE_MAX = 40;         // ...and at most this many over the summer
 const SITE_REFILL = 1200;    // ticks between top-ups (while few lie there)
 const SITE_GO = 0.3;         // a forager's chance to head for it
 
+// blueprints: in plan mode (the client's B) a player's ant braces and a
+// cursor paints planned pixels -- marks on open air, in a material, that
+// block nothing -- into its colony's plan. Holding F by them fills them from
+// the ant's load; idle workers fill them from the colony's stocks (the spoil
+// that overflows a player's full load, what the NPCs dig on their errands,
+// a load unloaded at the storage with E).
+const PLAN_MAX = 6000;       // planned pixels a colony may have at once
+const PLAN_REACH = 90;       // a player's plan cursor keeps this close to its ant
+const PLAN_BRUSH = 3;        // the plan brush's radius
+const PLAN_JUMP = 24;        // a cursor move longer than this in a tick starts a new stroke
+const PLAN_FILL_R = 18;      // F fills planned pixels this close to the ant's middle...
+const PLAN_FILL_N = 12;      // ...this many at most per BUILD_CD, in a clump this wide:
+const PLAN_CLUMP = 4;
+const STOCK_CAP = 300;       // the colony's soil and thatch stocks hold this much each...
+const STOCK_SLOT = 50;       // ...and this much more per player beyond the first
+const BUILDERS_MAX = 3;      // NPC builders at once at most...
+const BUILDERS_SHARE = 0.15; // ...and no more than this share of the colony's workers
+const BUILD_RECRUIT = 60;    // ticks between the colony's looks for idle hands
+const PLAN_FOOD = 30;        // a hungrier colony keeps every worker foraging
+const NPC_BUILD_R = 12;      // a builder fills planned pixels this close to its middle...
+const NPC_BUILD_N = 4;       // ...this many a bite...
+const NPC_BUILD_CD = 20;     // ...a bite every this many ticks
+const NPC_BUILD_T = 2400;    // ticks a builder may take getting there before it gives up
+const NPC_BUILD_NEAR = 80;   // in the same place as the spot and this close: straight to it
+const PLAN_SPREAD = 24;      // builders work spots at least this far apart
+const PLAN_SHUN_T = 3600;    // a spot no builder could reach is left alone this long
+const PLAN_CELL = 16;        // ...in cells this big
+
+// a blueprint as compact data (saves, the network): [index, value] entries
+// sorted by index, packed as runs of consecutive pixels of one value --
+// [gap, length, value, ...], gap counting the pixels since the end of the
+// last run. A value of 0 is a pixel leaving the plan (the network's deltas).
+function planPack(entries) {
+  entries.sort((a, b) => a[0] - b[0]);
+  const out = [];
+  let end = 0;
+  for (let k = 0; k < entries.length;) {
+    const s = entries[k][0], v = entries[k][1];
+    let n = 1;
+    while (k + n < entries.length && entries[k + n][0] === s + n && entries[k + n][1] === v) n++;
+    out.push(s - end, n, v);
+    end = s + n;
+    k += n;
+  }
+  return out;
+}
+// fn(index, value) for every pixel of a packed list; false if it's junk
+// (the network's and the saves' data is checked here, pixel by pixel after)
+function planUnpack(arr, fn) {
+  if (!Array.isArray(arr)) return false;
+  const size = WORLD_W * WORLD_H;
+  let p = 0;
+  for (let k = 0; k + 2 < arr.length; k += 3) {
+    const gap = arr[k], n = arr[k + 1], v = arr[k + 2];
+    if (!Number.isInteger(gap) || !Number.isInteger(n) || gap < 0 || n < 1 || p + gap + n > size) return false;
+    p += gap;
+    for (let j = 0; j < n; j++) fn(p + j, v);
+    p += n;
+  }
+  return true;
+}
+// a material a blueprint may hold (what the build key places)
+function planMat(v) { return v === M_PACKED || v === M_THATCH || v === M_GATE; }
+// the load or stock a material is built from
+function planLoad(m) { return m === M_THATCH ? 'thatch' : 'soil'; }
+
 // scratch grids for roomyGrid(): a square around a marker, wide enough for
 // the opening to see every pixel of the disk
 const ROOM_R = CH_R + 2 * CH_ROOM;
@@ -260,6 +326,13 @@ class Colony {
     this.expandN = 0;       // chambers the AI dug out
     this.lastExpandDay = 0;
     this.digJob = null;     // the AI's chamber dig in progress { pts, i, type }
+    // the blueprint its players paint in plan mode (pixel index -> the
+    // material planned there), the stocks its builders fill it from, and
+    // the spots no builder could get to lately (cell -> until when)
+    this.plan = new Map();
+    this.planDirty = null;  // (online: the pixels changed since the last snapshot, see planSet)
+    this.stock = { soil: 0, thatch: 0 };
+    this.planShun = new Map();
     this.stats = {
       foodGathered: 0, tasksDone: 0, antsBorn: 0,
       antsDied: 0, predatorsSlain: 0,
@@ -530,6 +603,155 @@ class Colony {
     const u = Math.min(room, n);
     ch.leaves = (ch.leaves || 0) + u;
     return u;
+  }
+
+  // ---- the blueprint and the stocks its builders fill it from ---------------
+  stockCap() { return STOCK_CAP + STOCK_SLOT * (playerSlots() - 1); }
+  // spoil into the stocks (whatever doesn't fit, spills)
+  bank(soil, thatch) {
+    const cap = this.stockCap();
+    if (soil > 0) this.stock.soil = Math.min(cap, this.stock.soil + soil);
+    if (thatch > 0) this.stock.thatch = Math.min(cap, this.stock.thatch + thatch);
+  }
+
+  // plan pixel i as material v (0: out of the plan). Online the server
+  // (G.planSync) notes the pixels changed for the next snapshot's deltas.
+  planSet(i, v) {
+    if ((this.plan.get(i) || 0) === v) return false;
+    if (v) this.plan.set(i, v); else this.plan.delete(i);
+    if (G.planSync) (this.planDirty || (this.planDirty = new Set())).add(i);
+    return true;
+  }
+  // the changes since the last call, packed (each pixel as it stands now), or null
+  planDrain() {
+    const d = this.planDirty;
+    if (!d || !d.size) return null;
+    const out = [];
+    for (const i of d) out.push([i, this.plan.get(i) || 0]);
+    d.clear();
+    return planPack(out);
+  }
+  // the whole blueprint, packed
+  planPacked() { return planPack([...this.plan]); }
+  // a packed blueprint put back (a save, the world joined): open air and a
+  // build material only, at most PLAN_MAX
+  planLoadPacked(arr) {
+    this.plan = new Map();
+    this.planDirty = null;
+    planUnpack(arr, (i, v) => {
+      if (this.plan.size < PLAN_MAX && planMat(v) && T.m[i] === M_AIR) this.plan.set(i, v);
+    });
+  }
+
+  // a spot of the blueprint for builder `a` to make for: the planned pixel
+  // nearest it that the stocks can build, clear of the other builders' spots
+  // and of the spots shunned lately (and in winter only out of the cold).
+  // Pixels built over meanwhile are dropped from the plan here. null if none.
+  planSpot(a, builders) {
+    const W = WORLD_W, now = G.tick;
+    for (const [k, t] of this.planShun) if (t <= now) this.planShun.delete(k);
+    const winter = G.isWinter(), probe = { x: 0, y: 0 };
+    let best = -1, bd = Infinity;
+    const gone = [];
+    for (const [i, v] of this.plan) {
+      if (T.m[i] !== M_AIR) { gone.push(i); continue; }
+      if (this.stock[planLoad(v)] < 1) continue;
+      const x = i % W, y = (i / W) | 0;
+      const d = dist2(x, y, a.x, a.y);
+      if (d >= bd) continue;
+      if (this.planShun.has(Math.floor(x / PLAN_CELL) * 4096 + Math.floor(y / PLAN_CELL))) continue;
+      let taken = false;
+      for (const o of builders) {
+        if (o.target && dist2(x, y, o.target.x, o.target.y) < PLAN_SPREAD * PLAN_SPREAD) { taken = true; break; }
+      }
+      if (taken) continue;
+      if (winter) { probe.x = x; probe.y = y; if (!sheltered(probe)) continue; }
+      bd = d; best = i;
+    }
+    for (const i of gone) this.planSet(i, 0);
+    if (best < 0) return null;
+    const x = best % W, y = (best / W) | 0;
+    const tg = { x, y, i: best, build: true };
+    // down in a nest: by its tunnels to the chamber nearest the spot
+    tg.nest = buriedInNest(tg);
+    if (tg.nest) {
+      let kd = Infinity;
+      for (const key of ['entrance', 'junction', 'storage', 'nursery', 'queen']) {
+        const p = a.navDest(key, tg.nest), d = dist2(p.x, p.y, x, y);
+        if (d < kd) { kd = d; tg.key = key; }
+      }
+    }
+    return tg;
+  }
+  // a spot builders couldn't get to (or build at) is left be a while
+  planShunAt(x, y) {
+    this.planShun.set(Math.floor(x / PLAN_CELL) * 4096 + Math.floor(y / PLAN_CELL), G.tick + PLAN_SHUN_T);
+  }
+
+  // builder `a` at its spot: up to NPC_BUILD_N planned pixels within
+  // NPC_BUILD_R of it, from the stocks, nearest first (one material a bite),
+  // never walling anyone in -- nor itself: never where it stands. Returns
+  // the pixels placed (0: none could go this bite, someone's in the way), or
+  // -1 when there's nothing left here to build or nothing to build it with.
+  npcBuild(a) {
+    const R = NPC_BUILD_R, W = WORLD_W;
+    const cx = Math.round(a.x), cy = Math.round(a.y);
+    const cand = [];
+    for (let y = Math.max(0, cy - R); y <= Math.min(WORLD_H - 1, cy + R); y++) {
+      for (let x = Math.max(0, cx - R); x <= Math.min(W - 1, cx + R); x++) {
+        const d = dist2(x, y, a.x, a.y);
+        if (d > R * R) continue;
+        const i = y * W + x, v = this.plan.get(i);
+        if (!v) continue;
+        if (T.m[i] !== M_AIR) { this.planSet(i, 0); continue; }
+        if (this.stock[planLoad(v)] >= 1) cand.push([d, i, v]);
+      }
+    }
+    if (!cand.length) return -1;
+    cand.sort((p, q) => p[0] - q[0]);
+    const clear = buildClear(a.x, a.y, R);
+    let mat = 0;
+    const list = [];
+    for (const [, i, v] of cand) {
+      if (mat && v !== mat) continue;
+      if (!clear(i % W, (i / W) | 0)) continue;
+      mat = v;
+      list.push(i);
+      if (list.length >= NPC_BUILD_N) break;
+    }
+    if (!mat) return 0;
+    const load = planLoad(mat);
+    const n = T.placeAt(list, mat, null, Math.floor(this.stock[load])).length;
+    this.stock[load] -= n;
+    if (n > 0) {
+      a.biteAnim = 5;
+      G.fx('dirt', a.x + (list[0] % W - a.x) * 0.7, a.y + (((list[0] / W) | 0) - a.y) * 0.7, 1);
+      G.sfx('build', a.x, a.y, 200);
+    }
+    return n;
+  }
+
+  // idle hands take up the blueprint: now and then one idle worker becomes
+  // a builder (state 'build', see Ant.npcThink) -- while the plan has pixels
+  // the stocks can build, the colony isn't hungry (its foragers come first),
+  // and fewer than BUILDERS_MAX (and BUILDERS_SHARE of its workers) build
+  updateBuilders() {
+    if ((G.tick + this.idx * 31) % BUILD_RECRUIT !== 0 || !this.plan.size || this.food < PLAN_FOOD) return;
+    if (this.stock.soil < 1 && this.stock.thatch < 1) return;
+    let workers = 0, idle = null;
+    const builders = [];
+    for (const a of G.ants) {
+      if (a.hp <= 0 || a.colony !== this || a.playerIdx >= 0 || a.caste !== 'worker') continue;
+      workers++;
+      if (a.state === 'build') builders.push(a);
+      else if (!idle && a.state === 'idle' && !a.carry && !a.raiding && !(a.followT > 0) && !outInCold(a)) idle = a;
+    }
+    const cap = Math.min(BUILDERS_MAX, Math.max(1, Math.floor(workers * BUILDERS_SHARE)));
+    if (!idle || builders.length >= cap) return;
+    const tg = this.planSpot(idle, builders);
+    if (!tg) return;
+    idle.state = 'build'; idle.target = tg; idle.stateT = NPC_BUILD_T;
+    idle.nav = null; idle.buildBlockN = 0;
   }
 
   // ---- crystal upgrades -------------------------------------------------------
@@ -826,6 +1048,7 @@ class Colony {
     if (this.player) {
       if (G.tick % 60 === 0) updateObjectives(this);
       if (!this.defeated) this.updateExpansion(pop);
+      this.updateBuilders();
       // tasks
       this.taskT--;
       // (versus: the deciding flight is flying -- no new tasks to hand out)
@@ -871,7 +1094,9 @@ class Colony {
     if (job) {
       if (G.tick % AI_EXPAND_STEP !== 0) return;
       const p = job.pts[job.i++];
-      T.dig(p.x, p.y, p.r, 1, false, SPARE_BUILT);
+      // (what the dig brings up goes to the stocks, for the builders)
+      const res = T.dig(p.x, p.y, p.r, 1, false, SPARE_BUILT);
+      this.bank(res.soil, res.thatch);
       if (job.i < job.pts.length) return;
       this.digJob = null;
       this.expandN++;

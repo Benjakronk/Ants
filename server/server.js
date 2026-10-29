@@ -312,6 +312,12 @@ function handle(cl, m) {
       if (l !== null) { slot.inL = Math.floor(l); slot.inN = 0; }
       const cx = clampNum(m.cx, 0, room.sim.WORLD_W), cy = clampNum(m.cy, 0, room.sim.WORLD_H);
       if (cx !== null && cy !== null) cl.cam = { x: cx, y: cy, t: Date.now() };
+      // plan mode: the cursor (the sim holds it to the ant's reach) and the
+      // brush (1 paints, 2 erases)
+      inp.plan = bool(m.plan);
+      const px = clampNum(m.px, 0, room.sim.WORLD_W - 1), py = clampNum(m.py, 0, room.sim.WORLD_H - 1);
+      inp.px = px === null ? 0 : Math.round(px); inp.py = py === null ? 0 : Math.round(py);
+      inp.paint = inp.plan && (m.paint === 1 || m.paint === 2) ? m.paint : 0;
       return;
     }
     case 'act': case 'abil': case 'mat': case 'mark':

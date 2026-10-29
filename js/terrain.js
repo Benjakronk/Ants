@@ -25,6 +25,7 @@ const T = {
   bgSurf: null,
   wear: null,       // Map pixel index -> bite damage on packed earth (sparse)
   onEdit: null,     // fn(x0, y0, x1, y1): a rect of pixels changed (client redraws, server relays)
+  onSolid: null,    // fn(index): an air pixel was built on (the colonies' blueprints let go of it)
   gateSplit: null,  // versus: the column where the black side's ant gates end and red's begin
 
   init(world) {
@@ -199,6 +200,7 @@ const T = {
         if (canPlace && !canPlace(x, y)) continue;
         this.m[i] = mat;
         this.wear.delete(i);
+        if (this.onSolid) this.onSolid(i);
         n++;
         if (x < ex0) ex0 = x;
         if (x > ex1) ex1 = x;
@@ -211,6 +213,33 @@ const T = {
       for (let x = ex0; x <= ex1; x++) this.raiseSurf(x);
     }
     return n;
+  },
+
+  // build exact pixels (a blueprint's): fill the AIR ones of `list` (pixel
+  // indices) with `mat`, at most `budget`, skipping any canPlace(x, y)
+  // rejects. One edit rect for the lot. Returns the indices placed.
+  placeAt(list, mat, canPlace, budget) {
+    const out = [];
+    let ex0 = WORLD_W, ey0 = WORLD_H, ex1 = -1, ey1 = -1;
+    for (const i of list) {
+      if (out.length >= budget) break;
+      if (!(i >= 0 && i < this.m.length) || this.m[i] !== M_AIR) continue;
+      const x = i % WORLD_W, y = (i / WORLD_W) | 0;
+      if (canPlace && !canPlace(x, y)) continue;
+      this.m[i] = mat;
+      this.wear.delete(i);
+      if (this.onSolid) this.onSolid(i);
+      out.push(i);
+      if (x < ex0) ex0 = x;
+      if (x > ex1) ex1 = x;
+      if (y < ey0) ey0 = y;
+      if (y > ey1) ey1 = y;
+    }
+    if (out.length) {
+      if (this.onEdit) this.onEdit(ex0, ey0, ex1, ey1);
+      for (let x = ex0; x <= ex1; x++) this.raiseSurf(x);
+    }
+    return out;
   },
 
   // the surface climbs over built material stacked on the ground (through

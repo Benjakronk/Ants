@@ -35,6 +35,9 @@ const G = {
   playerSlots: 1,
   playerAvg: 1,       // a persistent world: the players in it lately (a moving average, saved)
   present: 0,         // a persistent world: the players connected now (the server's)
+  // online (the server sets it): the colonies note the plan pixels that
+  // change, for the snapshots' deltas (see Colony.planSet)
+  planSync: false,
   // whose eyes G.colony / G.rival / G.objectives see through: 0 in the sim
   // (the players' black colony, the red rival); a red player's client in
   // versus sets 1, and its HUD, map and arrow take the red colony's side
@@ -135,10 +138,14 @@ const G = {
 
 function newInput() {
   // dx/dy/bite/build are held state; act/abil/buildMat/mark are one-shot
-  // presses the sim consumes; buy is a one-shot upgrade id (or null)
+  // presses the sim consumes; buy is a one-shot upgrade id (or null).
+  // Plan mode (held state too): plan -- the ant braces and the keys move the
+  // client's cursor instead; px, py -- the cursor in world pixels; paint --
+  // 1 while it paints the blueprint, 2 while it erases
   return {
     dx: 0, dy: 0, bite: false, act: false, abil: false,
     build: false, buildMat: false, mark: false, buy: null,
+    plan: false, px: 0, py: 0, paint: 0,
   };
 }
 
@@ -153,10 +160,13 @@ function newPlayer(ant) {
   // this many ticks) just put the item down
   // col: the index of the player's colony in G.colonies (0 until versus);
   // name: what the others call this player online (null offline);
-  // stats: the scoreboard's tally (see newPlayerStats)
+  // stats: the scoreboard's tally (see newPlayerStats); planLast: where the
+  // plan brush last painted in this stroke ({ x, y, mode }, or null);
+  // planWarned: told "the plan is full" in this stroke already
   return {
     ant, input: newInput(), deathPos: null, buildMat: M_PACKED, buildWarned: false,
     buildFailT: 0, refuseT: 0, coldT: 0, col: 0, name: null, stats: newPlayerStats(),
+    planLast: null, planWarned: false,
   };
 }
 
@@ -283,6 +293,8 @@ function resetWorldState(world, seed) {
   // both nests from the generator: the players' and the rival's (the rival
   // nest's storage, nursery and royal chamber become the red colony's)
   G.colonies = [new Colony(world.colony, 0), new Colony(world.rival, 1)];
+  // a planned pixel built over (by anyone, with anything) leaves the plan
+  T.onSolid = i => { for (const c of G.colonies) if (c.plan.size && c.plan.has(i)) c.planSet(i, 0); };
   G.ants = []; G.brood = []; G.bugs = []; G.items = [];
   G.pheromones = []; G.events = []; G.over = null;
   G.players = [];
@@ -639,6 +651,13 @@ function restoreColony(col, cd, v) {
       if (isFinite(v) && v > 0) col.queenDmg[k] = v;
     }
   }
+  // v9: the blueprint (packed, see planPack) and the builders' stocks
+  // (older saves: no plan, empty stocks)
+  col.planLoadPacked(v >= 9 ? cd.plan : null);
+  col.planShun = new Map();
+  const st = (v >= 9 && cd.stock) || {};
+  const stock = k => Math.max(0, Math.min(col.stockCap(), Math.floor(Number(st[k]) || 0)));
+  col.stock = { soil: stock('soil'), thatch: stock('thatch') };
   col.fullT = 0;
   col.caps = null;
 }
@@ -764,6 +783,111 @@ function buildClear(cx, cy, r) {
 // lang key naming a build material (for messages and the HUD)
 function buildMatKey(m) { return m === M_THATCH ? 'mat_thatch' : m === M_GATE ? 'mat_gate' : 'mat_packed'; }
 
+// ---------------------------------------------------------------------------
+// blueprints (see PLAN_* in colony.js): plan mode paints them, F and the
+// colony's builders fill them
+// ---------------------------------------------------------------------------
+
+// the plan cursor (a player's input, untrusted online) held to PLAN_REACH
+// of its ant and to the world
+function planCursor(a, px, py) {
+  let x = Number(px), y = Number(py);
+  if (!isFinite(x) || !isFinite(y)) return { x: a.x, y: a.y };
+  const dx = x - a.x, dy = y - a.y, d = Math.hypot(dx, dy);
+  if (d > PLAN_REACH) { x = a.x + dx / d * PLAN_REACH; y = a.y + dy / d * PLAN_REACH; }
+  return { x: Math.max(0, Math.min(WORLD_W - 1, x)), y: Math.max(0, Math.min(WORLD_H - 1, y)) };
+}
+
+// one dab of the plan brush at (cx, cy): `mat` on the open air under it
+// (mat 0: rub the plan out there). Returns false once the plan is full.
+function planDab(col, cx, cy, mat) {
+  const R = PLAN_BRUSH, x0 = Math.round(cx), y0 = Math.round(cy);
+  let room = true;
+  for (let y = y0 - R; y <= y0 + R; y++) {
+    if (y < 0 || y >= WORLD_H) continue;
+    for (let x = x0 - R; x <= x0 + R; x++) {
+      if (x < 0 || x >= WORLD_W || (x - x0) * (x - x0) + (y - y0) * (y - y0) > R * R + 1) continue;
+      const i = y * WORLD_W + x;
+      if (!mat) { if (col.plan.has(i)) col.planSet(i, 0); continue; }
+      // (only open air: solid ground and gates are no place for a plan)
+      if (T.m[i] !== M_AIR) continue;
+      if (!col.plan.has(i) && col.plan.size >= PLAN_MAX) { room = false; continue; }
+      col.planSet(i, mat);
+    }
+  }
+  return room;
+}
+
+// player p's brush, held this tick at the cursor: a stroke from where it
+// last painted (a line of dabs, so a quick sweep leaves no gaps however
+// rarely the cursor arrives), or a fresh dab
+function planStroke(p, pIdx, col, a, inp) {
+  const mode = inp.paint === 2 ? 2 : inp.paint ? 1 : 0;
+  if (!inp.plan || !mode) { p.planLast = null; p.planWarned = false; return; }
+  const c = planCursor(a, inp.px, inp.py);
+  const mat = mode === 2 ? 0 : p.buildMat;
+  const l = p.planLast && p.planLast.mode === mode ? p.planLast : null;
+  const d = l ? Math.hypot(c.x - l.x, c.y - l.y) : 0;
+  if (l && d < 0.5) return;
+  let room = true;
+  if (l && d <= PLAN_JUMP) {
+    const n = Math.ceil(d / 1.5);
+    for (let k = 1; k <= n; k++) room = planDab(col, l.x + (c.x - l.x) * k / n, l.y + (c.y - l.y) * k / n, mat) && room;
+  } else {
+    room = planDab(col, c.x, c.y, mat);
+  }
+  p.planLast = { x: c.x, y: c.y, mode };
+  if (!room && !p.planWarned) {
+    p.planWarned = true;
+    G.msg('m_planFull', [PLAN_MAX], '#ff8040', pIdx);
+  }
+}
+
+// the planned pixels F fills next for ant `a` (direction dx, dy held): the
+// open ones of its colony's blueprint within PLAN_FILL_R of its middle that
+// nobody stands in -- the nearest first, any in the held direction before
+// the rest -- and the clump of that one's material around it (the load must
+// have some of it). Returns null when nothing is planned in reach (F builds
+// as it always did), else { mat, list (pixel indices, best first), load }
+// -- list empty when all of it is blocked (someone in the way) or there is
+// nothing to build it with (load: the load it would take).
+function planNext(a, col, dx, dy) {
+  if (!col || !col.plan.size) return null;
+  const R = PLAN_FILL_R, W = WORLD_W, cx = Math.round(a.x), cy = Math.round(a.y);
+  const len = Math.hypot(dx, dy), ux = len ? dx / len : 0, uy = len ? dy / len : 0;
+  let any = false, clear = null, best = null, bs = Infinity, want = null, blk = null;
+  const cand = [];
+  for (let y = Math.max(0, cy - R); y <= Math.min(WORLD_H - 1, cy + R); y++) {
+    for (let x = Math.max(0, cx - R); x <= Math.min(W - 1, cx + R); x++) {
+      const ox = x - a.x, oy = y - a.y, d2 = ox * ox + oy * oy;
+      if (d2 > R * R) continue;
+      const i = y * W + x, v = col.plan.get(i);
+      if (!v || T.m[i] !== M_AIR) continue;
+      any = true;
+      const load = planLoad(v);
+      if (!(a[load] >= 1)) { want = want || load; continue; }
+      if (!clear) clear = buildClear(a.x, a.y, R);
+      if (!clear(x, y)) { blk = blk || load; continue; }
+      // (aimed: the held direction's half of the reach comes first)
+      const s = Math.sqrt(d2) + (len && ox * ux + oy * uy <= 0 ? 1000 : 0);
+      cand.push(i, x, y, v);
+      if (s < bs) { bs = s; best = cand.length - 4; }
+    }
+  }
+  if (!any) return null;
+  // (blocked, with the load to build it: "no room"; else what's missing)
+  if (best === null) return { mat: 0, list: [], load: blk || want || 'soil' };
+  const mat = cand[best + 3], bx = cand[best + 1], by = cand[best + 2];
+  const near = [];
+  for (let k = 0; k < cand.length; k += 4) {
+    if (cand[k + 3] !== mat) continue;
+    const d2 = dist2(cand[k + 1], cand[k + 2], bx, by);
+    if (d2 <= PLAN_CLUMP * PLAN_CLUMP) near.push([d2, cand[k]]);
+  }
+  near.sort((p, q) => p[0] - q[0]);
+  return { mat, list: near.map(e => e[1]).slice(0, PLAN_FILL_N), load: planLoad(mat) };
+}
+
 // a player's held direction steers its ant: walking, climbing walls and
 // tunnels, hanging from roofs, hopping. (The online client runs it too, to
 // predict its own ant between the server's snapshots.) build: the build key
@@ -840,14 +964,16 @@ function controlPlayer(pIdx) {
     col.buyUpgrade(inp.buy, pIdx);
     inp.buy = null;
   }
-  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; return; }
+  if (!a || a.hp <= 0) { inp.act = inp.abil = inp.buildMat = inp.mark = false; p.planLast = null; return; }
   const c = a.def;
 
-  const dx = inp.dx, dy = inp.dy;
-  steerAnt(a, dx, dy, inp.build);
+  // (plan mode: the ant braces, and the keys only move the cursor)
+  const dx = inp.plan ? 0 : inp.dx, dy = inp.plan ? 0 : inp.dy;
+  steerAnt(a, dx, dy, inp.build || inp.plan);
+  planStroke(p, pIdx, col, a, inp);
 
   // bite / dig
-  if (inp.bite && a.biteCd <= 0) {
+  if (inp.bite && !inp.plan && a.biteCd <= 0) {
     a.biteCd = a.digCdNow();
     a.biteAnim = 8;
     const { ux, uy, bx, by } = aimPoint(a, dx, dy);
@@ -878,10 +1004,13 @@ function controlPlayer(pIdx) {
       res.count += res2.count; res.leaves += res2.leaves;
       res.fungi += res2.fungi; res.crystals += res2.crystals;
       res.natural += res2.natural;
-      // the spoil goes into the mandibles as building material
-      a.soil = Math.min(LOAD_CAP, a.soil + res.soil + res2.soil);
+      // the spoil goes into the mandibles as building material (what a full
+      // load can't hold goes to the colony's stocks, for its builders)
+      const soil = a.soil + res.soil + res2.soil, thatch = a.thatch + res.thatch + res2.thatch;
+      a.soil = Math.min(LOAD_CAP, soil);
       p.stats.dug += res.count;
-      a.thatch = Math.min(LOAD_CAP, a.thatch + res.thatch + res2.thatch);
+      a.thatch = Math.min(LOAD_CAP, thatch);
+      col.bank(soil - a.soil, thatch - a.thatch);
       if (res.count > 0) {
         G.fx('dirt', bx, by, 4);
         G.sfx('dig', a.x, a.y);
@@ -921,8 +1050,11 @@ function controlPlayer(pIdx) {
     G.sfx('menu', a.x, a.y);
   }
   if (!inp.build) p.buildWarned = false;
-  if (inp.build && a.buildCd <= 0) {
-    const load = p.buildMat === M_THATCH ? 'thatch' : 'soil';
+  if (inp.build && !inp.plan && a.buildCd <= 0) {
+    // the colony's blueprint in reach: F fills it (the planned pixels, in
+    // their materials, from the load each takes); else the aimed stamp
+    const next = planNext(a, col, dx, dy);
+    const load = next ? next.load : p.buildMat === M_THATCH ? 'thatch' : 'soil';
     if (a[load] < 1) {
       if (!p.buildWarned) {
         p.buildWarned = true;
@@ -930,14 +1062,22 @@ function controlPlayer(pIdx) {
       }
     } else {
       a.buildCd = BUILD_CD;
-      const aim = buildAim(a, dx, dy);
-      const n = aim ? T.place(aim.bx, aim.by, BUILD_R, p.buildMat,
-        buildClear(aim.bx, aim.by, BUILD_R), Math.floor(a[load])) : 0;
+      let n = 0, fx = null;
+      if (next) {
+        const placed = next.list.length ? T.placeAt(next.list, next.mat, null, Math.floor(a[load])) : [];
+        n = placed.length;
+        if (n) fx = { bx: placed[0] % WORLD_W, by: (placed[0] / WORLD_W) | 0 };
+      } else {
+        const aim = buildAim(a, dx, dy);
+        n = aim ? T.place(aim.bx, aim.by, BUILD_R, p.buildMat,
+          buildClear(aim.bx, aim.by, BUILD_R), Math.floor(a[load])) : 0;
+        fx = aim;
+      }
       if (n > 0) {
         a[load] -= n;
         p.stats.built += n;
         a.biteAnim = 5;
-        G.fx('dirt', aim.bx, aim.by, 2);
+        G.fx('dirt', fx.bx, fx.by, 2);
         G.sfx('build', a.x, a.y);
       } else if (p.buildFailT <= 0) {
         // no room there (solid, or someone in the way): say so, softly
@@ -954,10 +1094,11 @@ function controlPlayer(pIdx) {
   if (p.buildFailT > 0) p.buildFailT--;
   if (p.refuseT > 0) p.refuseT--;
 
-  // mark the chamber underfoot (or claim this cavity as a new one)
+  // mark the chamber underfoot (or claim this cavity as a new one; in plan
+  // mode X erases instead, and the press is dropped)
   if (inp.mark) {
     inp.mark = false;
-    col.markChamber(a, pIdx);
+    if (!inp.plan) col.markChamber(a, pIdx);
   }
 
   // caste ability: soldiers rally, nurses heal
@@ -1061,6 +1202,22 @@ function controlPlayer(pIdx) {
         // a thatch load makes good garden mulch too
         feedGardenBy(a, pIdx, garden, Math.floor(a.thatch / THATCH_PER_UNIT),
           u => { a.thatch -= u * THATCH_PER_UNIT; });
+      } else if ((a.soil >= 1 || a.thatch >= 1) && (Math.hypot(a.x - col.storage.x, a.y - col.storage.y) < 28 ||
+                 !!col.chamberNear(a.x, a.y, 30, 'storage'))) {
+        // empty-handed at the storage: the loads go to the colony's stocks,
+        // for its builders (as much as they have room for)
+        const cap = col.stockCap();
+        const s = Math.floor(Math.max(0, Math.min(a.soil, cap - col.stock.soil)));
+        const t = Math.floor(Math.max(0, Math.min(a.thatch, cap - col.stock.thatch)));
+        if (s + t > 0) {
+          a.soil -= s; a.thatch -= t;
+          col.bank(s, t);
+          G.msg('m_stocked', [s, t], '#e0c080', pIdx);
+          G.sfx('deposit', a.x, a.y);
+        } else {
+          G.msg('m_stockFull', [], '#ff8040', pIdx);
+          G.sfx('clank', a.x, a.y);
+        }
       } else {
         // milk an aphid?
         const aphid = G.bugs.find(bg => bg.kind === 'aphid' && !bg.dead &&

@@ -11,6 +11,7 @@ const NET_SEND_MS = 100;     // input is re-sent at least this often
 const NET_RETRY_MS = 2000;   // between reconnect attempts...
 const NET_GIVEUP_MS = 115000; // ...for this long (the server keeps the slot 2 minutes)
 const NET_SNAP = 24;         // a predicted ant this far off the server's is put right at once
+const NET_CURSOR_MS = 33;    // plan mode: a moving cursor is sent at most this often (30 Hz)
 
 const Net = {
   ws: null,
@@ -31,7 +32,7 @@ const Net = {
   ents: { a: new Map(), b: new Map(), u: new Map(), i: new Map() },
   latest: 0, prevTick: 0, recvAt: 0, clock: null, renderTick: 0,
   evq: [],             // events waiting for the drawn time to reach them [tick, event]
-  sent: { dx: 0, dy: 0, bite: false, build: false }, sendT: 0,
+  sent: { dx: 0, dy: 0, bite: false, build: false, plan: false, paint: 0, px: 0, py: 0 }, sendT: 0, curT: 0,
   rtt: 0, pingT: 0, takeWait: 0,
   pred: null, hist: [], predOn: true, ltick: 0,
   echo: null,          // the client tick the newest snapshot's local ant stands at (the server says)
@@ -291,6 +292,9 @@ const Net = {
     }
     NetProto.unpackInt16(m.surf, T.surf);
     T.loadWear(m.wear);
+    // our colony's blueprint, whole (the snapshots bring its changes)
+    for (const c of G.colonies) c.planLoadPacked(null);
+    if (m.plan && G.colonies[m.plan[0]]) G.colonies[m.plan[0]].planLoadPacked(m.plan.slice(1));
     G.tick = m.tick;
     LOCAL = m.you;
     this.you = m.you;
@@ -406,6 +410,8 @@ const Net = {
     // (a hidden tab draws nothing and lets nothing out: keep only the latest)
     if (this.evq.length > 300) this.evq.splice(0, this.evq.length - 300);
     if (m.ed) for (const ed of m.ed) this.edit(ed);
+    // the blueprint's changes: [colony, packed runs (value 0: gone)]
+    if (m.pl) this.planDelta(m.pl);
     this.reconcile();
     if (this.awaitFirst && G.colony && G.colony.caps) {   // (our own colony: versus hides the enemy's caps)
       this.awaitFirst = false;
@@ -443,6 +449,7 @@ const Net = {
       if (key[0] === 'c') Object.assign(c, v);
       else if (key[0] === 'o') c.objectives = v;
       else if (key[0] === 't') c.tasks = v;
+      else if (key[0] === 'k') c.stock = v;   // (the builders' stocks)
     }
   },
 
@@ -478,6 +485,17 @@ const Net = {
       if (p.ant) { p.ant.soil = p.soil || 0; p.ant.thatch = p.thatch || 0; }
     }
     if (G.players[LOCAL] && G.players[LOCAL].ant) this.takeWait = 0;
+  },
+
+  // our colony's blueprint changed (see Colony.planDrain): each pixel as it
+  // stands now -- planned (a material) or not (0)
+  planDelta(pl) {
+    const c = Array.isArray(pl) && G.colonies[pl[0]];
+    if (!c) return;
+    planUnpack(pl.slice(1), (i, v) => {
+      if (planMat(v) && c.plan.size < PLAN_MAX) c.plan.set(i, v);
+      else c.plan.delete(i);
+    });
   },
 
   // a terrain edit: [x0, y0, x1, y1, bytes, surf, wear]
@@ -553,15 +571,23 @@ const Net = {
 
   // input to the server: held keys when they change (and every 100 ms, with
   // where the camera looks), presses as messages of their own
+  // (plan mode: the cursor too -- a cursor that only moved goes at most
+  // every NET_CURSOR_MS; the sim draws the brush's stroke between its spots)
   sendInput(inp) {
     const s = this.sent, now = performance.now();
-    if (inp.dx !== s.dx || inp.dy !== s.dy || inp.bite !== s.bite || inp.build !== s.build || now - this.sendT > NET_SEND_MS) {
+    const keys = inp.dx !== s.dx || inp.dy !== s.dy || inp.bite !== s.bite || inp.build !== s.build ||
+      !!inp.plan !== s.plan || (inp.paint || 0) !== s.paint;
+    const cur = inp.plan && (inp.px !== s.px || inp.py !== s.py) && now - this.curT >= NET_CURSOR_MS;
+    if (keys || cur || now - this.sendT > NET_SEND_MS) {
       s.dx = inp.dx; s.dy = inp.dy; s.bite = inp.bite; s.build = inp.build;
-      this.sendT = now;
+      s.plan = !!inp.plan; s.paint = inp.paint || 0; s.px = inp.px; s.py = inp.py;
+      this.sendT = this.curT = now;
       const v = playerView();
       // (l: the tick predict() first steers with it -- see reconcile)
-      this.send({ t: 'in', dx: inp.dx, dy: inp.dy, bite: inp.bite, build: inp.build, l: this.ltick + 1,
-        cx: Math.round(G.cam.x + v.vw / 2), cy: Math.round(G.cam.y + v.vh / 2) });
+      const m = { t: 'in', dx: inp.dx, dy: inp.dy, bite: inp.bite, build: inp.build, l: this.ltick + 1,
+        cx: Math.round(G.cam.x + v.vw / 2), cy: Math.round(G.cam.y + v.vh / 2) };
+      if (inp.plan) { m.plan = 1; m.px = inp.px; m.py = inp.py; m.paint = inp.paint || 0; }
+      this.send(m);
     }
     if (inp.act) { inp.act = false; this.send({ t: 'act' }); }
     if (inp.abil) { inp.abil = false; this.send({ t: 'abil' }); }
@@ -575,7 +601,7 @@ const Net = {
   idle() {
     if (!this.ready || !this.inMatch) return;
     const s = this.sent;
-    s.dx = s.dy = 0; s.bite = s.build = false;
+    s.dx = s.dy = 0; s.bite = s.build = s.plan = false; s.paint = 0;
     this.sendT = performance.now();
     this.send({ t: 'in', dx: 0, dy: 0, bite: false, build: false, l: this.ltick + 1 });
   },
@@ -604,7 +630,7 @@ const Net = {
       this.hist = [];
     }
     P.caste = me.caste; P.colony = me.colony; P.carry = me.carry; P.hw = me.hw; P.hh = me.hh;
-    steerAnt(P, inp.dx, inp.dy, inp.build);
+    steerAnt(P, inp.dx, inp.dy, inp.build || inp.plan);
     physStep(P);
     if (P.climbing) climbFix(P);
     this.hist.push([this.ltick, P.x, P.y]);
