@@ -162,7 +162,7 @@ function simChecks() {
     restoreWorld(huge, 0);
     return { v: d.v, slots: d.slots, ok, after, v7, v6, huge: playerSlots(), need: G.objectives.list.find(o => o.id === 'raise').need };
   })()`);
-  check('saves: v8+ keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v === 9 && rt.slots === 5 && rt.ok &&
+  check('saves: v8+ keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v === 10 && rt.slots === 5 && rt.ok &&
     rt.after === 5 && rt.v7 === 3 && rt.v6 === 1 && rt.huge === 8, rt);
 
   // ---- the scoreboard's tally ---------------------------------------------------
@@ -188,7 +188,7 @@ function simChecks() {
   })()`);
   check('the scoreboard counts a player\'s kills, earth dug and built, food stored and deaths (and only its own)',
     tally.bugDead && tally.st.kills === 1 && tally.dug > 0 && tally.st.built > 0 && tally.st.food > 0 && tally.st.deaths === 1 &&
-    Object.values(tally.other).every(v => v === 0), tally);
+    Object.values(tally.other).every(v => typeof v !== 'number' || v === 0), tally);
 
   // ---- a fresh worker when no ant is free -------------------------------------
   const fr = simCtx(21);
@@ -458,7 +458,7 @@ async function screens(port) {
     await key('ArrowDown'); await key('Enter');
     await page.keyboard.type('Alpha'); await key('Enter');
     await key('ArrowDown'); await key('Enter');      // CREATE A MATCH
-    await key('ArrowDown'); await key('ArrowDown'); await key('Enter');   // (co-op, private) GO
+    await key('ArrowDown'); await key('ArrowDown'); await key('ArrowDown'); await key('Enter');   // (co-op, full year, private) GO
     await page.waitForFunction(() => G.state === 'lobby' && Net.code, null, { timeout: 8000 });
     const code = await page.evaluate(() => Net.code);
     for (const n of NAMES) {
@@ -521,7 +521,7 @@ async function screens(port) {
     await key('Enter');                               // (the name remembered)
     await key('ArrowDown'); await key('Enter');      // CREATE A MATCH
     await key('ArrowRight');                          // versus
-    await key('ArrowDown'); await key('ArrowDown'); await key('Enter');
+    await key('ArrowDown'); await key('ArrowDown'); await key('ArrowDown'); await key('Enter');
     await page.waitForFunction(() => G.state === 'lobby' && Net.code && Net.mode === 'versus', null, { timeout: 8000 });
     const vcode = await page.evaluate(() => Net.code);
     const vb = [];

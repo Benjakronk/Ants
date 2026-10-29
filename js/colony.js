@@ -1,10 +1,27 @@
 // MAUR -- colony simulation: food, brood cycle, tasks, ambient spawning.
 'use strict';
 
-const DAY_LEN = 60 * 240; // 4 minutes of frames per day
-
-// the colony year: four seasons of SEASON_DAYS days (a year ~48 minutes).
-// The calendar is derived from G.tick alone, so saves carry it for free.
+// the colony year: four seasons of SEASON_DAYS days (a FULL year ~48
+// minutes). The calendar is derived from G.tick alone, so saves carry it for
+// free -- given the length of a day. A match may be played SHORT or QUICK
+// (G.yearLen, see setYearLen in game.js): the same year of twelve days, each
+// day shorter. Everything the calendar paces (the seasons, a raid a day, the
+// day's dig task, the predators growing bolder, the night) follows DAY_LEN;
+// what an ant does in a second (walking, digging, eating, the food growing
+// back) stays as it is, so a shorter year has its milestones scaled to the
+// time it gives (objNeed) and its brood and queen a little quicker
+// (yearPace). A persistent world is always FULL.
+const DAY_FULL = 60 * 240;   // 4 minutes of frames per day
+const YEAR_LENS = { full: DAY_FULL, short: DAY_FULL / 2, quick: DAY_FULL / 3 };   // 48, 24, 16 minutes
+const YEAR_LEN_IDS = ['full', 'short', 'quick'];
+let DAY_LEN = DAY_FULL;      // (set by setYearLen; a let, so every sim file sees the change)
+// the share of a FULL year's time this one gives (1, 1/2, 1/3)
+function yearShare() { return DAY_LEN / DAY_FULL; }
+// how much quicker brood grows and the queens lay in a shorter year: the
+// square root of how much shorter it is (x1.41 SHORT, x1.73 QUICK) -- the
+// growth a colony needs in autumn (princesses) has to fit a shorter autumn,
+// but a colony growing twice as fast would race through the milestones
+function yearPace() { return Math.sqrt(DAY_FULL / DAY_LEN); }
 const SEASON_DAYS = 3;
 const YEAR_DAYS = SEASON_DAYS * 4;
 const SPRING = 0, SUMMER = 1, AUTUMN = 2, WINTER = 3;
@@ -62,6 +79,14 @@ const PRINCESS_ROYAL = 1800; // area the largest royal chamber needs
 const PRINCESS_AREA = 900;   // royal area per princess (the cap)
 const PRINCESS_FOOD = 150;   // stores that are always plenty for a princess egg
 const WINTER_LAY = 0.25;     // the queen's laying pace in winter
+// the stores a princess egg wants: 60% of their room, at least 60 and never
+// more than PRINCESS_FOOD -- all three as much smaller as a shorter year's
+// food targets are (the square root of its share: x0.71 SHORT), and QUICK's
+// a little smaller still (share^0.75: x0.44), its autumn is too short to stock
+function princessFood(cap) {
+  const s = yearShare(), k = Math.pow(s, s < 0.5 ? 0.75 : 0.5);
+  return Math.max(60 * k, Math.min(PRINCESS_FOOD * k, cap * 0.6 * k));
+}
 
 // crystal upgrades: cost per level (3 levels), colony-wide, NPCs included
 const UPGRADES = {
@@ -86,13 +111,15 @@ const NEST_R = 250;          // an ant within this of a nest's x, underground, i
 
 // the rival's growth: a cramped AI colony digs out a new chamber now and then
 const AI_EXPAND_MAX = 3;     // chambers it adds in all
-const AI_EXPAND_DAYS = 2;    // days between them
+const AI_EXPAND_DAYS = 2;    // FULL days between them (real time: a shorter year's days are shorter,
+                             // and the rival mustn't outgrow a colony growing at the same pace)
 const AI_EXPAND_STEP = 40;   // ticks per bite of the dig
 const AI_CHAMBER_TYPES = ['storage', 'nursery', 'barracks'];
 // an idle players' colony grows slowly too: once its nest has been full for
 // half a day its own workers dig out a nursery, at most once a season and
 // never in spring (a player who digs and marks chambers grows far faster)
-const SELF_DIG_FULL = DAY_LEN / 2;
+// (half a day of whatever length the year's days are: see selfDigFull)
+function selfDigFull() { return DAY_LEN / 2; }
 // an AI queen keeps a winter reserve: from autumn on she lays only while
 // the stores hold this much food per ant
 const AI_RESERVE = 3;
@@ -100,10 +127,13 @@ const PLAYER_RESERVE = 2;    // ...and the players' queen this much
 
 // raids: soldiers and workers march from the AI nest on its enemy's, fight,
 // steal from the stores and carry it home. At most one a day, never in
-// winter, bolder as the year goes on.
+// winter, bolder as the year goes on. (A shorter year: at most one every
+// FULL day's worth of time, raidGap -- the raided colony grows at the same
+// pace, and twice the raids would leave it nothing to grow with.)
 const RAID_POP = 14;         // the raiding colony needs this many ants...
 const RAID_FOOD = 40;        // ...and this much food in store
-const RAID_CHANCE = 1 / (DAY_LEN * 0.4);  // per tick once ready (scaled by boldness)
+const RAID_CHANCE = 1 / (DAY_FULL * 0.4);  // per tick once ready (scaled by boldness)
+function raidGap() { return Math.max(1, Math.round(DAY_FULL / DAY_LEN)); }   // days between raids
 const RAID_BOLD = [0.5, 1, 1.5, 0];       // by season
 const RAID_T = 20000;        // ticks before the raiders give up and go home...
 const RAID_SIEGE = 2400;     // ...or this long at the enemy's nest
@@ -854,8 +884,14 @@ class Colony {
   wantPrincess() {
     if (G.season !== AUTUMN || !this.caps.princess) return false;
     // (well stocked: 60% of the stores, though never more than PRINCESS_FOOD
-    // -- marking more storage mustn't put princesses further off)
-    if (this.food < Math.max(60, Math.min(PRINCESS_FOOD, this.caps.food * 0.6))) return false;
+    // -- marking more storage mustn't put princesses further off. A shorter
+    // year gathers less in all: well stocked for it, see princessFood)
+    if (this.food < princessFood(this.caps.food)) return false;
+    return this.princessRoom();
+  }
+  // fewer princesses (adult or brood) than the royal chambers have room for
+  princessRoom() {
+    if (!this.caps.princess) return false;
     const have = G.ants.filter(a => a.caste === 'princess' && a.hp > 0 && a.colony === this).length +
       G.brood.filter(b => b.royal && !b.dead && b.colony === this).length;
     return have < this.caps.princess;
@@ -887,6 +923,7 @@ class Colony {
       // little score)
       this.crystals++;
       this.stats.crystalsFound++;
+      if (who && who.playerIdx >= 0 && G.players[who.playerIdx]) G.players[who.playerIdx].stats.crystals++;
       this.score += 20;
       this.progress('crystal', 1);
       objEvent('crystals', 1, this);
@@ -999,15 +1036,20 @@ class Colony {
     // the queen lays
     const queen = this.queen();
     if (queen) {
-      // winter: she lays at a fraction of her pace
-      this.eggT -= G.isWinter() ? WINTER_LAY : 1;
+      // winter: she lays at a fraction of her pace (a shorter year: a
+      // little quicker all year, see yearPace)
+      this.eggT -= (G.isWinter() ? WINTER_LAY : 1) * G.pace;
       const broodCount = this.broodCount();
       const caps = this.caps;
       // (from autumn on a queen keeps the winter stores: no eggs into the
       // hungry months unless they hold a reserve per ant -- the AI's queen
       // a bigger one; a players' colony that grew big in summer otherwise
       // laid its stores away and starved in autumn or winter)
-      const need = G.season >= AUTUMN ? Math.max(30, pop * (this.player ? PLAYER_RESERVE : AI_RESERVE)) : 30;
+      // (a shorter year's winter is shorter: the reserve as much smaller)
+      let need = G.season >= AUTUMN ? Math.max(30, pop * (this.player ? PLAYER_RESERVE : AI_RESERVE) * yearShare()) : 30;
+      // (autumn with princess room to fill: she saves up for a princess egg
+      // instead of laying the stores away a worker egg at a time)
+      if (G.season === AUTUMN && this.princessRoom()) need = Math.max(need, princessFood(this.caps.food));
       if (this.eggT <= 0 && this.food >= need && broodCount < caps.brood && pop + broodCount < caps.pop) {
         this.food -= 10;
         const e = new Brood(queen.x + (Math.random() - 0.5) * 14, queen.y - 4, 'egg', this);
@@ -1109,10 +1151,10 @@ class Colony {
     if (G.isWinter() || (G.tick + this.idx * 97) % 600 !== 0 || !this.caps) return;
     if (this.player) {
       // (the players' colony: slowly, and only once full for a while)
-      if (G.season === SPRING || this.fullT < SELF_DIG_FULL) return;
+      if (G.season === SPRING || this.fullT < selfDigFull()) return;
       if (Math.floor(this.lastExpandDay / SEASON_DAYS) === Math.floor(G.day / SEASON_DAYS) && this.expandN > 0) return;
     } else {
-      if (this.expandN >= AI_EXPAND_MAX || G.day < this.lastExpandDay + AI_EXPAND_DAYS) return;
+      if (this.expandN >= AI_EXPAND_MAX || G.day < this.lastExpandDay + AI_EXPAND_DAYS * raidGap()) return;
       if (pop + this.broodCount() < this.caps.pop - 2) return;
     }
     // where: a few tries around the junction for a spot clear of the other
@@ -1202,7 +1244,7 @@ class Colony {
       }
       return;
     }
-    if (G.isWinter() || G.day < 2 || G.day <= this.lastRaidDay) return;
+    if (G.isWinter() || G.day < 2 || G.day < this.lastRaidDay + raidGap()) return;
     // (against more players: a bigger colony before it goes, a bigger party)
     const rs = slotScale(SLOT_RIVAL);
     if (pop < Math.round(RAID_POP * rs) || this.food < RAID_FOOD) return;
@@ -1501,22 +1543,32 @@ function dropSitePieces(n) {
 // co-op players' ants are on top of the household). The rest -- a count of
 // chambers, the royal chamber (one chamber can't grow past its disk), the
 // seal, the queen, a princess -- stay as they are.
+// A shorter year (see yearShare) scales the milestones that measure what a
+// season's time buys by its share of a FULL year's time to the power `te`:
+// 1 for what is only counted up through the season (the fruit, the seal's
+// recounts, the centipedes), 0.5 for what the colony builds on all year
+// (food, the mound, ants raised; with the brood quicker too) -- from
+// `base`, what a fresh colony already has (pop25: its ~14 ants). SHORT
+// asks for 4 new ants, 70 food, a 175 px mound, 22 ants, 4 pieces of
+// fruit, 105 food for winter, a seal half as long and 2 centipedes; QUICK
+// 3, 60, 145, 20, 3, 85, a third and 1. A FULL year is exactly as it was.
 // ---------------------------------------------------------------------------
 const SEAL_NEED = 45;   // winter recounts (8 s apart) with the entrance shut
 const OBJECTIVES = [
   // spring: establish the nest
-  [{ id: 'storage2', kind: 'level', need: 2, grow: 1 }, { id: 'raise', kind: 'count', need: 5, scale: true },
-    { id: 'food100', kind: 'level', need: 100, grow: 50, scale: true }],
+  [{ id: 'storage2', kind: 'level', need: 2, grow: 1 }, { id: 'raise', kind: 'count', need: 5, scale: true, te: 0.5 },
+    { id: 'food100', kind: 'level', need: 100, grow: 50, scale: true, te: 0.5 }],
   // summer: expand, and contest the fallen fruit with the rival
-  [{ id: 'mound', kind: 'level', need: 250, grow: 150, scale: true }, { id: 'pop25', kind: 'level', need: 25, grow: 10, perSlot: 2 },
-    { id: 'contested', kind: 'count', need: 8, grow: 4, scale: true }],
+  [{ id: 'mound', kind: 'level', need: 250, grow: 150, scale: true, te: 0.5 },
+    { id: 'pop25', kind: 'level', need: 25, grow: 10, perSlot: 2, te: 0.5, base: 14 },
+    { id: 'contested', kind: 'count', need: 8, grow: 4, scale: true, te: 1 }],
   // autumn: prepare for winter and the next generation
-  [{ id: 'stockpile', kind: 'end', need: 150, grow: 50, scale: true },
+  [{ id: 'stockpile', kind: 'end', need: 150, grow: 50, scale: true, te: 0.5 },
     { id: 'royal', kind: 'level', need: PRINCESS_ROYAL, grow: 600 },
     { id: 'princess', kind: 'count', need: 1 }],
   // winter: survive
-  [{ id: 'queen', kind: 'end', need: 1 }, { id: 'sealed', kind: 'count', need: SEAL_NEED, pct: true },
-    { id: 'centipedes', kind: 'count', need: 3, scale: true }],
+  [{ id: 'queen', kind: 'end', need: 1 }, { id: 'sealed', kind: 'count', need: SEAL_NEED, pct: true, te: 1 },
+    { id: 'centipedes', kind: 'count', need: 3, scale: true, te: 1 }],
 ];
 const OBJ_SCORE = 200, OBJ_CRYSTALS = 2;   // reward per milestone
 
@@ -1533,7 +1585,14 @@ function newObjectives(year, season, yearDone) {
 // what milestone o asks for in `year`, for the players the world is
 // balanced for (see OBJECTIVES)
 function objNeed(o, year) {
-  const need = o.need + (o.grow || 0) * Math.max(0, year - 1);
+  let need = o.need + (o.grow || 0) * Math.max(0, year - 1);
+  // (a shorter year: what its time gives room for; round numbers past 50)
+  const share = yearShare();
+  if (o.te && share < 1) {
+    const b = o.base || 0;
+    need = b + (need - b) * Math.pow(share, o.te);
+    need = Math.max(1, need >= 50 ? Math.round(need / 5) * 5 : Math.round(need));
+  }
   const extra = playerSlots() - 1;
   if (o.scale) return Math.round(need * (1 + SLOT_OBJ * extra));
   return need + (o.perSlot || 0) * extra;

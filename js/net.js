@@ -25,7 +25,7 @@ const Net = {
   // the room (worldName: a persistent world's; faction: ours in versus;
   // pub: listed under OPEN MATCHES)
   code: null, token: null, you: -1, host: -1, roomState: null, players: [], max: 8, mode: 'coop',
-  worldName: null, faction: 'black', pub: false,
+  worldName: null, faction: 'black', pub: false, len: 'full',
   reborn: false,      // the last world was ours starting over (see world())
   // the match
   inMatch: false, seed: null, base: null, ready: false, awaitFirst: false,
@@ -243,6 +243,7 @@ const Net = {
     this.code = m.code; this.token = m.token; this.you = m.you; this.host = m.host;
     this.players = m.players || []; this.max = m.max || 8; this.mode = m.mode;
     this.worldName = m.name || null; this.faction = m.faction === 'red' ? 'red' : 'black'; this.pub = !!m.pub;
+    this.len = YEAR_LENS[m.len] ? m.len : 'full';
     this.roomState = m.state;
     this.status = 'open';
     this.remember();
@@ -281,6 +282,8 @@ const Net = {
       resetWorldState(world, m.seed);
       // (who plays which colony; versus: each side's own ant gates)
       setupFactions(m.mode === 'versus' || m.mode === 'world' ? m.mode : 'coop');
+      // (the year's length: the clock and the calendar run by it)
+      setYearLen(m.len);
       // (a world swapped in mid-play -- a persistent world starting over --
       // isn't drawn or played until its first snapshot links the players)
       this.ready = false;
@@ -442,7 +445,25 @@ const Net = {
       this.playersView(v);
     } else if (key === 'sc') {
       // the scoreboard's tallies (see server/snapshot.js scoresView)
-      v.forEach((st, i) => { if (st) ensurePlayer(i).stats = { kills: st[0], deaths: st[1], food: st[2], dug: st[3], built: st[4] }; });
+      v.forEach((st, i) => {
+        if (!st) return;
+        const p = ensurePlayer(i);
+        if (!p.stats || !p.stats.pm) p.stats = newPlayerStats();
+        Object.assign(p.stats, { kills: st[0], deaths: st[1], food: st[2], dug: st[3], built: st[4] });
+      });
+    } else if (key[0] === 'q') {
+      // our side's personal milestones (see server/snapshot.js personalView):
+      // the tiers, and the counts the scoreboard doesn't carry
+      v.forEach((r, i) => {
+        const p = ensurePlayer(i);
+        if (!r) { p.pmKnown = false; return; }
+        if (!p.stats || !p.stats.pm) p.stats = newPlayerStats();
+        const s = p.stats;
+        PERSONAL.forEach((t, k) => { s.pm[t.id] = Number(r[0][k]) || 0; });
+        [s.preds, s.care, s.frost, s.crystals, s.milked, s.planned, s.lives] = r.slice(1).map(Number);
+        s.frost *= 60;   // (sent in seconds; the tally counts ticks)
+        p.pmKnown = true;
+      });
     } else {
       const c = G.colonies[Number(key.slice(1))];
       if (!c) return;

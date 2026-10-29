@@ -68,7 +68,7 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 | Plan mode: draw a blueprint (`Space` plan, `X` erase, `B`/`Esc` done) | `B` |
 | Change build material (earth / thatch / ant gate) | `R` |
 | Mark chamber (or, by a tree, an aphid shelter) | `X` |
-| Objectives / crystal upgrades | `O` (`←`/`→` page, `Enter` buy) |
+| Objectives / crystal upgrades / personal milestones | `O` (`←`/`→` page, `Enter` buy) |
 | Guide arrow on / off | `G` |
 | Skip the current hint | `H` |
 
@@ -99,12 +99,15 @@ offers four ways in:
   a colony lost with no heir starts the world over -- a new seed, a fresh
   colony -- with its legacy and history kept. Always co-op.
 - **CREATE A MATCH** -- **co-op** (1-8 players, one colony, one year; the
-  end screen has no CONTINUE) or **versus**, **public** (listed under OPEN
-  MATCHES) or **private** (by code only). You get a four-letter **room
-  code** (no I or O, case doesn't matter).
+  end screen has no CONTINUE) or **versus**; its **LENGTH**: a **FULL
+  YEAR** (about 48 minutes), **SHORT** (24) or **QUICK** (16) -- see *One
+  year in the colony*; **public** (listed under OPEN MATCHES) or **private**
+  (by code only). You get a four-letter **room code** (no I or O, case
+  doesn't matter).
 - **JOIN WITH A CODE** -- any match, public or private.
 - **OPEN MATCHES** -- public matches with room to spare, in their lobby or
-  already **UNDER WAY** (you join the running match and pick an ant).
+  already **UNDER WAY** (you join the running match and pick an ant), each
+  with its length (the lobby's title says it too).
 
 The lobby lists everyone in their colours, in two columns of four (versus:
 black on the left, red on the right, up to eight each under a smaller room
@@ -151,8 +154,32 @@ world list) while the world runs on; a message at the start points to it. If the
 reconnects by itself (reloading the page works too): for two minutes your
 place is kept and your ant carries on as one of the colony until you are
 back. When a match's year ends (the nuptial flight, or the colony lost)
-everyone sees the same end screen. Matches are not saved; persistent
-worlds are (on the server).
+everyone sees the same end screen -- the result, and with `→` the
+**HIGHLIGHTS**: the awards (**MVP**, a weighted score of everything a
+player did; **TOP DIGGER**, **TOP BUILDER**, **TOP FORAGER**, **MOST
+KILLS**; **SURVIVOR**, the fewest deaths), every player's MVP score and
+the personal milestones it earned this match (versus: both sides, a column
+each -- the enemy's milestones are shown only here), and your own by name.
+The result page names the MVP and what you won. Matches are not saved;
+persistent worlds are (on the server).
+
+**Personal milestones.** Besides the colony's milestones every player has
+its own: ten tracks of three tiers each, for every way of playing --
+**HUNTER** (kills: 1, 5, 15), **SLAYER** (predators: 1, 3, 6),
+**FORAGER** (food stored: 20, 100, 300), **DIGGER** (earth dug: 500,
+3000, 10000 px), **BUILDER** (earth built: 150, 800, 3000 px),
+**CARER** (ants healed or rallied, larvae fed by hand: 3, 15, 40),
+**FROSTBITE** (seconds out on the winter surface: 15, 40, 90),
+**PROSPECTOR** (crystals carried home: 1, 3, 6), **HERDER** (aphids
+milked: 1, 5, 15) and **SURVIVOR** (seasons lived through without dying:
+1, 2, 4). A tier reached is a toast only you see, in your colour, and
+gives the colony 25/50/100 points; the top tier of most tracks (not
+digging, building or milking) also a crystal, at most 4 a side a year. The last page of the `O`
+screen lists them, with the next goal of each and how far along you are;
+the held-`Tab` scoreboard counts each player's (versus: your side's). In a
+persistent world they belong to your place in it (a newcomer taking an old
+place starts over), and its nuptial flight tells everyone the year's MVP
+and each player its awards and the milestones it earned that year.
 
 **More players, the same challenge.** A world is balanced for its number
 of players, *n*: a co-op match for the players who start it, versus for
@@ -190,6 +217,13 @@ food while the colony is hungry, and the red nest (or its queen, once
 found) when the season's work is done. Off screen it sits at the edge of the
 view with the target's sign beside it; in sight it bobs over the spot.
 
+The **goal strip** at the top right keeps the season in view: its name,
+the milestones done this season (x/3) and the time left in it (an
+hourglass, m:ss); from autumn the princesses raised (grown or growing),
+and in winter the time to the nuptial flight. It sits beside the task and
+milestone lines (on whichever of the two top rows has room, shortened to
+an icon if it must); name tags keep clear of it.
+
 The **HUD** has three groups: your ant (caste, health — it frosts over out
 in the winter cold — what it carries, the soil and thatch loads with the
 selected building material framed in gold and shown as a swatch), the colony
@@ -200,7 +234,21 @@ while the `O` screen, the map or the ant switch is open, and show after.
 ### One year in the colony
 
 The game is one colony year of four seasons, three in-game days each (about
-48 minutes). **Spring** and **summer** are rich; **autumn** brings less food
+48 minutes). A match (and a new solo world: `←`/`→` on an empty slot) may
+be **SHORT** (2-minute days, 24 minutes) or **QUICK** (80-second days, 16
+minutes): the same twelve days, each shorter, so everything the calendar
+paces -- the seasons, a raid at most a day, the day's dig task, the
+predators growing bolder, the night -- comes sooner, while what an ant does
+in a second (walking, digging, eating, the forest's food growing back)
+stays the same. To fit, the brood grows and the queens lay a little
+quicker (x1.41 SHORT, x1.73 QUICK), the queen's winter reserve is as
+much smaller as the winter, the stores a princess egg wants are x0.71
+(SHORT) or x0.58 (QUICK) of a full year's, the red rival raids and digs new
+chambers no more often in real time than in a full year, and the
+milestones that measure what a season's time buys shrink with it (SHORT:
+raise 4, store 70, a 175 px mound, 22 ants, 4 pieces of fruit, 105 for
+winter, a seal half as long, 2 centipedes; QUICK: 3, 60, 145, 20, 3, 85,
+a third as long, 1). A persistent world is always a full year. **Spring** and **summer** are rich; **autumn** brings less food
 but a fall of leaves; in **winter** nothing grows, the queen lays slowly,
 centipedes come up from the deep more often, and the surface is deadly cold:
 an ant outside loses health, unless it is below ground or within a thatched
@@ -403,7 +451,9 @@ positional sounds, particle bursts; a colony's own ones tagged with it, so
 in versus they reach only that side), and terrain edits are reported
 through `T.onEdit`. `G.mode` is `solo`, `coop`, `versus` or `world`;
 `G.colIdx` is whose eyes `G.colony` / `G.rival` see through (a red player's
-client sets 1).
+client sets 1). `G.yearLen` (`full`, `short`, `quick`; `setYearLen`) sets
+`DAY_LEN`, which every sim file reads, and `G.pace`, the brood's and the
+queens' quickening (saved, and sent with the world to the clients).
 
 An NPC far from every player's ant thinks less often -- every 4 ticks
 beyond 900 px, every other tick off screen, every tick within 260 px or
@@ -468,20 +518,25 @@ deploy/            pm2 ecosystem file, nginx block, the worlds' nightly
 ```
 
 The protocol is JSON over one WebSocket (permessage-deflate on): `hello`,
-`list` (the room browser), `create` (mode, public) / `join` (room code) /
+`list` (the room browser), `create` (mode, public, len: the year's length) / `join` (room code) /
 `enter` (a persistent world by name) / `resume` (token), `lobby`, `side`,
 `pub`, `kick`, `start`, `leave`; in a match the client sends held input
 (`in`, on change and every 100 ms) and presses as messages of their own
 (`act`, `abil`, `mat`, `mark`, `buy`, `take`); in plan mode the held
 input carries the cursor and the brush too (`plan`, `px`, `py`, `paint`;
 the sim holds the cursor to the ant's reach and paints the stroke between
-the spots it gets). On joining it gets `world` (the seed, plus the
+the spots it gets). On joining it gets `world` (the seed and the year's
+length, plus the
 terrain as a deflated diff against what the seed generates, checked by a
 hash, and its own colony's blueprint whole), then snapshots: entity records
 as integer arrays, the ids gone, the colony state that changed, its own
 events (messages, sounds, particles), the terrain rects edited (run-length
 packed) and its colony's blueprint changes (`pl`: runs of pixels, each as
-it stands now -- a material or gone; versus: never the other side's). A mid-game colony with
+it stands now -- a material or gone; versus: never the other side's). Once
+a second come the scoreboard (`sc`) and its side's personal milestones
+(`q0`/`q1`: each player's tiers as a digit a track and the counts behind
+them; versus: never the other side's -- they come with the end screen's
+`over`, with every player's numbers and the awards). A mid-game colony with
 four to eight players costs each client about 3-8 KB/s on the wire.
 
 Headless tests (require `npm install` for Playwright):
@@ -520,7 +575,23 @@ node test/polishprobe.js  # hints (advance, skip, off), the guide arrow and
                           # rims, rally-follow, the factions' colours
 node test/activeyear.js   # a scripted active player through a whole year:
                           # milestones, stars, colony size per season
-                          # (--casual: a first-timer's year)
+                          # (--casual: a first-timer's year; --idle: the
+                          # player's ant handed to the colony; --len short
+                          # or quick: a shorter year)
+node test/matchprobe.js   # the year's length (FULL/SHORT/QUICK days and
+                          # targets, the calendar at the short pace, a short
+                          # year to its flight, v10 saves), personal
+                          # milestones (through play and tallies, only for
+                          # their player, in its colour, rewarded once), the
+                          # awards, a persistent world's year; online: CREATE
+                          # with LENGTH, OPEN MATCHES and the lobby, the
+                          # room's sim, toasts and each side's personal view
+                          # only for its own, the highlights in `over`; a
+                          # page: the LENGTH row, the goal strip (spring,
+                          # winter, name tags clear of it), the O screen's
+                          # page, the scoreboard, the end screens after a
+                          # co-op match of 8 and versus of 16 (EN + NO), as
+                          # screenshots (--no-browser skips the page)
 node test/netprobe.js     # online (needs `npm install` in server/): the
                           # server as a child process, two browser pages
                           # (one with 80 ms lag) and raw clients: the online

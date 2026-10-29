@@ -237,3 +237,48 @@ that march out from their own nest. This is also the foundation for versus.
    cursor and the brush, the sim holds the cursor to the reach and paints
    the stroke between the spots it gets. Save v9 (the plan as runs, the
    stocks; older saves: none). `test/planprobe.js`.
+8. **Match round 1: length, the goal in view, personal milestones.**
+   - **The year's length** (`G.yearLen`, CREATE A MATCH's LENGTH row, a
+     new solo world's slot with `←`/`→`): FULL (4-minute days, 48 min),
+     SHORT (2-minute days, 24 min), QUICK (80-second days, 16 min); a
+     persistent world is always FULL. Shorter *days*, not fewer: `DAY_LEN`
+     became a `let` (`setYearLen`), so everything the calendar paces
+     (seasons, a raid a day, the dig task, predator escalation, the night,
+     the nest-full hint, the self-dig wait) follows it, while per-tick
+     things (walking, digging, eating, the forest's food) stay. To fit:
+     brood ageing/hunger and the queens' laying x`G.pace` = sqrt(48/len)
+     (x1.41, x1.73); the rival's raids and AI chamber digs at most once per
+     FULL day of real time (`raidGap`); the winter reserve per ant x the
+     year's share, the princess food bar (60/150/60% of stores) x sqrt of
+     it (`princessFood`; QUICK share^0.75, its autumn too short to stock); milestones by `te` (1: counted through a season
+     -- fruit, seal, centipedes; 0.5: built on all year -- raise, food,
+     mound, pop25 from a base of 14, stockpile). FULL is unchanged to the
+     number. Worldgen untouched. Saved (v10), in `create`/the lobby/the
+     room list/the `world` message. Balance (activeyear bot, seeds 1-3):
+     flights with stars: active bot FULL 3/3 (3,2,3 stars), SHORT 3/3
+     (3,3,3), QUICK 2/3 (3,0,3); casual bot FULL 3/3 (3,2,2), SHORT 3/3
+     (2,3,2), QUICK 2/3 (3,0,3); idle colony (the player handed back,
+     seeds 1-2) 0/2 in every length (its royal chamber never grows roomy
+     enough). QUICK misses on seed 2, a food-poor map (FULL survives it
+     with one ant). Load (netload, back to back with HEAD): 4 bots 3.46 ->
+     3.33 ms/tick, 30% -> 26% CPU; versus 16 bots 3.54 -> 3.32 ms/tick, 35%
+     -> 32% CPU, 9.5 -> 9.2 KB/s a client -- within the noise.
+   - **The goal strip** (top right): season, milestones x/3, time left
+     (hourglass); from autumn the princesses (grown or growing), in winter
+     FLIGHT IN m:ss. It takes whichever of the two top rows has room beside
+     the task/milestone lines (else an icon-only form); name tags keep clear
+     of the top lines (they drop under their ant).
+   - **Personal milestones**: ten tracks x three tiers per player (hunter,
+     slayer, forager, digger, builder (built px only), carer, frostbite,
+     prospector, herder, survivor), checked once a second from the tally;
+     a toast only for that player in its colour (`'@n'` colour token, a
+     sound with `to`), 25/50/100 score, a crystal for the top tier of seven
+     tracks (at most `PM_GEMS` = 4 a side a year). Synced once a second as `q0`/`q1` (each side only its own);
+     the O screen's last page, a column on the held-Tab scoreboard. Saved
+     per player in v10 (solo); a world slot keeps them until a newcomer.
+   - **Highlights**: `G.over.hl` (every player's numbers, MVP score, the
+     milestones it earned; awards MVP, TOP DIGGER/BUILDER/FORAGER, MOST
+     KILLS, SURVIVOR); the online end screen's second page (two columns of
+     8, versus a side each) and a brief on the result page; a persistent
+     world's flight tells the year's MVP and each player its own year.
+     `test/matchprobe.js`.

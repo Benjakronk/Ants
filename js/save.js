@@ -16,8 +16,10 @@ const SAVE_PREFIX = 'maur_world_';
 // its legacy points, history and generation. v8: the players the world is
 // balanced for (G.playerSlots; older saves: their player count). v9: each
 // colony's blueprint (planPack's runs of pixels) and its builders' stocks.
-// restoreWorld still loads v2-v8 saves (missing fields get defaults).
-const SAVE_VERSION = 9;
+// v10: the year's length (G.yearLen: FULL, SHORT or QUICK; older: FULL)
+// and each player's tally with its personal milestones (older: none yet).
+// restoreWorld still loads v2-v9 saves (missing fields get defaults).
+const SAVE_VERSION = 10;
 
 // run-length encode the terrain bytes: [val, lo(count), hi(count)] triplets
 function rleEncode(arr) {
@@ -144,6 +146,7 @@ function serializeWorld() {
     tick: G.tick,
     day: G.day,
     mode: G.mode,
+    yearLen: G.yearLen,
     legacy: G.legacy, history: G.history, gen: G.gen,
     playerCount: G.players.length, slots: playerSlots(), avg: G.playerAvg,
     terrain: rleEncode(T.m),
@@ -154,6 +157,7 @@ function serializeWorld() {
     surf: int16Encode(T.surf),
     wear: T.wearList(),
     buildMats: G.players.map(p => p.buildMat),
+    pstats: G.players.map(p => p.stats),
     nextId: ENT_ID,
     ants: G.ants.filter(a => a.hp > 0).map(serializeAnt),
     brood: G.brood.filter(b => !b.dead).map(serializeBrood),
@@ -172,6 +176,7 @@ function worldSummary(d) {
     score: c.score, playerCount: d.playerCount,
     season: Math.floor(day / SEASON_DAYS) % 4, year: Math.floor(day / YEAR_DAYS) + 1,
     legacy: d.legacy || 0, gen: d.gen || 1,
+    len: d.v >= 10 && YEAR_LENS[d.yearLen] ? d.yearLen : 'full',
   };
 }
 

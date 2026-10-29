@@ -22,6 +22,7 @@ const STEP_MS = 1000 / 60;
 const SNAP_TICKS = 3;        // a snapshot every 3 ticks: 20 Hz
 const CATCH_UP = 5;          // ticks a late loop may run at once
 const MODES = ['coop', 'versus'];   // (what a player may create; 'world' is the server's)
+const LENS = ['full', 'short', 'quick'];   // a match's year: 48, 24 or 16 minutes (see YEAR_LENS in colony.js)
 const FACTIONS = ['black', 'red'];  // by colony index
 const SIDE_MAX = cfg.SIDE_MAX;   // versus: players a side at most (the room holds two sides)
 const ONESHOTS = { act: 'act', abil: 'abil', mat: 'buildMat', mark: 'mark' };
@@ -31,8 +32,9 @@ const randSeed = () => crypto.randomBytes(4).readUInt32LE(0);
 const randToken = () => crypto.randomBytes(18).toString('base64url');
 
 class Room {
-  // opts: { pub } for a match (listed in OPEN MATCHES); { name, data } for
-  // a persistent world (data: its save, or null for a new one)
+  // opts: { pub, len } for a match (listed in OPEN MATCHES; len: the year's
+  // length, 'full' by default); { name, data } for a persistent world (data:
+  // its save, or null for a new one; always a FULL year)
   constructor(code, mode, log, opts) {
     opts = opts || {};
     this.code = code;
@@ -40,6 +42,7 @@ class Room {
     this.world = this.mode === 'world';
     this.name = opts.name || null;
     this.pub = !!opts.pub;
+    this.len = !this.world && LENS.includes(opts.len) ? opts.len : 'full';
     this.log = log;
     this.state = 'lobby';     // lobby | play | over
     this.slots = [];          // by player index: { idx, name, token, client, connected, lostAt, antId, faction, ... }
@@ -260,7 +263,7 @@ class Room {
       };
     }
     return { code: this.code, mode: this.mode, players: this.playerCount(), max: this.cap(),
-      host: this.host ? this.host.name : '', on: this.state === 'play' ? 1 : 0 };
+      host: this.host ? this.host.name : '', on: this.state === 'play' ? 1 : 0, len: this.len };
   }
   // listed under OPEN MATCHES: public, in the lobby or under way (a joiner
   // picks an ant, see join), someone (connected) in it, room to spare
@@ -276,7 +279,7 @@ class Room {
       s.client.send({
         t: 'lobby', code: this.code, mode: this.mode, state: this.state, max: this.cap(),
         you: s.idx, host: this.host ? this.host.idx : -1, token: s.token, faction: s.faction, players,
-        pub: this.pub ? 1 : 0, name: this.name,
+        pub: this.pub ? 1 : 0, name: this.name, len: this.len,
       });
     }
   }
@@ -296,7 +299,7 @@ class Room {
     const sim = createSim();
     const seed = randSeed();
     // (versus: the players take workers their colonies already have)
-    sim.newWorld(seed, vs ? 0 : this.slots.length, this.mode, this.balanceFor());
+    sim.newWorld(seed, vs ? 0 : this.slots.length, this.mode, this.balanceFor(), this.len);
     sim.G.planSync = true;   // (the blueprints' changes go out as deltas)
     this.base = new Uint8Array(sim.T.m);
     sim.T.onEdit = (x0, y0, x1, y1) => { this.dirty.push([x0, y0, x1, y1]); };
@@ -313,7 +316,7 @@ class Room {
       // (someone who dropped out in the lobby finds its ant waiting)
       if (!s.connected) { const a = sim.releasePlayer(s.idx); s.antId = a ? a.id : 0; }
     }
-    this.log(`room ${this.code}: ${this.mode} match started, ${this.slots.length} player(s)` +
+    this.log(`room ${this.code}: ${this.mode} match started (${this.len}), ${this.slots.length} player(s)` +
       (vs ? ' (' + this.sides().join(' v ') + ')' : '') + `, seed ${seed}`);
     this.broadcastLobby();
     for (const s of this.slots) if (s.client) this.sendWorld(s.client);
@@ -330,7 +333,7 @@ class Room {
     const z = zlib.deflateSync(diff, { level: 6 });
     const ci = this.colOf(cl.slot), col = G.colonies[ci];
     cl.send({
-      t: 'world', v: P.VERSION, seed: this.seed, tick: G.tick, mode: this.mode, name: this.name,
+      t: 'world', v: P.VERSION, seed: this.seed, tick: G.tick, mode: this.mode, name: this.name, len: G.yearLen,
       you: cl.slot.idx, w: this.sim.WORLD_W, h: this.sim.WORLD_H,
       full: full ? 1 : 0, terr: z.toString('base64'), hash: P.hashBytes(T.m),
       surf: P.packInt16(T.surf), wear: T.wearList(),
@@ -408,6 +411,8 @@ class Room {
         }
       } else if (e.t === 'sfx') {
         const ev = ['s', e.k, e.x == null ? null : Math.round(e.x), e.y == null ? null : Math.round(e.y), e.r];
+        // (one player's own sound -- a personal milestone -- only for it)
+        if (e.to >= 0) { const s = this.slots[e.to]; if (s && s.client && s.client.ready) s.client.events.push(ev); continue; }
         for (const c of cls) if (mine(c, e) && (e.x == null || this.near(c, e.x, e.y, e.r + 40))) c.events.push(ev);
       } else if (e.t === 'fx') {
         const ev = ['f', e.k, Math.round(e.x), Math.round(e.y), e.n];
@@ -438,6 +443,9 @@ class Room {
     const sdt = sim.G.tick - (this.scoresT || 0);
     if (!this.scores || sdt >= 60 || sdt < 0) { this.scores = S.scoresView(sim, this.slots); this.scoresT = sim.G.tick; }
     frame.view.sc = this.scores;
+    // (each side's personal milestones, refreshed with the scores)
+    if (this.scoresT === sim.G.tick) this.pms = S.personalView(sim, this.slots, this.mode === 'versus');
+    if (this.pms) Object.assign(frame.view, this.pms);
     S.viewJson(frame);
     const edits = this.dirty.length ? S.encodeEdits(sim, this.dirty) : [];
     this.dirty = [];
@@ -672,4 +680,4 @@ class Room {
   }
 }
 
-module.exports = { Room, STEP_MS, MODES, FACTIONS };
+module.exports = { Room, STEP_MS, MODES, FACTIONS, LENS };

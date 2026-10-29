@@ -270,6 +270,7 @@ function bot(port, name) {
   await key(A, 'ArrowDown'); await key(A, 'Enter');    // CREATE A MATCH
   check('CREATE A MATCH opens its options', await A.evaluate(() => G.state === 'netcreate'));
   await key(A, 'ArrowRight');                           // MODE: VERSUS
+  await key(A, 'ArrowDown');                            // (LENGTH: FULL, as it is)
   await key(A, 'ArrowDown'); await key(A, 'ArrowRight'); // VISIBILITY: PUBLIC
   await key(A, 'ArrowDown');
   await A.screenshot({ path: 'test/shot-vs-create.png' });

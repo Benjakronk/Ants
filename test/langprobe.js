@@ -60,6 +60,47 @@ const path = require('path');
   if (online.bad.length) console.log('  ', JSON.stringify(online.bad));
   if (online.same.length) console.log('  (same in both languages: ' + online.same.join(', ') + ')');
 
+  // the match round's strings (the year's length, the goal strip, personal
+  // milestones, the highlights): both languages, different words where they
+  // should be, the font's glyphs (above), and each fits where it is drawn --
+  // a track's name and next goal in the O screen's columns, a toast, an
+  // award's label and value, the goal strip's longest form beside a task
+  const mr = await page.evaluate(() => {
+    const bad = [], w = s => textWidth(String(s));
+    const keys = Object.keys(STR).filter(k => /^(len_|ui_(crLen|lenNote|lenTag|lobbyTitle|slotLenKey|personal|pmTotal|pmNote|highlights|hl|youWon|yourPm|noPm|matchOverHl)|hud_|pm_|pmd_|m_pm|m_year|m_your|aw_|awv_)/.test(k));
+    for (const lang of [0, 1]) {
+      LANG = lang;
+      for (const k of keys) {
+        if (!STR[k][lang]) bad.push(k + ': missing');
+        if (w(String(STR[k][lang]).replace(/\{\d+\}/g, '8888')) > 316) bad.push(k + ': too wide');
+      }
+      for (const t of PERSONAL) {
+        const top = t.tiers[t.tiers.length - 1];
+        if (w(L('pm_' + t.id)) > 74) bad.push('pm_' + t.id + ': name too wide for its column');
+        if (w(Ln('pmd_' + t.id, top)) + w(top + '/' + top) + 6 > 180) bad.push('pmd_' + t.id + ': goal too wide for its column');
+        const toast = msgText({ key: 'm_pmGem', args: [{ key: 'pm_' + t.id }, '\x15\x15\x15', { key: 'pmd_' + t.id, args: [top] }] });
+        if (w(toast) > 316) bad.push('m_pmGem/' + t.id + ': toast too wide');
+      }
+      for (const k of ['mvp', 'digger', 'builder', 'forager', 'killer', 'survivor']) {
+        if (w(L('aw_' + k)) > 90) bad.push('aw_' + k + ': label too wide');
+        if (w(Ln('awv_' + k, 99999)) > 96) bad.push('awv_' + k + ': value too wide');
+      }
+      // the goal strip's longest form (winter: princesses and the flight; it
+      // drops to its short form where a row has no room for it)
+      const strip = '\x16' + L('season_winter') + ' 3/3 \x119 ' + L('hud_flightIn', '11:59');
+      if (w(strip) > 190) bad.push('goal strip too long: ' + strip);
+      for (const len of ['full', 'short', 'quick']) {
+        if (w('< ' + L('ui_crLen', L('len_' + len)) + ' >') > 300) bad.push('ui_crLen/' + len);
+        if (w(L('ui_lobbyTitle', L('ui_modeVersus'), L('len_' + len))) * 2 > 316) bad.push('ui_lobbyTitle/' + len + ' (at double size)');
+      }
+    }
+    LANG = 0;
+    return { n: keys.length, bad, same: keys.filter(k => STR[k][0] === STR[k][1] && !/\{/.test(STR[k][0])) };
+  });
+  check('the match round\'s strings: both languages, and they fit where they are drawn', mr.n >= 60 && !mr.bad.length, mr.n + ' strings');
+  if (mr.bad.length) console.log('  ', JSON.stringify(mr.bad));
+  if (mr.same.length) console.log('  (same in both languages: ' + mr.same.join(', ') + ')');
+
   // title menu: 5th item toggles language
   check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'PLAY SOLO'));
   for (let i = 0; i < 5; i++) { // down to LANGUAGE

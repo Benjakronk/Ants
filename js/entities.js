@@ -1791,8 +1791,10 @@ class Brood {
   }
 
   update() {
-    // a warm thatched mound speeds every egg and larva along
-    this.age += this.colony ? this.colony.broodBoost : 1;
+    // a warm thatched mound speeds every egg and larva along (and a shorter
+    // year all of them: G.pace, see yearPace -- their hunger comes as much
+    // sooner, so a nurse's feeding still matters as much)
+    this.age += (this.colony ? this.colony.broodBoost : 1) * G.pace;
     this.phase += 0.05;
     if (this.carried) {
       // ride on the carrier's back
@@ -1813,7 +1815,7 @@ class Brood {
         G.sfx('hatch', this.x, this.y, 240);
       }
     } else {
-      this.hungerT--;
+      this.hungerT -= G.pace;
       if (this.hungerT <= 0 && !this.hungry) { this.hungry = true; this.claimed = 0; }
       if (this.hungry && this.hungerT < -3600) this.hp -= 0.004; // starves slowly
       // grown up? (a princess needs more feeding and more time)

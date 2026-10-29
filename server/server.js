@@ -14,7 +14,7 @@ const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const cfg = require('./config');
-const { Room, STEP_MS, MODES, FACTIONS } = require('./room');
+const { Room, STEP_MS, MODES, FACTIONS, LENS } = require('./room');
 const store = require('./store');
 const P = require(path.join(cfg.JS_DIR, 'netproto.js'));
 
@@ -225,10 +225,12 @@ function handle(cl, m) {
       if (matchCount() >= cfg.MAX_ROOMS || serverFull()) { fail(cl, 'e_busy'); return; }
       const code = newCode();
       if (!code) { fail(cl, 'e_busy'); return; }
-      const r = new Room(code, mode, log, { pub: bool(m.pub) });
+      // (the year's length: FULL unless the creator picked SHORT or QUICK)
+      const len = typeof m.len === 'string' && LENS.includes(m.len) ? m.len : 'full';
+      const r = new Room(code, mode, log, { pub: bool(m.pub), len });
       rooms.set(code, r);
       r.join(cl);
-      log(`room ${code}: ${mode} (${r.pub ? 'public' : 'private'}) created by ${cl.name} (${matchCount()} match(es))`);
+      log(`room ${code}: ${mode} (${r.pub ? 'public' : 'private'}, ${len}) created by ${cl.name} (${matchCount()} match(es))`);
       return;
     }
     case 'join': {

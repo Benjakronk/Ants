@@ -26,6 +26,12 @@ const G = {
   // match, black against red: both colonies played) or 'world' (a
   // persistent world on the server: the years go on, flights bank legacy)
   mode: 'solo',
+  // the year's length: 'full' (48 minutes), 'short' (24) or 'quick' (16) --
+  // how long a day lasts (DAY_LEN, see setYearLen); pace: how much quicker
+  // its brood and queens are (yearPace, 1 in a FULL year). Saved, and sent
+  // to the clients with the world (their clock and calendar run by it).
+  yearLen: 'full',
+  pace: 1,
   legacy: 0,          // a persistent world's legacy points, banked by each nuptial flight
   history: [],        // ...and its story: { gen, year, out, stars, flown, legacy }
   gen: 1,             // ...and how many colonies it has seen (a lost one starts it over)
@@ -65,9 +71,9 @@ const G = {
     this.events.push({ t: 'msg', key, args: args || [], color: color || null, to: to == null ? -1 : to, col: col == null ? -1 : col });
   },
   // a sound; with x,y it is only heard by players within range r (with
-  // `col` only by that colony's players)
-  sfx(k, x, y, r, col) {
-    this.events.push({ t: 'sfx', k, x: x == null ? null : x, y, r: r || 300, col: col == null ? -1 : col });
+  // `col` only by that colony's players; `to`, a player index: only by it)
+  sfx(k, x, y, r, col, to) {
+    this.events.push({ t: 'sfx', k, x: x == null ? null : x, y, r: r || 300, col: col == null ? -1 : col, to: to == null ? -1 : to });
   },
   // a cosmetic particle burst ('dirt', 'blood', 'sparkle', 'clank'), or a
   // colony's nuptial flight ('flight', for `col`'s players)
@@ -173,13 +179,171 @@ function newPlayer(ant) {
 // a player's tally for the scoreboard (held Tab): ants and bugs it gave the
 // killing blow (or the last bite, KILL_CREDIT ticks before), its deaths, food
 // it carried into the storage, earth it dug and built (pixels). A newcomer
-// taking an old slot starts from nothing (see the server's join).
-function newPlayerStats() { return { kills: 0, deaths: 0, food: 0, dug: 0, built: 0 }; }
+// taking an old slot starts from nothing (see the server's join). The rest
+// counts toward the personal milestones (PERSONAL, below): predators slain,
+// care (ants healed or rallied, larvae fed by hand), ticks out on the
+// winter surface, crystals carried home, aphids milked, plan pixels painted,
+// seasons lived through without dying (and whether it died this season);
+// pm: the tier reached in each track; pmLog: [track, tier, year] as earned.
+function newPlayerStats() {
+  return {
+    kills: 0, deaths: 0, food: 0, dug: 0, built: 0,
+    preds: 0, care: 0, frost: 0, crystals: 0, milked: 0, planned: 0, lives: 0, diedSeason: false,
+    pm: {}, pmLog: [], yb: null,
+  };
+}
+// a saved tally (v10) as a fresh one with the saved numbers in it
+function restoreStats(s) {
+  const st = newPlayerStats();
+  if (!s || typeof s !== 'object') return st;
+  for (const k in st) {
+    if (typeof st[k] === 'number') st[k] = Math.max(0, Number(s[k]) || 0);
+  }
+  st.diedSeason = !!s.diedSeason;
+  for (const t of PERSONAL) st.pm[t.id] = Math.max(0, Math.min(t.tiers.length, Math.floor(Number(s.pm && s.pm[t.id]) || 0)));
+  st.pmLog = Array.isArray(s.pmLog) ? s.pmLog.filter(e => Array.isArray(e) && PERSONAL.some(t => t.id === e[0])).slice(-60) : [];
+  if (s.yb && typeof s.yb === 'object') {
+    st.yb = {};
+    for (const k in s.yb) st.yb[k] = Math.max(0, Number(s.yb[k]) || 0);
+  }
+  return st;
+}
 const KILL_CREDIT = 300;
 // the player who gets the kill of `e` (a dying ant or bug), or null
 function killerOf(e) {
   if (!(e.lastHitIdx >= 0) || G.tick - e.lastHitT > KILL_CREDIT) return null;
   return G.players[e.lastHitIdx] || null;
+}
+
+// ---------------------------------------------------------------------------
+// personal milestones: each player's own, apart from the colony's -- small
+// goals for every way of playing, three tiers each. A tier reached tells
+// only that player (a toast in its colour) and gives the colony a little
+// score; the third tier of most tracks a crystal (not the digging and
+// building ones, which a player could run up idly), at most PM_GEMS a side a
+// year so a big side's medals don't flood it with crystals. Checked once a second
+// from the player's tally; a persistent world's slot keeps them until a
+// newcomer takes it (the tally starts over then, as the scoreboard's does).
+// value(st): the track's count from a tally (frost in ticks: seconds shown)
+// ---------------------------------------------------------------------------
+const PERSONAL = [
+  { id: 'hunter', tiers: [1, 5, 15], gem: true, value: st => st.kills },
+  { id: 'slayer', tiers: [1, 3, 6], gem: true, value: st => st.preds },
+  { id: 'forager', tiers: [20, 100, 300], gem: true, value: st => Math.floor(st.food) },
+  { id: 'digger', tiers: [500, 3000, 10000], value: st => st.dug },
+  { id: 'builder', tiers: [150, 800, 3000], value: st => st.built },   // (built only: painting and erasing a plan is free)
+  { id: 'carer', tiers: [3, 15, 40], gem: true, value: st => st.care },
+  { id: 'frost', tiers: [15, 40, 90], gem: true, value: st => Math.floor(st.frost / 60) },
+  { id: 'prospector', tiers: [1, 3, 6], gem: true, value: st => st.crystals },
+  { id: 'milker', tiers: [1, 5, 15], value: st => st.milked },
+  { id: 'survivor', tiers: [1, 2, 4], gem: true, value: st => st.lives },
+];
+const PM_SCORE = [25, 50, 100];   // the colony's score for a tier
+const PM_GEMS = 4;                // personal-milestone crystals a side gets a year
+// a player's personal milestones reached, all tiers counted
+function pmCount(st) {
+  let n = 0;
+  if (st && st.pm) for (const k in st.pm) n += st.pm[k] || 0;
+  return n;
+}
+
+// player pIdx's tally against the tracks: every tier newly reached is
+// logged, told and rewarded
+function checkPersonal(pIdx) {
+  const p = G.players[pIdx];
+  if (!p || !p.stats) return;
+  const st = p.stats, col = playerColony(pIdx);
+  for (const t of PERSONAL) {
+    const v = t.value(st);
+    let tier = st.pm[t.id] || 0;
+    while (tier < t.tiers.length && v >= t.tiers[tier]) {
+      tier++;
+      st.pm[t.id] = tier;
+      st.pmLog.push([t.id, tier, G.year]);
+      if (st.pmLog.length > 60) st.pmLog.shift();
+      let gem = t.gem && tier === t.tiers.length && !!col;
+      if (col) {
+        if (col.pmGemYear !== G.year) { col.pmGemYear = G.year; col.pmGems = 0; }
+        if (col.pmGems >= PM_GEMS) gem = false;
+        col.score += PM_SCORE[tier - 1];
+        if (gem) { col.crystals++; col.pmGems++; }
+      }
+      // (the colour token: the client draws it in this player's colour)
+      G.msg(gem ? 'm_pmGem' : 'm_pm', [{ key: 'pm_' + t.id }, '\x15'.repeat(tier), { key: 'pmd_' + t.id, args: [t.tiers[tier - 1]] }],
+        '@' + pIdx, pIdx);
+      const a = p.ant;
+      G.sfx('task', a ? a.x : null, a ? a.y : null, 300, -1, pIdx);
+    }
+  }
+}
+
+// the seasons a player lives through without dying (the survivor track):
+// counted as each one ends, for every player with a living ant then
+function noteSeasonLived() {
+  for (const p of G.players) {
+    if (!p.stats) continue;
+    if (p.ant && p.ant.hp > 0 && !p.stats.diedSeason) p.stats.lives++;
+    p.stats.diedSeason = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the end of a match (or a persistent world's year): each player's numbers
+// and the awards. MVP: a weighted score of everything (MVP_W); TOP DIGGER,
+// BUILDER and FORAGER, MOST KILLS: the most of each (none for nothing);
+// SURVIVOR: the fewest deaths (with something done -- an MVP score of at
+// least SURVIVOR_MIN; ties go to the bigger MVP score, then the lower
+// player index). yearOnly: a persistent world's flight counts the year
+// just gone only, from each tally's `yb` (its numbers at the year's start,
+// pmN: its pmLog's length then; see noteYearBase). Returns { players:
+// [{ i, n (name), c (colony), st: [kills, deaths, food, dug, built, care,
+// preds], mvp, pm (tiers reached in all), pmNew: [[track, tier]] }], awards:
+// [{ k, i, v }] } -- the players with a slot (online: a name) only.
+// ---------------------------------------------------------------------------
+const MVP_W = { kills: 30, preds: 60, food: 2, dug: 0.02, built: 0.1, care: 12, crystals: 40, deaths: -15, pm: 20 };
+const SURVIVOR_MIN = 100;
+const AWARDS = [
+  { k: 'mvp', v: r => r.mvp },
+  { k: 'digger', v: r => r.st[3] },
+  { k: 'builder', v: r => r.st[4] },
+  { k: 'forager', v: r => r.st[2] },
+  { k: 'killer', v: r => r.st[0] },
+  { k: 'survivor', v: r => -r.st[1], ok: r => r.mvp >= SURVIVOR_MIN },
+];
+function matchHighlights(yearOnly) {
+  const rows = [];
+  G.players.forEach((p, i) => {
+    if (!p || !p.stats || (G.mode !== 'solo' && !p.name)) return;
+    const s = p.stats, b = yearOnly ? s.yb : null;
+    const d = k => Math.max(0, (Number(s[k]) || 0) - (b ? Number(b[k]) || 0 : 0));
+    const pmNew = s.pmLog.slice(b ? Math.min(s.pmLog.length, b.pmN || 0) : 0).map(e => [e[0], e[1]]);
+    const st = [d('kills'), d('deaths'), Math.round(d('food')), d('dug'), d('built'), d('care'), d('preds')];
+    let mvp = st[0] * MVP_W.kills + st[6] * MVP_W.preds + st[2] * MVP_W.food + st[3] * MVP_W.dug +
+      st[4] * MVP_W.built + st[5] * MVP_W.care + d('crystals') * MVP_W.crystals + st[1] * MVP_W.deaths + pmNew.length * MVP_W.pm;
+    rows.push({ i, n: p.name || null, c: p.col || 0, st, mvp: Math.max(0, Math.round(mvp)), pm: pmCount(s), pmNew });
+  });
+  const awards = [];
+  for (const a of AWARDS) {
+    let best = null;
+    for (const r of rows) {
+      if (a.ok && !a.ok(r)) continue;
+      const v = a.v(r);
+      if (!best || v > best.v || (v === best.v && r.mvp > best.r.mvp)) best = { r, v };
+    }
+    if (best && (a.k === 'survivor' || best.v > 0)) awards.push({ k: a.k, i: best.r.i, v: Math.abs(best.v) });
+  }
+  return { players: rows, awards };
+}
+
+// a persistent world's year begins (its flight has flown): each tally's
+// numbers now, for the next flight's highlights to count from
+function noteYearBase() {
+  for (const p of G.players) {
+    const s = p && p.stats;
+    if (!s) continue;
+    s.yb = { pmN: s.pmLog.length };
+    for (const k of ['kills', 'deaths', 'food', 'dug', 'built', 'care', 'preds', 'crystals']) s.yb[k] = s[k];
+  }
 }
 
 // online players come and go while the world runs. A slot (an index into
@@ -280,6 +444,17 @@ function setSlots(n) {
       if (def && !o.done) o.need = objNeed(def, ob.year);
     }
   }
+}
+
+// the year's length (see YEAR_LENS in colony.js): sets the day's length
+// every sim file reads, and the brood's pace. An unknown one is FULL.
+// Called before anything reads the calendar (a new world, a save, the
+// online client's world message).
+function setYearLen(k) {
+  G.yearLen = YEAR_LENS[k] ? k : 'full';
+  DAY_LEN = YEAR_LENS[G.yearLen];
+  G.pace = yearPace();
+  return G.yearLen;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,11 +563,13 @@ function spawnSpot(c, k, hw, hh, used) {
 // seed: the world; playerCount: the players' ants to add at the entrance
 // (co-op and solo: extra workers; versus and persistent worlds: none, their
 // players take ants the colony has); slots: the players it is balanced for
-// (default playerCount, at least 1 -- see playerSlots)
-function newWorld(seed, playerCount, mode, slots) {
+// (default playerCount, at least 1 -- see playerSlots); len: the year's
+// length (setYearLen; a persistent world is always FULL)
+function newWorld(seed, playerCount, mode, slots, len) {
   const world = genWorld(seed);
   resetWorldState(world, seed);
   setupFactions(mode);
+  setYearLen(G.mode === 'world' ? 'full' : len);
   G.legacy = 0; G.history = []; G.gen = 1;
   G.playerSlots = slots || playerCount || 1;
   G.playerSlots = playerSlots();
@@ -497,6 +674,8 @@ function restoreWorld(d, playerCount) {
   const v = d.v || 2;
   // v7: a persistent world's mode, legacy and history (older: a solo world)
   setupFactions(d.mode === 'world' ? 'world' : 'solo');
+  // v10: the year's length (older saves, and every persistent world: FULL)
+  setYearLen(v >= 10 && G.mode !== 'world' ? d.yearLen : 'full');
   G.legacy = Math.max(0, Math.floor(Number(d.legacy) || 0));
   G.history = Array.isArray(d.history) ? d.history.filter(h => h && typeof h === 'object').slice(-HISTORY_MAX) : [];
   G.gen = Math.max(1, Math.floor(Number(d.gen) || 1));
@@ -603,6 +782,8 @@ function restoreWorld(d, playerCount) {
     const pl = newPlayer(ant);
     const bm = d.buildMats && d.buildMats[p];
     if (BUILD_MATS.includes(bm)) pl.buildMat = bm;
+    // v10: the player's tally and personal milestones (older: from nothing)
+    if (v >= 10 && Array.isArray(d.pstats)) pl.stats = restoreStats(d.pstats[p]);
     G.players.push(pl);
   }
 
@@ -830,6 +1011,7 @@ function planStroke(p, pIdx, col, a, inp) {
   const d = l ? Math.hypot(c.x - l.x, c.y - l.y) : 0;
   if (l && d < 0.5) return;
   let room = true;
+  const had = col.plan.size;
   if (l && d <= PLAN_JUMP) {
     const n = Math.ceil(d / 1.5);
     for (let k = 1; k <= n; k++) room = planDab(col, l.x + (c.x - l.x) * k / n, l.y + (c.y - l.y) * k / n, mat) && room;
@@ -837,6 +1019,8 @@ function planStroke(p, pIdx, col, a, inp) {
     room = planDab(col, c.x, c.y, mat);
   }
   p.planLast = { x: c.x, y: c.y, mode };
+  // (what it adds to the plan counts for its builder track)
+  if (mat && col.plan.size > had) p.stats.planned += col.plan.size - had;
   if (!room && !p.planWarned) {
     p.planWarned = true;
     G.msg('m_planFull', [PLAN_MAX], '#ff8040', pIdx);
@@ -1116,6 +1300,7 @@ function controlPlayer(pIdx) {
           G.msg('m_noRally', [], null, pIdx);
         } else {
           a.abilCd = 600;
+          p.stats.care += Math.max(0, n) + f;
           if (n >= 0) G.msg(n > 0 ? 'm_rally' : 'm_rallyAlone', [n], '#ff8040', pIdx);
           else G.msg('m_follow', [f], '#ff8040', pIdx);
           G.sfx('danger', a.x, a.y);
@@ -1137,6 +1322,7 @@ function controlPlayer(pIdx) {
           if (healed > 0) {
             col.food -= 2;
             a.abilCd = 360;
+            p.stats.care += healed;
             G.msg('m_healed', [healed], '#80ff80', pIdx);
             G.sfx('milk', a.x, a.y);
           } else {
@@ -1170,6 +1356,7 @@ function controlPlayer(pIdx) {
         larva.feed();
         it.dead = true; a.carry = null;
         col.progress('feed', 1);
+        p.stats.care++;
         G.msg('m_fed', [], null, pIdx);
         G.sfx('milk', a.x, a.y);
       } else if (tryStore) {
@@ -1227,6 +1414,7 @@ function controlPlayer(pIdx) {
           const hd = G.makeItem('honeydew', a.x, a.y);
           hd.carried = a; a.carry = hd;
           G.items.push(hd);
+          p.stats.milked++;
           G.msg('m_milked', [], null, pIdx);
           G.sfx('milk', a.x, a.y);
         }
@@ -1318,6 +1506,8 @@ function takeOver(pIdx, caste, refX, refY) {
 function stepSim() {
   G.tick++;
   if (G.mode === 'world' && G.tick % AVG_STEP === 0) followPlayers();
+  // (the personal milestones: once a second, the players in turn)
+  for (let p = G.tick % 60; p < G.players.length; p += 60) checkPersonal(p);
 
   for (let p = 0; p < G.players.length; p++) controlPlayer(p);
 
@@ -1347,6 +1537,7 @@ function stepSim() {
         G.players[pIdx].ant = null;
         G.players[pIdx].deathPos = { x: a.x, y: a.y };
         G.players[pIdx].stats.deaths++;
+        G.players[pIdx].stats.diedSeason = true;
       } else if (!a.colony.player) {
         // a rival down: the players' tally (their queen's fall is told by
         // the defeat, in updateYear)
@@ -1384,6 +1575,7 @@ function stepSim() {
       G.fx('blood', b.x, b.y, 8);
       const killer = killerOf(b);
       if (killer) killer.stats.kills++;
+      if (killer && b.predator) killer.stats.preds++;
       // (versus: the kill counts for the nest it was nearer to)
       const by = G.mode === 'versus' ? nestNearest(b.x) : G.colonies[0];
       if (b.kind === 'centipede') objEvent('centipedes', 1, by);
@@ -1436,13 +1628,16 @@ const FLIGHT_T = 420;   // ticks the flight plays out before the year's end
 const SEASON_COLOR = ['#a0e070', '#ffe060', '#e09040', '#c0e0ff'];
 
 // the world's story ends (for now): the client shows the end screen
+// (hl: the players' numbers and the awards, see matchHighlights; len: the
+// year's length, for the end screen)
 function gameOver(win, reason, extra) {
   const c = G.colonies[0];
+  for (let p = 0; p < G.players.length; p++) checkPersonal(p);
   G.over = Object.assign({
     win, reason, day: G.day, year: G.year, season: G.season,
     score: c.score, stats: Object.assign({}, c.stats),
     stars: 0, flown: 0, milestones: c.objectives ? c.objectives.yearDone : 0,
-    canContinue: false,
+    canContinue: false, hl: matchHighlights(false), len: G.yearLen,
   }, extra || {});
 }
 
@@ -1472,6 +1667,7 @@ function updateYear() {
   if (ob.year !== G.year || ob.season !== G.season) {
     const obs = G.colonies.map(c => c.objectives);
     for (const c of G.colonies) if (c.objectives) closeObjectives(c);
+    noteSeasonLived();
     const flight = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year;
     // (versus: that flight decides the match -- no new year to announce)
     if (!(flight && G.mode === 'versus')) {
@@ -1508,6 +1704,8 @@ function updateYear() {
     for (let i = 0; i < G.players.length; i++) {
       const p = G.players[i];
       if (p.coldT > 0) p.coldT--;
+      // (the frost track: time out on the winter surface, mound or not)
+      if (p.ant && p.ant.hp > 0 && p.stats && !underground(p.ant)) p.stats.frost++;
       if (p.ant && p.ant.hp > 0 && !sheltered(p.ant) && p.coldT <= 0) {
         p.coldT = 600;
         G.msg('m_cold', [], '#ffffff', i);
@@ -1556,6 +1754,23 @@ function bankLegacy(f) {
   if (G.history.length > HISTORY_MAX) G.history.splice(0, G.history.length - HISTORY_MAX);
   G.msg('m_legacy', [pts, G.legacy], '#ff90e0');
   G.sfx('task');
+  yearHighlights();
+}
+
+// a persistent world's year is over: its MVP told to everyone, and each
+// player its own awards and the personal milestones it earned this year;
+// the next year counts from here
+function yearHighlights() {
+  for (let p = 0; p < G.players.length; p++) checkPersonal(p);
+  const hl = matchHighlights(true);
+  const mvp = hl.awards.find(a => a.k === 'mvp');
+  if (mvp) G.msg('m_yearMvp', [{ player: mvp.i }], '#ffe040');
+  for (const r of hl.players) {
+    const mine = hl.awards.filter(a => a.i === r.i && a.k !== 'mvp').map(a => ({ key: 'aw_' + a.k }));
+    if (mine.length) G.msg('m_yourAwards', [mine.length > 1 ? { key: 'aw_two', args: [mine[0], mine[1]] } : mine[0]], '@' + r.i, r.i);
+    G.msg('m_yourYear', [r.pmNew.length], '@' + r.i, r.i);
+  }
+  noteYearBase();
 }
 
 // a princess becomes her colony's new queen

@@ -125,6 +125,26 @@ function scoresView(sim, slots) {
     [p.stats.kills, p.stats.deaths, Math.round(p.stats.food), p.stats.dug, p.stats.built] : null);
 }
 
+// the view keys for the personal milestones: 'q' + colony index, by player
+// index (null for players not on that side): [tiers (a digit a track, in
+// PERSONAL's order), preds, care, frost (seconds), crystals, milked,
+// planned, lives] -- the rest of the tally is the scoreboard's. Each side
+// sees only its own key in versus (see clientSnapshot); the other side's
+// show on the end screen only. Refreshed with the scores.
+function personalView(sim, slots, vs) {
+  const G = sim.G, out = {};
+  const ids = sim.PERSONAL.map(t => t.id);
+  for (const c of G.colonies) {
+    if (!c.player) continue;
+    out['q' + c.idx] = G.players.map((p, i) => {
+      if (!slots[i] || !p.stats || (vs && (p.col || 0) !== c.idx)) return null;
+      const s = p.stats;
+      return [ids.map(id => s.pm[id] || 0).join(''), s.preds, s.care, Math.floor(s.frost / 60), s.crystals, s.milked, s.planned, s.lives];
+    });
+  }
+  return out;
+}
+
 // the view key for the players (names, ants, loads), from the room's slots
 function playersView(sim, slots) {
   return sim.G.players.map((p, i) => {
@@ -180,8 +200,8 @@ function clientSnapshot(frame, cl, edits) {
   for (const k in frame.view) {
     let v = frame.view[k], s = frame.viewJson[k];
     // (versus: the other side's colony only by its public face; its
-    // milestones, tasks and stocks not at all)
-    if (frame.vs && 'cotk'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
+    // milestones, tasks, stocks and personal milestones not at all)
+    if (frame.vs && 'cotkq'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
       if (k[0] !== 'c') continue;
       v = frame.pub[k]; s = frame.pubJson[k];
     }
@@ -270,4 +290,4 @@ function terrainHash(m) {
   return h >>> 0;
 }
 
-module.exports = { terrainHash, buildFrame, viewJson, playersView, scoresView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };
+module.exports = { terrainHash, buildFrame, viewJson, playersView, scoresView, personalView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };

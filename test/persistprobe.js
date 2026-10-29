@@ -156,9 +156,9 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   await sleep(4200);
   const files = fs.readdirSync(DATA).sort();
   let saveOk = false, bakOk = false;
-  try { saveOk = readSave().v === 9 && readSave().mode === 'world'; } catch (e) { /* bad */ }
+  try { saveOk = readSave().v === 10 && readSave().mode === 'world'; } catch (e) { /* bad */ }
   try { bakOk = !!JSON.parse(fs.readFileSync(FILE + '.bak', 'utf8')).terrain; } catch (e) { /* bad */ }
-  check('a running world autosaves (AUTOSAVE_MS), a whole v9 save with a .bak and no temp file left',
+  check('a running world autosaves (AUTOSAVE_MS), a whole v10 save with a .bak and no temp file left',
     /saved \(autosave/.test(srvLog) && fs.statSync(FILE).mtimeMs > m0 && saveOk && bakOk && !files.some(f => f.endsWith('.tmp')), files);
 
   // ---- a nuptial flight banks legacy, and the colony carries on --------------------
@@ -286,11 +286,12 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   await page.waitForFunction(() => !!localAnt(), null, { timeout: 5000 }).catch(() => {});
   await key('o');
   const op = await page.evaluate(() => objPages());
-  await key('ArrowLeft');                  // (back round to page 3: WORLD HISTORY)
+  await key('ArrowLeft');                  // (back round past page 4, PERSONAL MILESTONES,
+  await key('ArrowLeft');                  // to page 3: WORLD HISTORY)
   await page.waitForTimeout(150);
   const hp = await page.evaluate(() => G.objScreen && G.objScreen.page);
   await page.screenshot({ path: 'test/shot-world-history.png' });
-  check('the O screen has a WORLD HISTORY page in a persistent world', op === 3 && hp === 2);
+  check('the O screen has a WORLD HISTORY page in a persistent world', op === 4 && hp === 2);
   await key('Escape');
   // the world starts over under the page: JOIN THE COLONY says why, no
   // welcome and no tutorial again; once an ant is picked, the reason first

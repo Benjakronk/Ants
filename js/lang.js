@@ -199,7 +199,8 @@ const STR = {
   o_princess: ['RAISE A PRINCESS', 'AL OPP EN PRINSESSE'],
   o_queen: ['KEEP THE QUEEN ALIVE', 'HOLD DRONNINGEN I LIVE'],
   o_sealed: ['KEEP THE ENTRANCE SEALED OR GATED', 'HOLD INNGANGEN STENGT MED JORD ELLER PORT'],
-  o_centipedes: ['KILL 3 CENTIPEDES', 'DREP 3 TUSENBEIN'],
+  o_centipedes: ['KILL {0} CENTIPEDES', 'DREP {0} TUSENBEIN'],
+  o_centipedes_1: ['KILL A CENTIPEDE', 'DREP ET TUSENBEIN'],
 
   // crystal upgrades
   up_mandibles: ['MANDIBLES', 'KJEVER'],
@@ -438,6 +439,82 @@ const STR = {
   e_noSlot: ['YOUR PLACE IN THE MATCH IS GONE', 'PLASSEN DIN I SPILLET ER BORTE'],
   e_elsewhere: ['YOU JOINED FROM ANOTHER WINDOW', 'DU BLE MED FRA ET ANNET VINDU'],
   e_generic: ['SOMETHING WENT WRONG', 'NOE GIKK GALT'],
+
+  // the year's length (CREATE A MATCH, a new solo world, OPEN MATCHES, the lobby)
+  ui_crLen: ['LENGTH: {0}', 'LENGDE: {0}'],
+  len_full: ['FULL YEAR', 'HELT ÅR'],
+  len_short: ['SHORT', 'KORT'],
+  len_quick: ['QUICK', 'KJAPT'],
+  ui_lenNote: ['ABOUT {0} MINUTES IN ALL', 'CIRKA {0} MINUTTER I ALT'],
+  ui_lenTag: ['{0} ({1} MIN)', '{0} ({1} MIN)'],
+  ui_lobbyTitle: ['{0} - {1}', '{0} - {1}'],
+  ui_slotLenKey: ['LEFT/RIGHT: HOW LONG A NEW YEAR LASTS', 'VENSTRE/HØYRE: HVOR LENGE ET NYTT ÅR VARER'],
+
+  // the goal strip at the top right (the time left: the hourglass)
+  hud_flightIn: ['FLIGHT IN {0}', 'FLUKT OM {0}'],
+
+  // personal milestones: the tracks, the next tier's goal, the toasts
+  pm_hunter: ['HUNTER', 'JEGER'],
+  pm_slayer: ['SLAYER', 'ROVDYRJEGER'],
+  pm_forager: ['FORAGER', 'SANKER'],
+  pm_digger: ['DIGGER', 'GRAVER'],
+  pm_builder: ['BUILDER', 'BYGGER'],
+  pm_carer: ['CARER', 'HJELPER'],
+  pm_frost: ['FROSTBITE', 'KULDETRASS'],
+  pm_prospector: ['PROSPECTOR', 'SKATTEJEGER'],
+  pm_milker: ['HERDER', 'GJETER'],
+  pm_survivor: ['SURVIVOR', 'OVERLEVER'],
+  pmd_hunter: ['KILL {0} FOES', 'DREP {0} FIENDER'],
+  pmd_hunter_1: ['KILL A FOE', 'DREP EN FIENDE'],
+  pmd_slayer: ['SLAY {0} PREDATORS', 'DREP {0} ROVDYR'],
+  pmd_slayer_1: ['SLAY A PREDATOR', 'DREP ET ROVDYR'],
+  pmd_forager: ['STORE {0} FOOD', 'LAGRE {0} MAT'],
+  pmd_digger: ['DIG {0} PX', 'GRAV {0} PX'],
+  pmd_builder: ['BUILD {0} PX', 'BYGG {0} PX'],
+  pmd_carer: ['HEAL/RALLY/FEED {0}', 'LEG/SAML/MAT {0}'],
+  pmd_frost: ['{0} S IN WINTER COLD', '{0} SEK I VINTERKULDA'],
+  pmd_prospector: ['BRING HOME {0} GEMS', 'BÆR HJEM {0} KRYSTALLER'],
+  pmd_prospector_1: ['BRING HOME A GEM', 'BÆR HJEM EN KRYSTALL'],
+  pmd_milker: ['MILK {0} APHIDS', 'MELK {0} BLADLUS'],
+  pmd_milker_1: ['MILK AN APHID', 'MELK EN BLADLUS'],
+  pmd_survivor: ['SURVIVE {0} SEASONS', 'OVERLEV {0} ÅRSTIDER'],
+  pmd_survivor_1: ['SURVIVE A SEASON', 'OVERLEV EN ÅRSTID'],
+  m_pm: ['\x1B {0} {1} - {2}!', '\x1B {0} {1} - {2}!'],
+  m_pmGem: ['\x1B {0} {1} - {2}! +1\x13', '\x1B {0} {1} - {2}! +1\x13'],
+  ui_personal: ['PERSONAL MILESTONES', 'PERSONLIGE DELMÅL'],
+  ui_pmTotal: ['{0}/{1} REACHED', '{0}/{1} NÅDD'],
+  ui_pmTotalLine: ['PERSONAL MILESTONES: {0}/{1}', 'PERSONLIGE DELMÅL: {0}/{1}'],
+  ui_pmNote: ['EVERY PLAYER HAS THEIR OWN. TOP TIER: +1\x13 MOSTLY', 'HVER SPILLER HAR SINE EGNE. TOPPNIVÅ: OFTE +1\x13'],
+  // (a persistent world's flight: the year's MVP and each player's own year)
+  m_yearMvp: ["THE YEAR'S MVP: {0}", 'ÅRETS MAUR: {0}'],
+  m_yourAwards: ['YOUR YEAR: {0}!', 'DITT ÅR: {0}!'],
+  m_yourYear: ['{0} PERSONAL MILESTONES THIS YEAR', '{0} PERSONLIGE DELMÅL I ÅR'],
+  m_yourYear_1: ['1 PERSONAL MILESTONE THIS YEAR', '1 PERSONLIG DELMÅL I ÅR'],
+
+  // the end screen's highlights
+  aw_mvp: ['MVP', 'ÅRETS MAUR'],
+  aw_digger: ['TOP DIGGER', 'BESTE GRAVER'],
+  aw_builder: ['TOP BUILDER', 'BESTE BYGGER'],
+  aw_forager: ['TOP FORAGER', 'BESTE SANKER'],
+  aw_killer: ['MOST KILLS', 'FLEST DREP'],
+  aw_survivor: ['SURVIVOR', 'OVERLEVEREN'],
+  aw_two: ['{0} AND {1}', '{0} OG {1}'],
+  awv_mvp: ['{0} PTS', '{0} POENG'],
+  awv_digger: ['{0} PX', '{0} PX'],
+  awv_builder: ['{0} PX', '{0} PX'],
+  awv_forager: ['{0} FOOD', '{0} MAT'],
+  awv_killer: ['{0} KILLS', '{0} DREP'],
+  awv_killer_1: ['1 KILL', '1 DREP'],
+  awv_survivor: ['{0} DEATHS', '{0} DØDSFALL'],
+  awv_survivor_1: ['1 DEATH', '1 DØDSFALL'],
+  ui_highlights: ['HIGHLIGHTS', 'HØYDEPUNKTER'],
+  ui_hlPlayer: ['PLAYER', 'SPILLER'],
+  ui_hlMvp: ['MVP', 'POENG'],
+  ui_youWon: ['YOU: {0}', 'DU: {0}'],
+  ui_yourPmMatch: ['YOUR PERSONAL MILESTONES: {0}', 'DINE PERSONLIGE DELMÅL: {0}'],
+  ui_noPmMatch: ['NO PERSONAL MILESTONES THIS TIME', 'INGEN PERSONLIGE DELMÅL DENNE GANGEN'],
+  ui_matchOverHl: ['THE MATCH IS OVER - RIGHT: HIGHLIGHTS', 'SPILLET ER OVER - HØYRE: HØYDEPUNKTER'],
+  ui_hlKeys: ['LEFT/RIGHT: THE RESULT   ENTER: TITLE', 'VENSTRE/HØYRE: RESULTATET   ENTER: TITTEL'],
 };
 
 function L(key) {
@@ -492,7 +569,11 @@ function msgArg(a) {
     if (a.caste) return casteName(a.caste);
     if (a.bug) return bugNameDef(a.bug);
     if (a.brood) return broodNameDef(a.brood);
-    if (a.key) return L(a.key, ...(a.args || []));
+    // (its own args may be tokens too; a count first picks the singular)
+    if (a.key) {
+      const args = (a.args || []).map(msgArg);
+      return args.length && typeof args[0] === 'number' ? Ln(a.key, ...args) : L(a.key, ...args);
+    }
   }
   return a;
 }
@@ -621,13 +702,13 @@ function helpPages(mode) {
     'ET ROMSLIG DRONNINGKAMMER OG FULLE LAGRE FÅR',
     'DRONNINGEN TIL Å LEGGE PRINSESSER.',
     ['VINTER', H],
-    'INGEN MAT VOKSER OG KULDEN BITER: SAMLE MAT,',
-    'BYGG STRÅTUE OVER INNGANGEN (F, R), STENG MED',
-    'EN MAURPORT.',
+    'INGEN MAT VOKSER, KULDEN BITER: SAMLE MAT, BYGG',
+    'STRÅTUE (F, R), STENG INNGANGEN MED EN MAURPORT.',
     ['HELE TIDEN', H],
     'HOLD DRONNINGEN I LIVE. SOLDATER (Q) SAMLER',
     'FØLGE, AMMER (Q) LEGER. DØR DU, TAR DU EN NY',
     'MAUR. C BYTTER MAUR, HOLD TAB FOR POENGENE.',
+    'DINE EGNE PERSONLIGE DELMÅL: O, SISTE SIDE.',
   ] : [
     ['SPRING AND SUMMER', H],
     'BRING FOOD TO THE STORAGE (E). DIG OUT ROOMS',
@@ -638,18 +719,18 @@ function helpPages(mode) {
     'A ROOMY ROYAL CHAMBER AND WELL-STOCKED STORES',
     'GET THE QUEEN LAYING PRINCESSES.',
     ['WINTER', H],
-    'NO FOOD GROWS AND THE COLD BITES: STOCK FOOD,',
-    'THATCH A MOUND OVER THE ENTRANCE (F, R), CLOSE',
-    'IT WITH AN ANT GATE.',
+    'NO FOOD GROWS, THE COLD BITES: STOCK FOOD, THATCH',
+    'A MOUND (F, R), CLOSE THE ENTRANCE WITH A GATE.',
     ['ALWAYS', H],
     'KEEP THE QUEEN ALIVE. SOLDIERS (Q) RALLY AN',
     'ESCORT, NURSES (Q) HEAL. IF YOU DIE, PICK',
     'ANOTHER ANT. C SWITCHES ANTS; HOLD TAB: SCORES.',
+    'YOUR OWN PERSONAL MILESTONES: O, THE LAST PAGE.',
   ]);
   const controls = page(L('ui_howto'), helpText());
   if (mode === 'coop') return [page(no ? 'SAMARBEID' : 'THE CO-OP MATCH', no ? [
-    'EN KOLONI SOM DERE SPILLER SAMMEN, I ETT ÅR:',
-    '12 DAGER PÅ 4 MINUTTER, CIRKA 48 MINUTTER.',
+    'EN KOLONI SOM DERE SPILLER SAMMEN, I ETT ÅR',
+    'PÅ 12 DAGER: CIRKA 48, 24 ELLER 16 MINUTTER.',
     '',
     ['MÅLET', H],
     'BRUDEFLUKTEN FØRSTE VÅRDAG I ÅR 2. OM HØSTEN',
@@ -660,12 +741,12 @@ function helpPages(mode) {
     ['- 3 PRINSESSER, ELLER 8 AV DE 12 MÅLENE (O)', WIN],
     ['- DEN RØDE DRONNINGEN DREPT, ELLER FLERE', WIN],
     ['  MAUR ENN DEN RØDE KOLONIEN', WIN],
-    '',
     ['TAPT: DRONNINGEN DØR UTEN EN PRINSESSE,', LOSE],
     ['ELLER ALLE MAURENE DØR.', LOSE],
+    'HVER SPILLER HAR OGSÅ PERSONLIGE DELMÅL (O).',
   ] : [
-    'ONE COLONY, PLAYED TOGETHER, FOR ONE YEAR:',
-    '12 DAYS OF 4 MINUTES, ABOUT 48 MINUTES.',
+    'ONE COLONY, PLAYED TOGETHER, FOR ONE YEAR OF',
+    '12 DAYS: ABOUT 48, 24 OR 16 MINUTES (LENGTH).',
     '',
     ['THE GOAL', H],
     'THE NUPTIAL FLIGHT ON THE FIRST DAY OF SPRING',
@@ -676,15 +757,15 @@ function helpPages(mode) {
     ['- 3 PRINCESSES, OR 8 OF THE 12 MILESTONES (O)', WIN],
     ['- THE RED QUEEN SLAIN, OR MORE ANTS THAN THE', WIN],
     ['  RED COLONY', WIN],
-    '',
     ['LOST: THE QUEEN DIES WITH NO PRINCESS, OR', LOSE],
     ['EVERY ANT DIES.', LOSE],
+    'EVERY PLAYER ALSO HAS PERSONAL MILESTONES (O).',
   ]), todo, controls];
   if (mode === 'versus') return [page(no ? 'MOT HVERANDRE' : 'THE VERSUS MATCH', no ? [
     'SVART MOT RØD: HVER SIDE SPILLER SIN EGEN',
-    'KOLONI. REDENE STARTER LIKE. ETT ÅR, CIRKA 48',
-    'MINUTTER. INGEN DATAANGREP: Å ANGRIPE ER',
-    'DERES JOBB.',
+    'KOLONI. REDENE STARTER LIKE. ETT ÅR: 48, 24',
+    'ELLER 16 MINUTTER. INGEN DATAANGREP: Å ANGRIPE',
+    'ER DERES JOBB.',
     '',
     ['SEIER MED EN GANG', H],
     ['DREP FIENDENS DRONNING MENS HUN IKKE HAR', WIN],
@@ -699,8 +780,8 @@ function helpPages(mode) {
     ['MISTER DERE DRONNINGEN UTEN ARVING, TAPER DERE.', LOSE],
   ] : [
     'BLACK AGAINST RED: EACH SIDE PLAYS ITS OWN',
-    'COLONY. THE NESTS START EQUAL. ONE YEAR, ABOUT',
-    '48 MINUTES. NO COMPUTER RAIDS: ATTACKING IS',
+    'COLONY. THE NESTS START EQUAL. ONE YEAR: 48, 24',
+    'OR 16 MINUTES. NO COMPUTER RAIDS: ATTACKING IS',
     'UP TO YOU.',
     '',
     ['WIN AT ONCE', H],

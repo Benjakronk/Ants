@@ -5,7 +5,9 @@
 // pieces of the contested fruit home, enlarges the royal chamber in autumn,
 // gates the entrance for winter and spends its crystals. Reports milestones,
 // stars and the colony's size per season, for a few seeds.
-//   node test/activeyear.js [seeds...] [--pace N] [--casual]   (default seeds 1 2 3)
+//   node test/activeyear.js [seeds...] [--pace N] [--casual] [--idle] [--len short|quick]   (default seeds 1 2 3)
+// --idle: the player's ant handed back to the colony (players as NPCs);
+// --len: a SHORT (24 min) or QUICK (16 min) year instead of a FULL one.
 // --casual plays a first-timer instead: a second storage in spring, a
 // nursery in summer, the royal chamber widened in autumn -- nothing else.
 // It checks the year can be won: the colony survives and princesses fly;
@@ -18,6 +20,9 @@ const args = process.argv.slice(2);
 const pi = args.indexOf('--pace');
 const BITE = pi >= 0 ? Number(args[pi + 1]) : 24;     // ticks per bite (a player digs ~2-3 bites a second)
 const CASUAL = args.includes('--casual');
+const IDLE = args.includes('--idle');
+const li = args.indexOf('--len');
+const LEN = li >= 0 ? args[li + 1] : 'full';
 const seeds = args.filter((a, i) => /^\d+$/.test(a) && (pi < 0 || i !== pi + 1)).map(Number);
 if (!seeds.length) seeds.push(1, 2, 3);
 
@@ -35,8 +40,9 @@ function year(seed) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), ctx, { filename: f });
   }
   const run = code => vm.runInContext(code, ctx);
-  run(`newWorld(${seed}, 1)`);
+  run(`newWorld(${seed}, 1, 'solo', 1, '${LEN}')`);
   run(`globalThis.BITE = ${BITE}; globalThis.CASUAL = ${CASUAL};`);
+  if (IDLE) run('releasePlayer(0)');
   // the bot lives inside the sim's context (it reads and drives the same G)
   run(`
   globalThis.Bot = {
@@ -175,7 +181,7 @@ function year(seed) {
     const out = [];
     while (G.tick < ${end}) {
       const s = G.season, done = G.objectives.yearDone, food = G.colony.food;
-      Bot.step();
+      if (!${IDLE}) Bot.step();
       stepSim();
       G.events.length = 0;
       if (G.season !== s) {
@@ -203,7 +209,7 @@ const t0 = Date.now();
 const ends = [];
 for (const sd of seeds) {
   const r = year(sd);
-  console.log('seed ' + sd + ' (' + (CASUAL ? 'casual, ' : '') + 'bite every ' + BITE + ' ticks):');
+  console.log('seed ' + sd + ' (' + LEN + ', ' + (IDLE ? 'idle' : (CASUAL ? 'casual, ' : '') + 'bite every ' + BITE + ' ticks') + '):');
   for (const row of r.rows) console.log('  ' + JSON.stringify(row));
   console.log('  bot: ' + r.log.join(' | '));
   ends.push(r.rows[r.rows.length - 1]);
@@ -212,6 +218,6 @@ console.log('(' + ((Date.now() - t0) / 1000).toFixed(0) + ' s)');
 check('the active colony survives its year', ends.every(e => e.over && e.over !== 'r_queen' && e.over !== 'r_extinct'),
   ends.map(e => e.over).join());
 check('princesses fly in spring of year 2 (1+ star)', ends.every(e => e.stars >= 1), ends.map(e => e.stars).join());
-if (!CASUAL) check('an active player earns 2+ stars', ends.every(e => e.stars >= 2), ends.map(e => e.stars + '*/' + e.milestones + 'm').join(' '));
+if (!CASUAL && !IDLE) check('an active player earns 2+ stars', ends.every(e => e.stars >= 2), ends.map(e => e.stars + '*/' + e.milestones + 'm').join(' '));
 console.log(fails.length ? 'FAILED: ' + fails.join(', ') : 'ALL PASS');
 process.exitCode = fails.length ? 1 : 0;

@@ -131,8 +131,8 @@ function bot(port, name) {
   await A.screenshot({ path: 'test/shot-net-worlds.png' });
   await A.keyboard.press('Escape');
   await A.waitForTimeout(100);
-  for (const k of ['ArrowDown', 'Enter', 'ArrowDown', 'ArrowDown']) { await A.keyboard.press(k); await A.waitForTimeout(80); }
-  // (CREATE A MATCH: co-op, private)
+  for (const k of ['ArrowDown', 'Enter', 'ArrowDown', 'ArrowDown', 'ArrowDown']) { await A.keyboard.press(k); await A.waitForTimeout(80); }
+  // (CREATE A MATCH: co-op, a full year, private)
   await A.keyboard.press('Enter');   // CREATE
   await A.waitForFunction(() => G.state === 'lobby' && Net.code, null, { timeout: 5000 });
   const code = await A.evaluate(() => Net.code);

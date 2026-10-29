@@ -35,6 +35,7 @@ Object.assign(G, {
   flyers: [],         // princesses on their nuptial flight (animation only)
   flightCam: null,    // the camera watches the entrance during the flight { x, y, t }
   overSel: 0,         // end screen menu
+  overPage: 0,        // ...and its page online (0 the result, 1 the highlights)
   cam: { x: 0, y: 0 },
   stars: [],
   menuSel: 0,
@@ -52,7 +53,8 @@ Object.assign(G, {
   nameBuf: lsGet('maur_name') || '',   // the online name being typed
   codeBuf: '',        // the room code being typed
   browseSel: 0,       // the room browser's selected row
-  crSel: 0, crMode: 'coop', crPub: false,   // CREATE A MATCH: the row, the mode, public or not
+  crSel: 0, crMode: 'coop', crPub: false,   // CREATE A MATCH: the row, the mode, public or not,
+  crLen: 'full',                            // ...and the year's length (also a new solo world's)
   lobbySel: 0,        // the lobby's selected player (the host kicks)
   sidesWarnT: 0,      // versus lobby: the 'a player on each side' note flashes red until this frame
   rebornNote: null,   // a persistent world started over under us: { gen, reason } for JOIN THE COLONY
@@ -168,7 +170,10 @@ function localAnt() {
   return p && p.ant && p.ant.hp > 0 ? p.ant : null;
 }
 
+// (a colour '@n' is player n's: a personal milestone's toast is drawn in
+// its player's colour)
 function pushMsg(text, color) {
+  if (typeof color === 'string' && color[0] === '@') color = playerColor(Number(color.slice(1)) || 0);
   G.msgs.push({ text, color: color || '#e8e0c8', t: 300 });
   if (G.msgs.length > 4) G.msgs.shift();
 }
@@ -247,6 +252,7 @@ function drainEvents() {
         if (e.to === LOCAL) tutSaw(e.key);
       }
     } else if (e.t === 'sfx') {
+      if (e.to >= 0 && e.to !== LOCAL) continue;   // (another player's own sound)
       if (e.x == null || listenDist(e.x, e.y) < e.r) Sfx.play(e.k);
     } else if (e.t === 'fx') {
       if (e.k === 'flight') startFlightFx(e.x, e.y, e.n);
@@ -379,8 +385,9 @@ function enterWorld(slot) {
   TerrainView.build(f.x, f.y);      // the view around the start now, the rest frame by frame
 }
 
+// (a new solo world's year is as long as picked on the slot list)
 function startNewWorld(slot) {
-  newWorld((Math.random() * 0xFFFFFFFF) >>> 0, 1);
+  newWorld((Math.random() * 0xFFFFFFFF) >>> 0, 1, 'solo', 1, G.crLen);
   enterWorld(slot);
   Tut.start(true);
 }
@@ -602,8 +609,10 @@ function updateTakeover() {
 // crystal upgrades. Like the switch overlay it never pauses the world; a
 // purchase goes to the sim through the input struct (input.buy).
 // ---------------------------------------------------------------------------
-// (a persistent world has a third page: its history)
-function objPages() { return G.mode === 'world' ? 3 : 2; }
+// (a persistent world has a third page: its history; the last is always
+// the player's own personal milestones)
+function objPageIds() { return G.mode === 'world' ? ['obj', 'upg', 'hist', 'pm'] : ['obj', 'upg', 'pm']; }
+function objPages() { return objPageIds().length; }
 
 function updateObjScreen() {
   const os = G.objScreen;
@@ -645,14 +654,15 @@ function drawObjScreen() {
     ctx.fillRect(PX - 2, PY - 2, PW + 4, PH + 4);
   }
   bevelPanel(PX, PY, PW, PH);
-  const title = L(['ui_objectives', 'ui_upgrades', 'ui_history'][os.page]);
+  const pid = objPageIds()[os.page] || 'obj';
+  const title = L({ obj: 'ui_objectives', upg: 'ui_upgrades', hist: 'ui_history', pm: 'ui_personal' }[pid]);
   drawTextCS(ctx, title, VIEW_W / 2, PY + 6, '#ffa040');
   drawText(ctx, '<', 18, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
   drawText(ctx, '>', 297, PY + 6, (G.frame >> 4) % 2 ? '#ffe040' : '#a09070');
   drawText(ctx, (os.page + 1) + '/' + objPages(), 270, PY + 6, '#706050');
   const R = 300;   // right edge of the text column
 
-  if (os.page === 0) {
+  if (pid === 'obj') {
     const s = G.season;
     drawText(ctx, SEASON_ICON[s] + ' ' + L('ui_seasonYear', seasonName(s), G.year), 20, 26, SEASON_COLOR[s]);
     const left = SEASON_DAYS - G.seasonDay;
@@ -712,7 +722,9 @@ function drawObjScreen() {
       : G.mode === 'versus' ? L('ui_vsGoal', 2) : L('ui_yearGoal', flightYear);
     drawTextC(ctx, goal, VIEW_W / 2, 153, '#ff90e0');
     drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
-  } else if (os.page === 2) {
+  } else if (pid === 'pm') {
+    drawPersonalPage(R);
+  } else if (pid === 'hist') {
     // a persistent world's story: each year's flight (or the colony lost),
     // the newest first, with the legacy it banked
     drawTextC(ctx, L('ui_legacyN', G.legacy) + '   ' + L('ui_worldColony', G.gen), VIEW_W / 2, 26, '#ff90e0');
@@ -765,6 +777,32 @@ function drawObjScreen() {
   }
 }
 
+// the O screen's last page: the local player's own milestones (see
+// PERSONAL in game.js) -- each track's name, its tiers as stars, the next
+// tier's goal and how far along it is (a check mark once all three are in)
+function drawPersonalPage(R) {
+  const p = G.players[LOCAL];
+  const st = p && p.stats && p.stats.pm ? p.stats : newPlayerStats();
+  const total = PERSONAL.reduce((n, t) => n + t.tiers.length, 0);
+  drawText(ctx, '\x1B ' + L('ui_pmTotal', pmCount(st), total), 20, 26, '#ffe040');
+  const you = p && p.name ? p.name : L('ui_you');
+  drawText(ctx, you, R - textWidth(you), 26, playerColor(LOCAL));
+  let y = 39;
+  for (const t of PERSONAL) {
+    const tier = st.pm[t.id] || 0, full = tier >= t.tiers.length;
+    drawText(ctx, L('pm_' + t.id), 20, y, full ? '#80ff80' : tier ? '#e8e0c8' : '#a09070');
+    for (let k = 0; k < t.tiers.length; k++) drawText(ctx, '\x15', 96 + k * 6, y, k < tier ? '#ffd030' : '#3a2c1c');
+    const need = t.tiers[Math.min(tier, t.tiers.length - 1)];
+    drawText(ctx, Ln('pmd_' + t.id, need), 120, y, full ? '#80c080' : '#c8b890');
+    const pr = full ? '\x19' : Math.min(t.value(st), need) + '/' + need;
+    drawText(ctx, pr, R - textWidth(pr), y, full ? '#80ff80' : '#ffe080');
+    y += 11;
+  }
+  groove(18, y + 1, 284);
+  drawTextC(ctx, L('ui_pmNote'), VIEW_W / 2, y + 6, '#806e58');
+  drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
+}
+
 // a carved groove dividing a panel (dark line over a light one)
 function groove(x, y, w) {
   ctx.fillStyle = '#241a10';
@@ -777,7 +815,7 @@ function groove(x, y, w) {
 const FOOD_GOALS = ['food100', 'stockpile'];
 
 // a milestone's name, with its (yearly growing) target
-function objName(o) { return L('o_' + o.id, o.need); }
+function objName(o) { return Ln('o_' + o.id, o.need); }
 
 // ---------------------------------------------------------------------------
 // rendering
@@ -1283,6 +1321,11 @@ function drawNameTags(camx, camy, vw, vh) {
   }
   const me = localAnt();
   if (me) shown.sort((i, j) => dist2(G.players[i].ant.x, G.players[i].ant.y, me.x, me.y) - dist2(G.players[j].ant.x, G.players[j].ant.y, me.x, me.y));
+  // (the task, milestone and goal lines at the top stay readable: a tag
+  // that would cover them goes under its ant instead)
+  const top = G.showMap || G.objScreen ? [] : topLayout().rects;
+  // (...and so do the toasts under them)
+  if (G.msgs.length && !overlayOpen()) top.push({ x: 0, y: 23, w: VIEW_W, h: G.msgs.length * 10 });
   for (const i of shown) {
     const p = G.players[i];
     const a = p.ant;
@@ -1290,8 +1333,10 @@ function drawNameTags(camx, camy, vw, vh) {
     let ex = Math.round(a.x - camx), ey = Math.round(a.y - camy) - Math.round(a.hh) - 21;
     ex = Math.max((w >> 1) + 1, Math.min(vw - (w >> 1) - 1, ex));
     ey = Math.max(1, ey);
-    for (let n = 0; n < 2 && hit({ x: ex - (w >> 1), y: ey - 1, w, h: 10 }, keep); n++) ey -= 10;
-    if (ey < 1 || hit({ x: ex - (w >> 1), y: ey - 1, w, h: 10 }, keep)) continue;
+    const blocked = yy => hit({ x: ex - (w >> 1), y: yy - 1, w, h: 10 }, keep) || hit({ x: ex - (w >> 1), y: yy - 1, w, h: 10 }, top);
+    for (let n = 0; n < 2 && blocked(ey); n++) ey -= 10;
+    if (ey < 1 || blocked(ey)) ey = Math.round(a.y - camy) + Math.round(a.hh) + 4;
+    if (ey > vh - 10 || blocked(ey)) continue;
     const r = { x: ex - (w >> 1), y: ey - 1, w, h: 10 };
     ctx.fillStyle = 'rgba(16,8,4,0.7)';
     ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -1482,28 +1527,95 @@ function drawMatSwatch(x, y, mat) {
   }
 }
 
-function drawTaskAndMsgs() {
-  if (G.showMap || G.objScreen) return;   // (the map and the O panel cover the screen)
-  // current task, top left
-  let ty = 3;
+// ---------------------------------------------------------------------------
+// the top of the screen: the current task and the season's next milestone
+// down the left (two rows of 10 px), and the season's goal at a glance on
+// the right -- the season, its milestones done, the time left in it; from
+// autumn the princesses raised (grown or growing), in winter the time to
+// the nuptial flight. The goal strip takes the first row with room beside
+// the left-hand text, in its longest form that fits (it always fits in its
+// short form: the task line is the shorter one). The name tags keep clear
+// of all of it (topLayout().rects).
+// ---------------------------------------------------------------------------
+const TOP_ROWS = [3, 13];
+function topLayout() {
+  const out = { task: null, obj: null, strip: null, rects: [] };
+  if (!G.colony) return out;
+  const rows = [];
   const t = G.colony.tasks.find(t => !t.done) || G.colony.tasks.find(t => t.done && t.doneT > 0);
   if (t) {
     let str;
     if (t.done) str = L('m_complete', taskText(t));
     else if (t.type === 'dig') str = taskText(t) + ' ' + Math.floor(t.n) + '/' + t.need;
     else str = taskText(t) + ' ' + t.n + '/' + t.need;
-    const blink = t.done && (G.tick >> 3) % 2;
-    if (!blink) drawTextS(ctx, str, 4, ty, t.done ? '#ffe040' : '#a8e8a0');
-    ty += 10;
+    out.task = { str, y: TOP_ROWS[rows.length], color: t.done ? '#ffe040' : '#a8e8a0', blink: t.done && (G.tick >> 3) % 2 };
+    rows.push(out.task);
   }
-  // the season's next milestone, one line (O shows them all), with the key
-  // that opens the full list where it fits
+  // the season's next milestone, one line (O shows them all)
   // (versus: not while the deciding flight flies -- there's no next year)
-  const o = !(G.mode === 'versus' && (G.flight || G.lastFlightYear >= 2)) && G.objectives && G.objectives.list.find(o => !o.done);
+  const over = G.mode === 'versus' && (G.flight || G.lastFlightYear >= 2);
+  const o = !over && G.objectives && G.objectives.list.find(o => !o.done);
   if (o) {
-    let str = '\x06' + objName(o) + ' ' + objProgress(o);
-    if (4 + textWidth(str + ' (O)') < VIEW_W - 8) str += ' (O)';
-    drawTextS(ctx, str, 4, ty, '#ffd890');
+    out.obj = { str: '\x06' + objName(o) + ' ' + objProgress(o), y: TOP_ROWS[rows.length], color: '#ffd890' };
+    rows.push(out.obj);
+  }
+  if (!over && G.objectives) {
+    const forms = goalStrip();
+    const leftW = y => { const r = rows.find(r => r.y === y); return r ? 4 + textWidth(r.str) + 8 : 0; };
+    let pick = null;
+    for (const f of forms) {
+      for (const y of TOP_ROWS) if (!pick && leftW(y) + textWidth(f.map(s => s[0]).join('')) <= VIEW_W - 4) pick = { segs: f, y };
+    }
+    if (!pick) pick = { segs: forms[forms.length - 1], y: TOP_ROWS[0] };
+    const w = textWidth(pick.segs.map(s => s[0]).join(''));
+    out.strip = { segs: pick.segs, y: pick.y, x: VIEW_W - 4 - w, w };
+  }
+  // ...and the milestone's key that opens the full list, where it still fits
+  if (out.obj) {
+    const right = out.strip && out.strip.y === out.obj.y ? out.strip.x - 8 : VIEW_W - 8;
+    if (4 + textWidth(out.obj.str + ' (O)') < right) out.obj.str += ' (O)';
+  }
+  for (const r of [out.task, out.obj]) if (r) out.rects.push({ x: 0, y: r.y - 1, w: textWidth(r.str) + 6, h: 10 });
+  if (out.strip) out.rects.push({ x: out.strip.x - 2, y: out.strip.y - 1, w: out.strip.w + 6, h: 10 });
+  return out;
+}
+
+// the goal strip's forms, longest first: each a list of [text, colour]
+function goalStrip() {
+  const s = G.season, ob = G.objectives;
+  const done = ob.list.filter(o => o.done).length, all = ob.list.length;
+  const left = Math.max(0, (Math.floor(G.day / SEASON_DAYS) + 1) * SEASON_DAYS * DAY_LEN - G.tick);
+  const sec = Math.ceil(left / 60);
+  const clock = Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+  const sc = SEASON_COLOR[s];
+  const icon = [SEASON_ICON[s], sc], name = [SEASON_ICON[s] + seasonName(s) + ' ', sc];
+  const tally = [done + '/' + all + ' ', done >= all ? '#80ff80' : '#ffe080'];
+  const segs = [];
+  // (from autumn: the princesses for the flight, grown or growing)
+  if (s >= AUTUMN) {
+    const col = G.colony;
+    const n = G.ants.filter(a => a.caste === 'princess' && a.hp > 0 && a.colony === col).length +
+      G.brood.filter(b => b.royal && !b.dead && b.colony === col).length;
+    segs.push(['\x11' + n + ' ', n ? '#ff90e0' : '#a07090']);
+  }
+  const warn = sec <= 30 && (G.frame >> 4) % 2 ? '#ffffff' : '#c8b890';
+  const flight = s === WINTER;
+  const timeL = [flight ? L('hud_flightIn', clock) : '\x1A' + clock, flight ? '#ff90e0' : warn];
+  const timeS = ['\x1A' + clock, flight ? '#ff90e0' : warn];
+  return [
+    [name, tally].concat(segs, [timeL]),
+    [icon, [' ', sc], tally].concat(segs, [timeS]),
+  ];
+}
+
+function drawTaskAndMsgs() {
+  if (G.showMap || G.objScreen) return;   // (the map and the O panel cover the screen)
+  const top = topLayout();
+  if (top.task && !top.task.blink) drawTextS(ctx, top.task.str, 4, top.task.y, top.task.color);
+  if (top.obj) drawTextS(ctx, top.obj.str, 4, top.obj.y, top.obj.color);
+  if (top.strip) {
+    let x = top.strip.x;
+    for (const [str, color] of top.strip.segs) { drawTextS(ctx, str, x, top.strip.y, color); x += str.length * FONT_ADV; }
   }
 
   // overlays hide the toasts (they wait, and show after) and the alerts
@@ -1984,9 +2096,10 @@ function drawPlay() {
 }
 
 // the scoreboard, while Tab is held: each player's kills, deaths, food
-// stored, earth dug and built (see newPlayerStats), the most kills first --
-// versus a block a side
-const SCORE_COLS = [130, 176, 212, 254, 302];   // (right edges)
+// stored, earth dug and built (see newPlayerStats), and its personal
+// milestones reached (versus: only our own side's -- the other side's show
+// on the end screen), the most kills first -- versus a block a side
+const SCORE_COLS = [118, 160, 194, 234, 274, 302];   // (right edges)
 function drawScoreboard() {
   const vs = G.mode === 'versus';
   const rows = [];
@@ -1999,7 +2112,7 @@ function drawScoreboard() {
   const h = 30 + rows.length * 8 + (vs ? 22 : 0);
   bevelPanel(6, 4, 308, h);
   drawTextC(ctx, L('ui_scores'), VIEW_W / 2, 9, '#ffa040');
-  const heads = L('ui_scoreCols').split(',');
+  const heads = L('ui_scoreCols').split(',').concat(['\x1B']);
   heads.forEach((t, k) => drawText(ctx, t, SCORE_COLS[k] - textWidth(t), 20, '#a09070'));
   let y = 30;
   groups.forEach((g, c) => {
@@ -2011,7 +2124,8 @@ function drawScoreboard() {
       const st = r.p.stats, off = G.online && !r.p.online;
       if (r.i === LOCAL) drawText(ctx, '\x06', 8, y, '#ffe040');
       drawText(ctx, r.name, 16, y, off ? '#706050' : playerColor(r.i));
-      [st.kills, st.deaths, Math.round(st.food), st.dug, st.built].forEach((v, k) => {
+      const pm = !G.online || r.p.pmKnown ? pmCount(st) : '-';
+      [st.kills, st.deaths, Math.round(st.food), st.dug, st.built, pm].forEach((v, k) => {
         const s = String(v);
         drawText(ctx, s, SCORE_COLS[k] - textWidth(s), y, off ? '#706050' : r.i === LOCAL ? '#ffe040' : '#c8b890');
       });
@@ -2148,13 +2262,21 @@ function drawSlots() {
     }
     drawText(ctx, L('ui_world', i + 1), 48, sy, sel ? '#ffe040' : '#c8b890');
     if (info) {
+      // (a shorter year says so)
+      if (info.len !== 'full') drawText(ctx, lenName(info.len), 272 - textWidth(lenName(info.len)), sy, '#80e0ff');
       drawText(ctx, L('w_day') + ' ' + (info.day + 1) + '  \x02' + info.ants + '  \x03' + info.food + '  ' + L('w_score') + ' ' + info.score,
         48, sy + 10, '#a09070');
       if (G.eraseArm === i) drawText(ctx, L('ui_eraseArm'), 180, sy, '#ff5040');
     } else {
       drawText(ctx, L('ui_empty'), 48, sy + 10, '#706050');
+      // (an empty slot picks the new year's length)
+      if (sel) {
+        const ls = '< ' + L('ui_lenTag', lenName(G.crLen), lenMinutes(G.crLen)) + ' >';
+        drawText(ctx, ls, 272 - textWidth(ls), sy, G.crLen === 'full' ? '#c8b890' : '#80e0ff');
+      }
     }
   }
+  if (!slotInfo(G.slotSel + 1)) drawTextC(ctx, L('ui_slotLenKey'), VIEW_W / 2, 152, '#806e58');
   drawTextC(ctx, L('ui_slotKeys'), VIEW_W / 2, 164, '#b0a080');
   drawTextC(ctx, L('ui_slotKeys2'), VIEW_W / 2, 176, '#706050');
 }
@@ -2163,6 +2285,9 @@ function updateSlots() {
   if (tookPress('ArrowUp') || tookPress('KeyW')) { G.slotSel = (G.slotSel + 2) % 3; G.eraseArm = -1; Sfx.play('menu'); }
   if (tookPress('ArrowDown') || tookPress('KeyS')) { G.slotSel = (G.slotSel + 1) % 3; G.eraseArm = -1; Sfx.play('menu'); }
   if (tookPress('Escape')) { G.state = 'title'; return; }
+  // (an empty slot: left/right picks the new year's length)
+  const left = tookPress('ArrowLeft') || tookPress('KeyA');
+  if ((left || tookPress('ArrowRight') || tookPress('KeyD')) && !slotInfo(G.slotSel + 1)) { G.crLen = cycleLen(G.crLen, left ? -1 : 1); Sfx.play('menu'); }
   if (tookPress('KeyX')) {
     if (G.eraseArm === G.slotSel && slotInfo(G.slotSel + 1)) {
       deleteWorld(G.slotSel + 1);
@@ -2382,10 +2507,18 @@ function drawStars(n, y) {
   }
 }
 
+// the end screen: the year's result (a solo world's, or the match's for
+// everyone online). Online it has a second page, the HIGHLIGHTS (Left/Right):
+// the awards, every player's MVP score and personal milestones this match
+// (versus: both sides -- the enemy's milestones are shown only here), and
+// the local player's own. The result page names the MVP and what the
+// local player won. G.overPage: the page.
 function drawGameOver() {
   ctx.fillStyle = '#0c0805';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   const s = G.gameOverStats;
+  const online = G.online && s && s.hl;
+  if (online && G.overPage === 1) { drawHighlights(s); return; }
   if (s && s.versus) { drawVersusOver(s); return; }
   if (s && s.canContinue) {
     // the year's end: a nuptial flight (or none)
@@ -2404,14 +2537,19 @@ function drawGameOver() {
       [L('ui_finalScore', s.score), '#ffe040'],
       [L('ui_foodGathered', Math.floor(s.stats.foodGathered)), '#a09070'],
     ];
-    let y = 78;
-    for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 11; }
+    // (solo: the player's personal milestones, all of them so far)
+    if (!G.online) lines.push(pmTotalLine());
+    let y = 76;
+    for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 10; }
     const items = G.online ? [L('ui_toTitle')] : [L('ui_continue'), L('ui_toTitle')];
     // (online the match is over for everyone: no next year)
-    if (G.online) drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 152, '#a09070');
+    if (online) {
+      drawOverBrief(s, 136);
+      drawTextC(ctx, L('ui_matchOverHl'), VIEW_W / 2, 160, '#a09070');
+    }
     for (let i = 0; i < items.length; i++) {
       const sel = i === G.overSel;
-      const iy = (G.online ? 166 : 152) + i * 12;
+      const iy = (G.online ? 172 : 152) + i * 12;
       if (sel) drawText(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, iy, '#ffe040');
       drawTextCS(ctx, items[i], VIEW_W / 2, iy, sel ? '#ffe040' : '#c8b890');
     }
@@ -2430,10 +2568,14 @@ function drawGameOver() {
       [L('ui_antsLost', s.stats.antsDied), '#a09070'],
       [L('ui_predSlain', s.stats.predatorsSlain), '#a09070'],
     ];
-    let y = 64;
-    for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += 12; }
+    if (!G.online) lines.push(pmTotalLine());
+    // (online: closer together, the MVP and our awards under them)
+    const dy = online ? 10 : 12;
+    let y = online ? 60 : 64;
+    for (const [line, color] of lines) { drawTextC(ctx, line, VIEW_W / 2, y, color); y += dy; }
+    if (online) drawOverBrief(s, 142);
   }
-  if (G.online) drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 164, '#a09070');
+  if (G.online) drawTextC(ctx, L(online ? 'ui_matchOverHl' : 'ui_matchOver'), VIEW_W / 2, 164, '#a09070');
   if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
 }
 
@@ -2467,13 +2609,121 @@ function drawVersusOver(s) {
     for (let i = 0; i < 2; i++) if (sides[i]) drawTextC(ctx, fmt(sides[i]), X[i], y, i === s.winner ? '#ffe040' : '#c8b890');
     y += 12;
   }
-  drawTextC(ctx, L('ui_matchOver'), VIEW_W / 2, 164, '#a09070');
+  if (s.hl) drawOverBrief(s, 142);
+  drawTextC(ctx, L(s.hl ? 'ui_matchOverHl' : 'ui_matchOver'), VIEW_W / 2, 164, '#a09070');
   if ((G.frame >> 4) % 2 === 0) drawTextC(ctx, L('ui_pressEnter'), VIEW_W / 2, 178, '#ffe040');
+}
+
+// the local player's personal milestones, all of them so far (solo)
+function pmTotalLine() {
+  const p = G.players[LOCAL];
+  const total = PERSONAL.reduce((n, t) => n + t.tiers.length, 0);
+  return ['\x1B ' + L('ui_pmTotalLine', p && p.stats ? pmCount(p.stats) : 0, total), '#ffd030'];
+}
+
+// the awards (see matchHighlights in game.js): a label, and the winning
+// value as shown
+function awardLabel(k) { return L('aw_' + k); }
+function awardValue(a) { return Ln('awv_' + a.k, a.v); }
+function hlRow(s, i) { return s.hl ? s.hl.players.find(r => r.i === i) || null : null; }
+function hlName(s, i) {
+  const r = hlRow(s, i);
+  return r && r.n ? r.n : G.online ? playerName(i) : L('ui_you');
+}
+// a list of labels, cut to fit `w` px with a "+n" for the rest
+function fitList(items, w, sep) {
+  sep = sep || ', ';
+  for (let n = items.length; n > 0; n--) {
+    const s = items.slice(0, n).join(sep) + (n < items.length ? ' +' + (items.length - n) : '');
+    if (textWidth(s) <= w) return s;
+  }
+  return items.length ? '+' + items.length : '';
+}
+
+// under the result: the MVP (in its colour), and what the local player won
+// -- or, with no award, its personal milestones this match
+function drawOverBrief(s, y) {
+  const hl = s.hl;
+  const mvp = hl.awards.find(a => a.k === 'mvp');
+  if (mvp) {
+    const head = '\x1B ' + awardLabel('mvp') + ': ', nm = hlName(s, mvp.i);
+    const x = Math.round(VIEW_W / 2 - textWidth(head + nm) / 2);
+    drawTextS(ctx, head, x, y, '#ffe040');
+    drawTextS(ctx, nm, x + head.length * FONT_ADV, y, playerColor(mvp.i));
+  }
+  const mine = hl.awards.filter(a => a.i === LOCAL && a.k !== 'mvp').map(a => awardLabel(a.k));
+  const r = hlRow(s, LOCAL);
+  if (mine.length) {
+    const head = L('ui_youWon', '');
+    drawTextC(ctx, head + fitList(mine, 300 - textWidth(head)), VIEW_W / 2, y + 10, '#80ff80');
+  } else if (r) drawTextC(ctx, Ln('ui_yourPmMatch', r.pmNew.length), VIEW_W / 2, y + 10, '#c8b890');
+}
+
+// the HIGHLIGHTS page: the awards (who, and how much), then every player
+// in two columns (co-op: half each; versus: a side each; best first,
+// eight at most) with its MVP score and the personal milestones it earned
+// this match, then the local player's own milestones by name
+function drawHighlights(s) {
+  const hl = s.hl;
+  drawTextCS(ctx, L('ui_highlights'), VIEW_W / 2, 6, '#ffa040', 2);
+  let y = 26;
+  for (const a of hl.awards) {
+    drawText(ctx, awardLabel(a.k), 24, y, a.k === 'mvp' ? '#ffe040' : '#c8b890');
+    if (a.i === LOCAL) drawText(ctx, '\x06', 108, y, '#ffe040');
+    // (versus: the winner's side, as a chip -- the colours repeat across sides)
+    const r = s.versus && hlRow(s, a.i);
+    if (r) { ctx.fillStyle = r.c ? '#ff7060' : '#d8d4e4'; ctx.fillRect(117, y + 2, 3, 3); }
+    drawText(ctx, hlName(s, a.i), 124, y, playerColor(a.i));
+    const v = awardValue(a);
+    drawText(ctx, v, 296 - textWidth(v), y, '#a09070');
+    y += 9;
+  }
+  groove(12, 82, 296);
+  const vs = !!s.versus;
+  const best = list => list.slice().sort((a, b) => b.mvp - a.mvp || a.i - b.i);
+  // (co-op: best first, more than four split over both columns)
+  const all = best(hl.players), half = all.length > 4 ? Math.ceil(all.length / 2) : all.length;
+  const cols = vs ? [0, 1].map(c => best(hl.players.filter(r => r.c === c))) : [all.slice(0, half), all.slice(half)];
+  const X = [12, 166];
+  for (let c = 0; c < 2; c++) {
+    if (!cols[c].length && !vs) continue;
+    const x0 = X[c];
+    if (vs) drawText(ctx, L(c ? 'ui_red' : 'ui_black'), x0 + 7, 87, c ? '#ff7060' : '#d8d4e4');
+    else drawText(ctx, L('ui_hlPlayer'), x0 + 7, 87, '#806e58');
+    const mh = L('ui_hlMvp');
+    drawText(ctx, mh, x0 + 118 - textWidth(mh), 87, '#806e58');
+    drawText(ctx, '\x1B', x0 + 137, 87, '#806e58');
+    cols[c].slice(0, 8).forEach((r, k) => {
+      const yy = 96 + k * 8, me = r.i === LOCAL;
+      if (me) drawText(ctx, '\x06', x0, yy, '#ffe040');
+      drawText(ctx, String(r.n || L('ui_you')).slice(0, 12), x0 + 7, yy, playerColor(r.i));
+      const m = String(r.mvp);
+      drawText(ctx, m, x0 + 118 - textWidth(m), yy, me ? '#ffe040' : '#c8b890');
+      const p = String(r.pmNew.length);
+      drawText(ctx, p, x0 + 142 - textWidth(p), yy, r.pmNew.length ? '#ffd030' : '#706050');
+    });
+  }
+  groove(12, 162, 296);
+  // our own personal milestones this match: each track's best new tier
+  const r = hlRow(s, LOCAL);
+  if (r) {
+    const top = {};
+    for (const [id, tier] of r.pmNew) top[id] = Math.max(top[id] || 0, tier);
+    const names = Object.keys(top).map(id => L('pm_' + id) + '\x15'.repeat(top[id]));
+    const str = names.length ? '\x1B ' + fitList(names, 290, ' ') : L('ui_noPmMatch');
+    drawTextC(ctx, str, VIEW_W / 2, 167, names.length ? '#ffd030' : '#806e58');
+  }
+  drawTextC(ctx, L('ui_hlKeys'), VIEW_W / 2, 181, (G.frame >> 4) % 2 ? '#ffe040' : '#c8b890');
 }
 
 function updateGameOver() {
   const s = G.gameOverStats;
   if (G.online) {
+    // left/right: the result or the highlights
+    if (s && s.hl && (tookPress('ArrowLeft') || tookPress('KeyA') || tookPress('ArrowRight') || tookPress('KeyD'))) {
+      G.overPage = G.overPage ? 0 : 1;
+      Sfx.play('menu');
+    }
     // the match is over for everyone: back to the title
     if (tookPress('Enter') || tookPress('Space') || tookPress('Escape')) {
       Sfx.play('select');
@@ -2680,6 +2930,8 @@ function drawNetOpen() {
     browseRow(y, sel);
     drawText(ctx, m.code, 32, y, sel ? '#ffe040' : '#e8e0c8');
     drawText(ctx, L(m.mode === 'versus' ? 'ui_modeVersus' : 'ui_modeCoop'), 80, y, m.mode === 'versus' ? '#ff9080' : '#a8e8a0');
+    // (the year's length: how long a joiner signs up for)
+    drawText(ctx, L('ui_lenTag', lenName(m.len), lenMinutes(m.len)), 146, y, m.len && m.len !== 'full' ? '#80e0ff' : '#a09070');
     const pl = m.players + '/' + m.max;
     drawText(ctx, pl, 288 - textWidth(pl), y, '#80d0ff');
     drawText(ctx, L('ui_hostIs', m.host), 32, y + 9, '#a09070');
@@ -2698,38 +2950,50 @@ function updateNetOpen() {
   Sfx.play('select');
 }
 
-// ---- CREATE A MATCH: co-op or versus, public or private -------------------------
+// ---- CREATE A MATCH: co-op or versus, the year's length, public or private ------
+// a year's length as shown: its name, and its minutes
+function lenName(k) { return L('len_' + (YEAR_LENS[k] ? k : 'full')); }
+function lenMinutes(k) { return Math.round((YEAR_LENS[k] || DAY_FULL) * YEAR_DAYS / 3600); }
+// the next (or, d = -1, the previous) year's length
+function cycleLen(k, d) {
+  const i = Math.max(0, YEAR_LEN_IDS.indexOf(k));
+  return YEAR_LEN_IDS[(i + YEAR_LEN_IDS.length + (d < 0 ? -1 : 1)) % YEAR_LEN_IDS.length];
+}
 function drawNetCreate() {
   netBackdrop(L('ui_create'));
   const rows = [
     L('ui_crMode', L(G.crMode === 'versus' ? 'ui_modeVersus' : 'ui_modeCoop')),
+    L('ui_crLen', lenName(G.crLen)),
     L('ui_crVis', L(G.crPub ? 'ui_public' : 'ui_private')),
     L('ui_crGo'),
   ];
   for (let i = 0; i < rows.length; i++) {
-    const sel = i === G.crSel, y = 56 + i * 16;
-    const lr = i < 2 && sel ? '< ' + rows[i] + ' >' : rows[i];
+    const sel = i === G.crSel, y = 50 + i * 16;
+    const lr = i < 3 && sel ? '< ' + rows[i] + ' >' : rows[i];
     if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(lr) / 2 - 12, y, '#ffe040');
     drawTextCS(ctx, lr, VIEW_W / 2, y, sel ? '#ffe040' : '#c8b890');
   }
   drawTextC(ctx, L(G.crMode === 'versus' ? 'ui_versusNote' : 'ui_coopNote'), VIEW_W / 2, 118, '#a09070');
-  drawTextC(ctx, L(G.crPub ? 'ui_pubNote' : 'ui_privNote'), VIEW_W / 2, 130, '#a09070');
-  drawNetErr(152);
+  drawTextC(ctx, L('ui_lenNote', lenMinutes(G.crLen)), VIEW_W / 2, 128, '#a09070');
+  drawTextC(ctx, L(G.crPub ? 'ui_pubNote' : 'ui_privNote'), VIEW_W / 2, 138, '#a09070');
+  drawNetErr(154);
   drawTextC(ctx, L('ui_crKeys'), VIEW_W / 2, 178, '#a09070');
 }
 
 function updateNetCreate() {
   if (tookPress('Escape')) { G.state = 'netmenu'; G.menuSel = 1; Sfx.play('menu'); return; }
-  if (tookPress('ArrowUp') || tookPress('KeyW')) { G.crSel = (G.crSel + 2) % 3; Sfx.play('menu'); }
-  if (tookPress('ArrowDown') || tookPress('KeyS')) { G.crSel = (G.crSel + 1) % 3; Sfx.play('menu'); }
-  const lr = tookPress('ArrowLeft') || tookPress('KeyA') || tookPress('ArrowRight') || tookPress('KeyD');
+  if (tookPress('ArrowUp') || tookPress('KeyW')) { G.crSel = (G.crSel + 3) % 4; Sfx.play('menu'); }
+  if (tookPress('ArrowDown') || tookPress('KeyS')) { G.crSel = (G.crSel + 1) % 4; Sfx.play('menu'); }
+  const left = tookPress('ArrowLeft') || tookPress('KeyA');
+  const lr = left || tookPress('ArrowRight') || tookPress('KeyD');
   const go = tookPress('Enter') || tookPress('Space');
   if ((lr || go) && G.crSel === 0) { G.crMode = G.crMode === 'versus' ? 'coop' : 'versus'; Sfx.play('menu'); }
-  else if ((lr || go) && G.crSel === 1) { G.crPub = !G.crPub; Sfx.play('menu'); }
-  else if (go && G.crSel === 2) {
+  else if ((lr || go) && G.crSel === 1) { G.crLen = cycleLen(G.crLen, left ? -1 : 1); Sfx.play('menu'); }
+  else if ((lr || go) && G.crSel === 2) { G.crPub = !G.crPub; Sfx.play('menu'); }
+  else if (go && G.crSel === 3) {
     Net.err = null;
     Net.name = G.nameBuf;
-    Net.start({ t: 'create', mode: G.crMode, pub: G.crPub });
+    Net.start({ t: 'create', mode: G.crMode, pub: G.crPub, len: G.crLen });
     G.state = 'netwait';
     Sfx.play('select');
   }
@@ -2811,7 +3075,8 @@ function lobbyPlaces() {
 function drawLobby() {
   if (G.help) { drawHelp(); return; }
   const vs = Net.mode === 'versus';
-  netBackdrop(L(vs ? 'ui_modeVersus' : 'ui_modeCoop'));
+  // (the title: the mode and the year's length)
+  netBackdrop(L('ui_lobbyTitle', L(vs ? 'ui_modeVersus' : 'ui_modeCoop'), lenName(Net.len)));
   const lay = lobbyLayout(), rows = lay.rows;
   // (compact: the room code at half size, no line under it)
   drawTextC(ctx, L('ui_roomCode'), VIEW_W / 2, lay.compact ? 30 : 32, '#b09060');
@@ -3009,7 +3274,7 @@ function netOnOver(over) {
   G.online = true;
   G.over = over;
   G.gameOverStats = over;
-  G.overSel = 0;
+  G.overSel = 0; G.overPage = 0;
   G.takeover = null; G.objScreen = null; G.showMap = false;
   G.state = 'gameover';
   const won = over && (over.versus ? over.winner === (Net.faction === 'red' ? 1 : 0) : over.win);
