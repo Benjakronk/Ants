@@ -228,6 +228,24 @@ function moundOf(e) {
 }
 function onMound(e) { return !!moundOf(e); }
 
+// the far rim of the hollow the surface line spans at x (the shaft's mouth,
+// a pit, a crater the players dug out over the nest), going `side`: the
+// first column out that way with ground right under the surface line, plus
+// a step onto it. (Digging never sinks the line more than SURF_SINK, so over
+// a hollow it hangs in mid-air -- and an ant that walks out to "the surface"
+// there just falls back in.) null when there's no rim within reach.
+const RIM_REACH = 160;
+function rimX(x, side) {
+  for (let i = 0, cx = Math.round(x); i < RIM_REACH; i++, cx += side) {
+    if (cx < 10 || cx >= WORLD_W - 10) return null;
+    const s = T.surf[cx];
+    if (T.solid(cx, s) || T.solid(cx, s + 1) || T.solid(cx, s + 2)) {
+      return Math.max(10, Math.min(WORLD_W - 10, cx + side * 6));
+    }
+  }
+  return null;
+}
+
 // the colony whose nest this (underground) thing lies in, if any
 function buriedInNest(e) {
   if (!nestDeep(e)) return null;
@@ -395,6 +413,15 @@ class Ant {
         this.freezeT = 0;
       } else if (this.state !== 'idle' && ++this.freezeT > 720) {
         this.freezeT = 0;
+        // whatever it was after (a seed past a trunk, an aphid in a branch
+        // fork) is out of its reach: shunned like a goto failure, or the next
+        // forager by -- or this one, set loose -- walks straight back into
+        // the same fork (the canopy's freezes were mostly the same few items)
+        const tg = this.target;
+        if (tg && (this.state === 'collect' || this.state === 'milk') && !tg.carried) {
+          tg.shunT = G.tick + 1800;
+          if (this.state === 'collect' && (tg.shunN = (tg.shunN || 0) + 1) >= 3) tg.dead = true;
+        }
         this.climbing = false; this.ceiling = false; this.crotchT = 0;
         this.state = 'idle'; this.stateT = 60; this.target = null; this.nav = null;
         T.dig(this.x, this.y + 4, Math.max(this.hw, this.hh) + 2, undefined, this.own, SPARE_THATCH);
@@ -571,8 +598,12 @@ class Ant {
     }
 
     // ceiling traverse: gripping a roof with somewhere sideways to go --
-    // crawl on inverted (under branches and overhangs) instead of dropping off
-    if (!this.climbing && !this.ceiling && Math.abs(dx) > 3 &&
+    // crawl on inverted (under branches and overhangs) instead of dropping off.
+    // Not with the target below: then letting go is the way down (ants
+    // under a thatched dome's roof, or a packed shelf over the forest floor,
+    // crawled it for good toward food or a waypoint on the ground beneath,
+    // round and round the crotch escape)
+    if (!this.climbing && !this.ceiling && Math.abs(dx) > 3 && dy < 4 &&
         (wasCeil || hitCeil) && ceilAbove(this, 4)) {
       this.ceiling = true;
       if (!this.blocked) this.blockedT = Math.max(0, this.blockedT - 2); // gripping is progress
@@ -588,8 +619,17 @@ class Ant {
     // stuck: chew through, climb over, or give up
     if (this.blockedT > 30) {
       let acted = false;
+      // grass blades against the body (often left hanging in mid-air when
+      // the ground under them was dug away) are no wall: brush them aside,
+      // digging allowed or not -- an ant wedged under a floating tuft
+      // climbed into it for good, unable to bite and too snagged to fall
+      if (this.digCd <= 0 && this.brushGrass()) {
+        this.digCd = 4;
+        this.blockedT = 12;
+        acted = true;
+      }
       // raycast toward the target for the first diggable spot
-      if (canDig && this.digCd <= 0) {
+      if (!acted && canDig && this.digCd <= 0) {
         const len = Math.hypot(dx, dy) || 1;
         const ux = dx / len, uy = dy / len;
         let hit = null;
@@ -735,6 +775,21 @@ class Ant {
     if (srcKey === key) pts = destPath.slice(srcIdx);
     else pts = P[srcKey].slice(0, srcIdx + 1).reverse().concat(destPath);
     this.nav = { key, col, pts, i: 0, t: 0, best: Infinity };
+  }
+
+  // bite away the grass pixels touching the body (a box a pixel wider than
+  // it at the sides and overhead -- not the turf it stands on); returns how
+  // many went
+  brushGrass() {
+    const x0 = Math.floor(this.x - this.hw - 1), x1 = Math.ceil(this.x + this.hw + 1);
+    const y0 = Math.floor(this.y - this.hh - 1), y1 = Math.floor(this.y + this.hh);
+    let n = 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (T.get(x, y) === M_GRASS) { T.dig(x, y, 0.5, 0); n++; }
+      }
+    }
+    return n;
   }
 
   // a long walk over the surface toward x: from waypoint to waypoint along
@@ -1151,14 +1206,25 @@ class Ant {
         let d;
         if (outOf) {
           // up the nest's tunnels; near the top, out beside the mouth on the
-          // food's side, not over the hole
-          const e = outOf.entrance, side = Math.sign(it.x - e.x) || 1;
-          if (this.y < e.y + 24 && Math.abs(this.x - e.x) < 18) {
-            const tx = Math.round(Math.max(10, Math.min(WORLD_W - 10, e.x + side * 15)));
-            this.goto(tx, T.surf[tx] - 4, true);
-            if (Math.abs(this.x - tx) < 4) this.outT = 0;
-          } else {
+          // food's side, not over the hole. Down in an open pit or a crater
+          // on the mound (under the sky, out of the narrow shaft) it climbs
+          // straight out over the rim on the food's side instead: sent back
+          // to the mouth, which hangs in the crater's air, it fell back in,
+          // and round again -- whole colonies paced a crater for good
+          const e = outOf.entrance, top = this.y < e.y + 24 && Math.abs(this.x - e.x) < 18;
+          const down = !top && (roofed(this) ||
+            (Math.abs(this.x - e.x) < 14 && wallNear(this, 1, 6) && wallNear(this, -1, 6)));
+          if (down) {
             this.navTo('entrance', outOf);
+          } else {
+            const from = top ? e.x : this.x;
+            const side = Math.sign(it.x - from) || 1;
+            let tx = rimX(from, side);
+            if (tx === null || (top && (tx - e.x) * side < 15)) {
+              tx = Math.round(Math.max(10, Math.min(WORLD_W - 10, from + side * 15)));
+            }
+            this.goto(tx, T.surf[tx] - 4, top);
+            if (Math.abs(this.x - tx) < 4) this.outT = 0;
           }
           this.gotoFail = false;
           d = Math.hypot(it.x - this.x, it.y - this.y);
@@ -1492,9 +1558,14 @@ class Ant {
             this.navTo(byQueen ? 'queen' : 'nursery');
           }
         } else {
-          // hang around the nursery
+          // hang around the nursery (standing about on purpose: not the
+          // freeze detector's business -- it dug a nurse's spot out from
+          // under her every 12 s, sinking the nursery floor 30 px a day)
           if (Math.abs(this.x - col.nursery.x) > 20) this.navTo('nursery');
-          else if (Math.random() < 0.01 * this.dt) this.vx = (Math.random() < 0.5 ? -1 : 1) * 0.3 / this.dt;
+          else {
+            this.freezeT = 0;
+            if (Math.random() < 0.01 * this.dt) this.vx = (Math.random() < 0.5 ? -1 : 1) * 0.3 / this.dt;
+          }
         }
         if (this.stateT <= 0) { this.state = 'idle'; this.stateT = 150; }
         break;
