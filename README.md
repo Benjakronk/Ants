@@ -395,6 +395,26 @@ Each summer a **fruit falls between the nests** (a big red windfall in the
 forest and on the `M` map, labelled *contested fruit* when you are near it): both colonies'
 foragers race for its pieces. Deliver 8 of them for the summer milestone.
 
+**The golden seed.** Halfway through spring, summer and autumn (you are
+told a little before) a golden seed falls in the forest *beyond* the red
+nest -- past it, on the far side from home. Carry it (`E`) to your storage:
++3 crystals, +300 points, and each one brought home counts as a milestone
+for the flight's second star (the goal strip and the `O` screen count them,
+x/3). It is heavy (its carrier moves at 70%), the red soldiers near their
+nest go for its carrier, a carrier that dies drops it where it fell, and
+workers fetch a dropped seed lying near their own nest -- ours bring it
+home, red ones destroy it. It lasts a season, then crumbles; none falls in
+winter. In versus each side has its own, beyond the other's nest: bring
+yours home and guard theirs (its carrier shows on your map; carried into
+your storage it is destroyed). Seeds break a versus tie after the
+princesses (stars, princesses, seeds, ants).
+
+**Crystals in the middle.** A new world's crystals lie mostly in a
+contested field between the two nests, shallower than the deep veins
+(reachable by midsummer); the far veins are fewer. **Map fog (versus):** a
+rival player shows on your map (and is sent to you at all) only while one
+of your side's players or ants can see it -- except a seed's carrier.
+
 The bonus: fight into the red nest and **kill the red queen**. Don't go
 alone: as a soldier, press `Q` and the soldiers
 near you (up to eight) fall in behind you for 45 seconds, following you
@@ -592,6 +612,12 @@ node test/matchprobe.js   # the year's length (FULL/SHORT/QUICK days and
                           # page, the scoreboard, the end screens after a
                           # co-op match of 8 and versus of 16 (EN + NO), as
                           # screenshots (--no-browser skips the page)
+node test/relicprobe.js   # match round 2: the crystal field (genWorld as
+                          # HEAD's), the golden seed (timing FULL/SHORT,
+                          # reward, flight star, versus tie-break, denial,
+                          # carrier death, NPC soldiers and fetchers,
+                          # crumbling, v11 saves), versus map fog on the
+                          # server, screenshots (--no-browser skips them)
 node test/netprobe.js     # online (needs `npm install` in server/): the
                           # server as a child process, two browser pages
                           # (one with 80 ms lag) and raw clients: the online

@@ -436,7 +436,15 @@ class Room {
   sendSnapshots() {
     const t0 = process.hrtime.bigint();
     const sim = this.sim;
-    const frame = S.buildFrame(sim, this.mode === 'versus');
+    // (versus: each side's points of view, for the map's fog -- see snapshot.js)
+    const vs = this.mode === 'versus', eyes = [[], []];
+    if (vs) for (const s of this.slots) {
+      const cl = s && s.client;
+      if (!cl || !cl.ready) continue;
+      this.updateFocus(cl);
+      if (eyes[cl.colIdx || 0]) eyes[cl.colIdx || 0].push(cl.focus);
+    }
+    const frame = S.buildFrame(sim, vs, eyes);
     frame.view.p = S.playersView(sim, this.slots);
     // (the scoreboard: once a second is plenty, and unchanged it isn't resent)
     // (a world started over has its clock back at the start: refresh then too)
@@ -513,7 +521,9 @@ class Room {
     if (ok) {
       sim.G.mode = 'world';
       this.seed = sim.G.seed;
-      this.base = new Uint8Array(sim.genWorld(this.seed).m);
+      // (the diff's base: what a new world of this seed would be -- an
+      // older save without the crystal field just sends a few more pixels)
+      this.base = new Uint8Array(sim.genNewWorld(this.seed).m);
     } else {
       this.seed = randSeed();
       sim.newWorld(this.seed, 0, 'world');

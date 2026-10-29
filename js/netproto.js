@@ -4,19 +4,23 @@
 'use strict';
 
 const NetProto = (() => {
-  // bump when client and server stop understanding each other
+  // bump when client and server stop understanding each other (the golden
+  // seed didn't need it: an older page draws its item as a seed, ignores
+  // the r0/r1 keys, and the crystal field only makes its terrain base
+  // differ, which the hash check answers with the full terrain)
   const VERSION = 1;
 
   // snapshots name castes, bugs and items by their index in these lists
   const CASTES = ['worker', 'soldier', 'nurse', 'queen', 'princess'];
   const BUGS = ['aphid', 'pillbug', 'worm', 'spider', 'centipede', 'wasp', 'beetle'];
-  const ITEMS = ['seed', 'honeydew', 'leaf', 'corpse', 'bigcorpse', 'morsel', 'fungus', 'berry', 'crystal'];
+  const ITEMS = ['seed', 'honeydew', 'leaf', 'corpse', 'bigcorpse', 'morsel', 'fungus', 'berry', 'crystal', 'relic'];
 
   // entity records (arrays of integers; positions are in half pixels):
   //   ant   [id, colony, caste, x2, y2, bits, hp, carryId, playerIdx]
   //   brood [id, colony, x2, y2, bits]
   //   bug   [id, kind, x2, y2, bits, hp, trail x2,y2 ...]
-  //   item  [id, kind, x2, y2, carrierId, site]
+  //   item  [id, kind, x2, y2, carrierId, site (1: the contested fruit's;
+  //         2 + colony: that colony's golden seed)]
   const A_DIR = 1, A_CLIMB = 2, A_CEIL = 4, A_FLASH = 8, A_BITE = 16, A_RAID = 32, A_STEAL = 64, A_HIT = 128;
   const B_LARVA = 1, B_ROYAL = 2, B_HUNGRY = 4, B_CARRIED = 8;
   const U_DIR = 1, U_FLASH = 2, U_CURL = 4, U_FLEE = 8, U_HIT = 16, U_CLIMB = 32;

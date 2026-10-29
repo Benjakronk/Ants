@@ -156,7 +156,7 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   await sleep(4200);
   const files = fs.readdirSync(DATA).sort();
   let saveOk = false, bakOk = false;
-  try { saveOk = readSave().v === 10 && readSave().mode === 'world'; } catch (e) { /* bad */ }
+  try { saveOk = readSave().v >= 10 && readSave().mode === 'world'; } catch (e) { /* bad */ }
   try { bakOk = !!JSON.parse(fs.readFileSync(FILE + '.bak', 'utf8')).terrain; } catch (e) { /* bad */ }
   check('a running world autosaves (AUTOSAVE_MS), a whole v10 save with a .bak and no temp file left',
     /saved \(autosave/.test(srvLog) && fs.statSync(FILE).mtimeMs > m0 && saveOk && bakOk && !files.some(f => f.endsWith('.tmp')), files);

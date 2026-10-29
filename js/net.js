@@ -258,7 +258,7 @@ const Net = {
     const diff = await inflate(m.terr);
     const regen = this.seed !== m.seed || !this.base;
     if (regen) {
-      const world = genWorld(m.seed);
+      const world = genNewWorld(m.seed);   // (as the server makes a new world: crystalField too)
       this.base = new Uint8Array(world.m);
       this.seed = m.seed;
       this.genWorld = world;
@@ -277,7 +277,7 @@ const Net = {
     this.reborn = fresh && G.online && G.mode === 'world' && m.mode === 'world' && G.colonies.length > 0 &&
       this.worldName === (m.name || null) && G.seed !== m.seed;
     if (fresh) {
-      const world = this.genWorld || genWorld(m.seed);
+      const world = this.genWorld || genNewWorld(m.seed);
       world.m = tm;
       resetWorldState(world, m.seed);
       // (who plays which colony; versus: each side's own ant gates)
@@ -396,7 +396,9 @@ const Net = {
       e.value = ITEM_DEF[e.kind] ? ITEM_DEF[e.kind].value : 0;
       this.sample(e, k, r[2] / 2, r[3] / 2);
       e.carrierId = r[4];
-      e.site = !!r[5];
+      e.site = r[5] === 1;
+      // (a golden seed: the colony it is for)
+      if (r[5] >= 2) e.rcol = r[5] - 2; else delete e.rcol;
     });
     if (changed) {
       G.ants = [...this.ents.a.values()];
@@ -451,6 +453,10 @@ const Net = {
         if (!p.stats || !p.stats.pm) p.stats = newPlayerStats();
         Object.assign(p.stats, { kills: st[0], deaths: st[1], food: st[2], dug: st[3], built: st[4] });
       });
+    } else if (key[0] === 'r') {
+      // our side's golden seed (see server/snapshot.js buildView)
+      if (!G.relics) G.relics = newRelics();
+      G.relics.side[Number(key.slice(1))] = v || undefined;
     } else if (key[0] === 'q') {
       // our side's personal milestones (see server/snapshot.js personalView):
       // the tiers, and the counts the scoreboard doesn't carry

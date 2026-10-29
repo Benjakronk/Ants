@@ -34,7 +34,7 @@ function createSim() {
     CASTE: run('CASTE'), BUG_DEF: run('BUG_DEF'),
     UPGRADE_IDS: run('UPGRADE_IDS'), CASTE_ORDER: run('CASTE_ORDER'),
     RED_QUEEN_HP: run('RED_QUEEN_HP'), TOUGH: ctx.TOUGH,
-    genWorld: ctx.genWorld, newWorld: ctx.newWorld, stepSim: ctx.stepSim,
+    genWorld: ctx.genWorld, genNewWorld: ctx.genNewWorld, newWorld: ctx.newWorld, stepSim: ctx.stepSim,
     ensurePlayer: ctx.ensurePlayer, releasePlayer: ctx.releasePlayer,
     reclaimAnt: ctx.reclaimAnt, takeOver: ctx.takeOver, joinColony: ctx.joinColony,
     serializeWorld: ctx.serializeWorld, restoreWorld: ctx.restoreWorld, worldSummary: ctx.worldSummary,

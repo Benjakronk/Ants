@@ -60,6 +60,7 @@ const ITEM_DEF = {
   fungus:   { value: 12, food: true },   // dug from cave mushroom clumps
   berry:    { value: 5,  food: true },   // a piece of the contested site's fallen fruit
   crystal:  { value: 0,  food: false },  // deep treasure: deposits as score
+  relic:    { value: 0,  food: false },  // a golden seed, beyond the rival's nest (see updateRelics)
 };
 
 // ---------------------------------------------------------------------------
@@ -317,7 +318,9 @@ class Ant {
   digRNow() { return this.def.digR * (1 + UPG_DIGR * upgLevel('digging', this.colony)); }
   digCdNow() { return Math.max(4, Math.round(this.def.digCd * (1 - UPG_DIGCD * upgLevel('digging', this.colony)))); }
   speedNow() {
-    return this.def.speed * (this.carry ? 1 + UPG_CARRY * upgLevel('carry', this.colony) : 1);
+    // (a golden seed is a heavy load: its carrier is easier to run down)
+    return this.def.speed * (this.carry ? 1 + UPG_CARRY * upgLevel('carry', this.colony) : 1) *
+      (this.carry && this.carry.kind === 'relic' ? RELIC_SLOW : 1);
   }
 
   hurt(dmg, kx, ky, by) {
@@ -420,7 +423,7 @@ class Ant {
         const tg = this.target;
         if (tg && (this.state === 'collect' || this.state === 'milk') && !tg.carried) {
           tg.shunT = G.tick + 1800;
-          if (this.state === 'collect' && (tg.shunN = (tg.shunN || 0) + 1) >= 3) tg.dead = true;
+          if (this.state === 'collect' && (tg.shunN = (tg.shunN || 0) + 1) >= 3 && tg.kind !== 'relic') tg.dead = true;
         }
         this.climbing = false; this.ceiling = false; this.crotchT = 0;
         this.state = 'idle'; this.stateT = 60; this.target = null; this.nav = null;
@@ -463,6 +466,18 @@ class Ant {
       if (d < THINK_NEAR * THINK_NEAR) near = true;
     }
     return near && (k & 1) === 0;
+  }
+
+  // a soldier at home: an enemy carrying a golden seed near the nest (see
+  // relicThreat) is run down by up to RELIC_GUARDS of them (an AI colony's:
+  // RELIC_GUARDS_AI -- it defends, lightly). True if this one went.
+  relicChase() {
+    const col = this.colony;
+    if (this.raiding || this.followT > 0) return false;
+    const carrier = relicThreat(col);
+    if (!carrier || relicGuards(col, carrier) >= (col.player ? RELIC_GUARDS : RELIC_GUARDS_AI)) return false;
+    this.state = 'fight'; this.target = carrier; this.fightT = 0;
+    return true;
   }
 
   // did a tick with (tick + id) % n === 0 pass since this ant last thought?
@@ -1001,6 +1016,9 @@ class Ant {
     let best = null, bd = r * r, mine;
     for (const it of G.items) {
       if (it.dead || it.carried) continue;
+      // (a golden seed is the players' errand; workers only fetch one
+      // dropped near home -- see the forage state)
+      if (it.kind === 'relic') continue;
       if (it.shunT > G.tick) continue;
       if (it.claimUntil > G.tick && it.claimBy !== this.id) continue;
       const d = dist2(this.x, this.y, it.x, it.y);
@@ -1093,6 +1111,8 @@ class Ant {
           this.state = col.raid && col.raid.phase === 'march' ? 'raid' : 'home';
           break;
         }
+        // (a soldier on its break still hears of an enemy seed-carrier)
+        if (this.caste === 'soldier' && this.every(30) && this.relicChase()) break;
         // a princess waits out her time in the royal chamber
         if (this.caste === 'princess' &&
             dist2(this.x, this.y, col.queenCh.x, col.queenCh.y) > 26 * 26) {
@@ -1151,6 +1171,16 @@ class Ant {
       case 'forage': {
         // already loaded (interrupted return): bring it home first
         if (this.carry) { this.state = 'return'; break; }
+        // a golden seed dropped near home (its carrier fell): fetch it --
+        // ours goes home, the enemy's into our stores, denied
+        if (this.caste === 'worker' && this.every(20)) {
+          const rl = relicDropped(col, this);
+          if (rl) {
+            rl.claimUntil = G.tick + 900; rl.claimBy = this.id;
+            this.state = 'collect'; this.target = rl;
+            break;
+          }
+        }
         // head for the surface first, then wander and look for food
         if (this.y > T.surf[Math.floor(this.x)] + 12) {
           this.navTo('entrance');
@@ -1253,7 +1283,9 @@ class Ant {
           this.gotoFail = false;
           it.shunT = G.tick + 1800; // out of reach: leave it be a while
           it.shunN = (it.shunN || 0) + 1;
-          if (it.shunN >= 3) it.dead = true; // lost in the brambles for good
+          // lost in the brambles for good (never a golden seed: it is the
+          // players' to reach, and it crumbles in its own time)
+          if (it.shunN >= 3 && it.kind !== 'relic') it.dead = true;
           this.state = 'forage'; this.target = null;
           break;
         }
@@ -1459,6 +1491,8 @@ class Ant {
       case 'patrol': {
         this.stateT -= this.dt;
         if (this.followT > 0) { this.state = 'follow'; break; }
+        // an enemy hauling a golden seed past the nest comes first
+        if (this.relicChase()) break;
         // anything hunting near the colony is the soldiers' problem
         const threat = colonyThreat(col);
         if (threat) {
@@ -2516,6 +2550,20 @@ function drawItem(ctx, it, camx, camy) {
       ctx.fillRect(ex, ey - 2, 1, 4);
       ctx.fillStyle = '#dcf0ff';
       ctx.fillRect(ex, ey - 1, 1, 1);
+      break;
+    case 'relic':     // a golden seed: big and bright, with a glint now and then
+      ctx.fillStyle = '#7a4c08';
+      ctx.fillRect(ex - 2, ey - 1, 5, 3);
+      ctx.fillRect(ex - 1, ey - 2, 3, 5);
+      ctx.fillStyle = '#ffc428';
+      ctx.fillRect(ex - 1, ey - 1, 3, 3);
+      ctx.fillRect(ex - 2, ey, 1, 1);
+      ctx.fillStyle = '#fff2a8';
+      ctx.fillRect(ex - 1, ey - 1, 1, 1);
+      if ((G.tick >> 3) % 8 === 0) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(ex + 2, ey - 4, 1, 3); ctx.fillRect(ex + 1, ey - 3, 3, 1);
+      }
       break;
   }
 }

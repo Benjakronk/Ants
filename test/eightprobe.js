@@ -162,7 +162,7 @@ function simChecks() {
     restoreWorld(huge, 0);
     return { v: d.v, slots: d.slots, ok, after, v7, v6, huge: playerSlots(), need: G.objectives.list.find(o => o.id === 'raise').need };
   })()`);
-  check('saves: v8+ keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v === 10 && rt.slots === 5 && rt.ok &&
+  check('saves: v8+ keeps the count; a v7 save gets its player count, an older one 1; never past 8', rt.v >= 10 && rt.slots === 5 && rt.ok &&
     rt.after === 5 && rt.v7 === 3 && rt.v6 === 1 && rt.huge === 8, rt);
 
   // ---- the scoreboard's tally ---------------------------------------------------

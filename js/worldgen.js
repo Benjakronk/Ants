@@ -231,6 +231,92 @@ function genWorld(seed) {
   return { m, surf, bgSurf, trees, colony, rival };
 }
 
+// --- the contested crystal field ------------------------------------------------
+// A new world's crystals are drawn toward the middle, between the nests:
+// CF_PAIRS pairs of veins, each pair mirrored about the midpoint of the two
+// mounds (versus: neither side's field is nearer), shallower than the deep
+// veins (CF_DEPTH below the surface: under the royal chambers, reachable by
+// midsummer), and about as many crystal pixels of the outer veins (beyond
+// CF_KEEP of the world's width from its middle) turned back to dirt, one
+// from each side in turn, CF_MIN of each side's always kept -- the economy keeps its size, it just moves to
+// where both colonies want it. A pass of its own AFTER genWorld, with its
+// own rng from the seed: genWorld's draws (and every world and save made
+// from them) stay as they were. Only new worlds get it (newWorld, and the
+// online clients' and the server's base for the terrain diff); a saved
+// world keeps the terrain it was saved with.
+const CF_PAIRS = 5;
+const CF_SPREAD = 0.1;           // the field: the middle +-10% of the world's width
+const CF_DEPTH = [200, 380];     // its veins this far below the surface (the deep ones: 420+)
+const CF_KEEP = 0.1;             // outer veins: farther than this (x the width) from the middle
+const CF_MIN = 3;                // ...and a side keeps at least this many of them
+const CF_SALT = 0x5EEDC0DE;
+function genNewWorld(seed) {
+  const w = genWorld(seed);
+  crystalField(w, seed);
+  return w;
+}
+
+function crystalField(world, seed) {
+  const m = world.m, surf = world.surf;
+  const rng = mulberry32((seed ^ CF_SALT) >>> 0);
+  const mid = Math.round((world.colony.x + world.rival.x) / 2);
+  // the veins as generated: connected runs of crystal pixels
+  const veins = [];
+  const seen = new Set();
+  for (let i = 0; i < m.length; i++) {
+    if (m[i] !== M_CRYSTAL || seen.has(i)) continue;
+    const px = [i], stack = [i];
+    seen.add(i);
+    while (stack.length) {
+      const j = stack.pop(), x = j % WORLD_W;
+      for (const n of [j - 1, j + 1, j - WORLD_W, j + WORLD_W]) {
+        if (n < 0 || n >= m.length || seen.has(n) || m[n] !== M_CRYSTAL) continue;
+        if ((n === j - 1 && x === 0) || (n === j + 1 && x === WORLD_W - 1)) continue;
+        seen.add(n); px.push(n); stack.push(n);
+      }
+    }
+    veins.push({ x: px.reduce((s, p) => s + p % WORLD_W, 0) / px.length, px });
+  }
+  // the field: mirrored pairs of veins (each only where both spots are dirt)
+  let added = 0;
+  const vein = (cx, cy, r) => {
+    let n = 0;
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+        const dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy > r * r || x < 0 || x >= WORLD_W || y < 0 || y >= WORLD_H) continue;
+        if (m[y * WORLD_W + x] === M_DIRT) { m[y * WORLD_W + x] = M_CRYSTAL; n++; }
+      }
+    }
+    return n;
+  };
+  const dirtAt = (x, y) => y > 0 && y < WORLD_H - 20 && m[y * WORLD_W + x] === M_DIRT;
+  for (let pairs = 0, tries = 0; pairs < CF_PAIRS && tries < 200; tries++) {
+    const d = Math.round(30 + rng() * (WORLD_W * CF_SPREAD - 30));
+    const off = CF_DEPTH[0] + rng() * (CF_DEPTH[1] - CF_DEPTH[0]);
+    const r = 2.2 + rng() * 2;
+    const xa = mid - d, xb = mid + d;
+    if (xa < 40 || xb >= WORLD_W - 40) continue;
+    const ya = Math.round(surf[xa] + off), yb = Math.round(surf[xb] + off);
+    if (!dirtAt(xa, ya) || !dirtAt(xb, yb)) continue;
+    added += vein(xa, ya, r) + vein(xb, yb, r);
+    pairs++;
+  }
+  // thin the outer veins by as much, a vein from each side in turn (picked
+  // at random among that side's), back to the dirt they were set in
+  const outer = s => veins.filter(v => (v.x - mid) * s > WORLD_W * CF_KEEP);
+  const sides = [outer(-1), outer(1)];
+  let removed = 0;
+  for (let k = 0; removed < added && (sides[0].length > CF_MIN || sides[1].length > CF_MIN); k++) {
+    const list = sides[k % 2];
+    if (list.length <= CF_MIN) continue;
+    const v = list.splice(Math.floor(rng() * list.length), 1)[0];
+    for (const i of v.px) m[i] = M_DIRT;
+    removed += v.px.length;
+  }
+  return { added, removed };
+}
+
 // raise a domed mound over the surface around cx (flatten, then dome up)
 function shapeMound(surf, cx) {
   const baseY = surf[cx];

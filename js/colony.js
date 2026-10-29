@@ -82,9 +82,11 @@ const WINTER_LAY = 0.25;     // the queen's laying pace in winter
 // the stores a princess egg wants: 60% of their room, at least 60 and never
 // more than PRINCESS_FOOD -- all three as much smaller as a shorter year's
 // food targets are (the square root of its share: x0.71 SHORT), and QUICK's
-// a little smaller still (share^0.75: x0.44), its autumn is too short to stock
+// a little smaller still (share^0.75: x0.44) and without the 60% of the
+// room, its autumn is too short to stock a big storage that far
 function princessFood(cap) {
   const s = yearShare(), k = Math.pow(s, s < 0.5 ? 0.75 : 0.5);
+  if (s < 0.5) return 60 * k;
   return Math.max(60 * k, Math.min(PRINCESS_FOOD * k, cap * 0.6 * k));
 }
 
@@ -918,6 +920,8 @@ class Colony {
       G.contested.got[this.idx] = (G.contested.got[this.idx] || 0) + 1;
       objEvent('contested', 1, this);
     }
+    // a golden seed: brought home (its own colony's), or denied (the other's)
+    if (item.kind === 'relic') { relicIn(item, this, who); return true; }
     if (item.kind === 'crystal') {
       // treasure, not food: the colony's currency for upgrades (and a
       // little score)
@@ -1526,6 +1530,244 @@ function dropSitePieces(n) {
     G.items.push(it);
     cs.spawned++;
   }
+}
+
+// ---------------------------------------------------------------------------
+// the golden seed: halfway through spring, summer and autumn (RELIC_AT of
+// the season, so it keeps to a SHORT or QUICK year's clock; a warning at
+// RELIC_WARN) a golden seed falls for each played colony in the forest
+// BEYOND its rival -- past the enemy's mound, on the far side from home
+// (co-op: past the red AI's nest, for the players' colony only). Any ant can
+// carry it (an item, kind 'relic', `rcol` the colony it is for), slowed to
+// RELIC_SLOW, home through or around the enemy's ground: into its own
+// colony's storage it counts as a milestone of the year (for the flight's
+// second star: 8 of the 12, see startFlight), versus the tie-break after the
+// princesses (endFlight), plus RELIC_SCORE and RELIC_CRYSTALS. Into the
+// other colony's storage it is denied: it crumbles, and the denier gets
+// RELIC_DENY. Its carrier shows on the enemy's map (and the server never
+// hides it, see server/snapshot.js). A carrier that dies drops it where it
+// fell; whoever comes first may pick it up -- NPC workers fetch a dropped
+// seed lying within RELIC_FETCH of their nest (theirs: home; the enemy's:
+// denied), and a home side's soldiers go for an enemy carrier within
+// RELIC_ALARM of their nest (RELIC_GUARDS at a time). It lasts a season:
+// left lying past that (or still out when the next one falls) it crumbles.
+// No seed in winter (its surface would kill any carrier on the long way).
+// G.relics = { k: the season (year*4+season) of the last fall, wk: of the
+// last warning, side: [per colony index { ph, id, x, y, until, got, yr }] }:
+// ph 'wait' (none out), 'lying', 'carried' (by its own side), 'taken' (by
+// the enemy), 'home', 'denied' or 'lost'; got: brought home in year yr.
+// ---------------------------------------------------------------------------
+const RELIC_AT = 0.5, RELIC_WARN = 0.4;  // the season's share gone when it falls / when it is told
+const RELIC_SEASONS = 3;     // spring, summer and autumn
+const RELIC_BEYOND = [380, 700]; // it falls this far past the rival's mound
+const RELIC_SLOW = 0.7;      // its carrier's speed
+const RELIC_SCORE = 300, RELIC_CRYSTALS = 3, RELIC_DENY = 100;
+const RELIC_ALARM = 800;     // a home side's soldiers chase an enemy carrier this near their nest
+                             // (the whole stretch it falls in: lifting it raises the alarm)...
+const RELIC_GUARDS = 3;      // ...this many at once (an AI colony: RELIC_GUARDS_AI)
+const RELIC_GUARDS_AI = 2;
+const RELIC_FETCH = 500;     // workers fetch a dropped seed lying this near their nest
+
+function newRelics() { return { k: -1, wk: -1, side: [] }; }
+// G.relics from a save (v11), every field checked (null: as a new world's)
+const RELIC_PH = ['wait', 'lying', 'carried', 'taken', 'home', 'denied', 'lost'];
+function restoreRelics(d) {
+  const R = newRelics();
+  if (!d || typeof d !== 'object') return R;
+  const int = (v, lo) => Math.max(lo, Math.floor(Number(v) || 0));
+  R.k = Number.isFinite(Number(d.k)) ? Math.floor(Number(d.k)) : -1;
+  R.wk = Number.isFinite(Number(d.wk)) ? Math.floor(Number(d.wk)) : -1;
+  const side = Array.isArray(d.side) ? d.side : [];
+  for (let i = 0; i < side.length && i < 2; i++) {
+    const s = side[i];
+    if (!s || typeof s !== 'object') { R.side[i] = undefined; continue; }
+    R.side[i] = {
+      ph: RELIC_PH.includes(s.ph) ? s.ph : 'wait', id: int(s.id, 0),
+      x: int(s.x, 0), y: int(s.y, 0), until: int(s.until, 0),
+      got: Math.min(RELIC_SEASONS, int(s.got, 0)), yr: int(s.yr, 1), held: !!s.held,
+    };
+  }
+  return R;
+}
+function relicSide(c) {
+  const R = G.relics || (G.relics = newRelics());
+  return R.side[c.idx] || (R.side[c.idx] = { ph: 'wait', id: 0, x: 0, y: 0, until: 0, got: 0, yr: G.year });
+}
+// the season's share gone (0..1)
+function seasonFrac() {
+  return ((G.day % SEASON_DAYS) * DAY_LEN + G.tick % DAY_LEN) / (SEASON_DAYS * DAY_LEN);
+}
+// the colony a seed for c falls beyond: its rival
+function relicFoe(c) { return G.colonies.find(o => o !== c) || null; }
+// the seed's item, while it lies or is carried
+function relicItem(st) {
+  if (!st || !st.id) return null;
+  for (const it of G.items) if (it.id === st.id && !it.dead) return it;
+  return null;
+}
+// the rival's name in a message to c's players (versus: the enemy)
+function relicFoeKey(c) { return G.mode === 'versus' ? 'rl_enemyNest' : 'rl_redNest'; }
+
+// the golden seeds colony c brought home in year yr (default: this one;
+// the flight, on the first day of the next, counts the year it closes)
+function relicsHome(c, yr) {
+  const st = G.relics && G.relics.side[c.idx];
+  return st && st.yr === (yr || G.year) ? st.got : 0;
+}
+
+function updateRelics() {
+  const R = G.relics || (G.relics = newRelics());
+  if (!G.colonies.length) return;
+  if (!G.over && G.season < RELIC_SEASONS) {
+    const k = (G.year - 1) * 4 + G.season, f = seasonFrac();
+    if (f >= RELIC_WARN && f < RELIC_AT && R.wk < k) {
+      R.wk = k;
+      for (const c of G.colonies) {
+        const r = relicFoe(c);
+        if (!c.player || !r) continue;
+        c.say('m_relicSoon', [{ key: relicFoeKey(c) }], '#ffd040');
+        r.say('m_relicSoonFoe', [], '#ff9040');
+      }
+    }
+    if (f >= RELIC_AT && R.k < k) {
+      R.k = R.wk = k;
+      for (const c of G.colonies) if (c.player && relicFoe(c)) dropRelic(c);
+    }
+  }
+  if (G.tick % 10) return;   // (the rest six times a second)
+  for (const c of G.colonies) {
+    const st = R.side[c.idx];
+    if (!st || !st.id) continue;
+    const it = relicItem(st);
+    if (!it) { if (st.ph !== 'home' && st.ph !== 'denied') st.ph = 'lost'; st.id = 0; continue; }
+    st.x = Math.round(it.x); st.y = Math.round(it.y);
+    const by = it.carried && it.carried.hp > 0 ? it.carried : null;
+    const ph = by ? (by.colony === c ? 'carried' : 'taken') : 'lying';
+    if (ph !== st.ph) relicNews(c, st.ph, ph, by);
+    st.ph = ph;
+    if (!by) {
+      if (G.tick >= st.until) {
+        it.dead = true;
+        st.ph = 'lost'; st.id = 0;
+        c.say('m_relicLost', [], '#c0a080');
+        continue;
+      }
+      if (ph === 'lying' && st.held) it.dropped = true;
+    } else st.held = true;
+  }
+}
+
+// a golden seed for colony c falls beyond its rival's nest (last season's,
+// if any is still out, crumbles)
+function dropRelic(c) {
+  const r = relicFoe(c);
+  const st = relicSide(c);
+  const old = relicItem(st);
+  if (old) {
+    if (old.carried) { old.carried.carry = null; old.carried = null; }
+    old.dead = true;
+  }
+  const dir = Math.sign(r.x - c.x) || 1;
+  // (where: from the world's seed, the season and the side -- its own rng,
+  // so the fall leaves the sim's other dice as they were)
+  const rng = mulberry32((G.seed ^ Math.imul(G.relics.k + 7, 0x9E3779B1) ^ (c.idx + 1) * 0x85EBCA6B) >>> 0);
+  let x = 0;
+  for (let t = 0; t < 12; t++) {
+    x = Math.round(Math.max(80, Math.min(WORLD_W - 80,
+      r.x + dir * (RELIC_BEYOND[0] + rng() * (RELIC_BEYOND[1] - RELIC_BEYOND[0])))));
+    // (not on a trunk: it would sit up in the wood)
+    if (!G.trees.some(tr => Math.abs(tr.x - x) < 40)) break;
+  }
+  const it = G.makeItem('relic', x, T.surf[x] - 10);
+  it.rcol = c.idx;
+  G.items.push(it);
+  // (the first seed of a year starts its count afresh)
+  const got = st.yr === G.year ? st.got : 0;
+  Object.assign(st, { ph: 'lying', id: it.id, x, y: Math.round(it.y), until: G.tick + SEASON_DAYS * DAY_LEN, got, yr: G.year, held: false });
+  c.say('m_relicFell', [{ key: relicFoeKey(c) }], '#ffd040');
+  c.sfx('task');
+  r.say('m_relicFellFoe', [], '#ff9040');
+  r.sfx('danger');
+}
+
+// the seed for c changed hands: tell both sides (an AI colony keeps quiet)
+function relicNews(c, was, now, by) {
+  const r = relicFoe(c);
+  if (now === 'carried') {
+    if (by.playerIdx >= 0) c.say('m_relicOurs', [{ player: by.playerIdx }], '#ffd040');
+    else c.say('m_relicOursNpc', [], '#ffd040');
+    if (r) { r.say('m_relicFoeCarry', [], '#ff7040'); r.sfx('danger'); }
+  } else if (now === 'taken') {
+    c.say('m_relicTaken', [], '#ff7040');
+    c.sfx('danger');
+    if (r) r.say('m_relicHeld', [], '#ffd040');
+  } else if (now === 'lying' && was !== 'wait') {
+    c.say('m_relicDown', [], '#ff9040');
+    if (r) r.say('m_relicDownFoe', [], '#ffd040');
+  }
+}
+
+// a golden seed carried into colony c's storage by `who`
+function relicIn(it, c, who) {
+  const owner = G.colonies[it.rcol] || null;
+  const st = owner ? relicSide(owner) : null;
+  it.dead = true;
+  if (who) who.carry = null;
+  const at = who || c.storage;
+  if (owner === c) {
+    // home: a milestone's worth for the flight, crystals and score
+    if (st && st.id === it.id) { st.ph = 'home'; st.id = 0; }
+    if (st) { if (st.yr !== G.year) { st.got = 0; st.yr = G.year; } st.got++; }
+    c.stats.relics = (c.stats.relics || 0) + 1;
+    c.score += RELIC_SCORE;
+    c.crystals += RELIC_CRYSTALS;
+    c.say('m_relicHome', [RELIC_CRYSTALS, st ? st.got : 1], '#ffe040');
+    c.sfx('task');
+    const r = relicFoe(c);
+    if (r) r.say('m_relicHomeFoe', [], '#ff9040');
+    G.fx('sparkle', at.x, at.y - 6, 14);
+  } else {
+    // denied: it crumbles in the enemy's stores
+    if (st && st.id === it.id) { st.ph = 'denied'; st.id = 0; }
+    c.score += RELIC_DENY;
+    c.say('m_relicDeniedUs', [RELIC_DENY], '#ffe040');
+    c.sfx('task');
+    if (owner) owner.say('m_relicDenied', [], '#ff7040');
+    G.fx('dirt', at.x, at.y - 4, 8);
+  }
+  G.sfx('deposit', at.x, at.y, 280);
+}
+
+// an enemy ant carrying a golden seed within RELIC_ALARM of colony c's nest
+// (for its soldiers to run down), or null
+function relicThreat(c) {
+  // (every soldier on its rounds asks: one look a tick serves them all)
+  if (c.rtT === G.tick) return c.rt;
+  c.rtT = G.tick; c.rt = null;
+  for (const it of G.items) {
+    if (it.kind !== 'relic' || it.dead || !it.carried) continue;
+    const a = it.carried;
+    if (a.hp > 0 && a.colony !== c && Math.abs(a.x - c.x) < RELIC_ALARM && !outInCold(a)) { c.rt = a; break; }
+  }
+  return c.rt;
+}
+// ...and how many of c's ants are on it already
+function relicGuards(c, carrier) {
+  let n = 0;
+  for (const a of G.ants) if (a.colony === c && a.state === 'fight' && a.target === carrier) n++;
+  return n;
+}
+// a dropped golden seed (one carried and let fall) lying within RELIC_FETCH
+// of colony c's nest, that no other ant has claimed, or null
+function relicDropped(c, ant) {
+  for (const it of G.items) {
+    if (it.kind !== 'relic' || it.dead || it.carried || !it.dropped) continue;
+    if (Math.abs(it.x - c.x) > RELIC_FETCH) continue;
+    if (it.claimUntil > G.tick && it.claimBy !== ant.id) continue;
+    if (it.shunT > G.tick) continue;
+    return it;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

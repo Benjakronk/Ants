@@ -22,6 +22,7 @@ const G = {
                       // { col, n, stars, milestones, pop, rival, rivalDead }] }
   lastFlightYear: 0,  // the year of the last nuptial flight (one per spring)
   contested: null,    // this summer's contested food site (colony.js)
+  relics: null,       // the season's golden seeds, one per played colony (updateRelics)
   // 'solo' (this browser), 'coop' (an online match), 'versus' (an online
   // match, black against red: both colonies played) or 'world' (a
   // persistent world on the server: the years go on, flights bank legacy)
@@ -475,6 +476,7 @@ function resetWorldState(world, seed) {
   G.players = [];
   G.flight = null; G.lastFlightYear = 0;
   G.contested = null;
+  G.relics = newRelics();
 }
 
 // a colony's founding household: the queen, `workers` workers, `soldiers`
@@ -566,7 +568,7 @@ function spawnSpot(c, k, hw, hh, used) {
 // (default playerCount, at least 1 -- see playerSlots); len: the year's
 // length (setYearLen; a persistent world is always FULL)
 function newWorld(seed, playerCount, mode, slots, len) {
-  const world = genWorld(seed);
+  const world = genNewWorld(seed);   // (with the contested crystal field, see crystalField)
   resetWorldState(world, seed);
   setupFactions(mode);
   setYearLen(G.mode === 'world' ? 'full' : len);
@@ -712,6 +714,9 @@ function restoreWorld(d, playerCount) {
   if (G.flight && !Array.isArray(G.flight.res)) G.flight = { t: G.flight.t, res: [Object.assign({ col: 0 }, G.flight)] };
   const cs = d.contested;
   G.contested = cs && typeof cs.x === 'number' ? Object.assign({ got: [] }, cs) : null;
+  // v11: the golden seeds (older saves: none has fallen yet -- this season's
+  // falls on time, or at once if its time has passed)
+  G.relics = restoreRelics(v >= 11 ? d.relics : null);
   // the surface line as dug and built (v2 saves: the generated one). Older
   // builds let it sink down open shafts: hold it to a shallow scrape.
   if (d.surf) T.surf.set(int16Decode(d.surf, WORLD_W));
@@ -749,6 +754,11 @@ function restoreWorld(d, playerCount) {
     it.id = s.id;
     it.age = s.age || 0;
     if (s.site) it.site = true;
+    // (v11: a golden seed's colony; one that lost it isn't one any more)
+    if (s.kind === 'relic') {
+      if (!G.colonies[s.rcol]) { it.dead = true; continue; }
+      it.rcol = s.rcol | 0; it.dropped = !!s.dropped;
+    }
     if (s.carriedBy && byId[s.carriedBy]) {
       it.carried = byId[s.carriedBy];
       byId[s.carriedBy].carry = it;
@@ -1352,7 +1362,7 @@ function controlPlayer(pIdx) {
       const tryStore = nearStorage && ITEM_DEF[it.kind] && p.refuseT <= 0;
       if (tryStore && col.deposit(it, a)) {
         // stored
-      } else if (larva && ITEM_DEF[it.kind]) {
+      } else if (larva && ITEM_DEF[it.kind] && it.kind !== 'relic') {   // (a golden seed is no larva's meal)
         larva.feed();
         it.dead = true; a.carry = null;
         col.progress('feed', 1);
@@ -1610,6 +1620,7 @@ function stepSim() {
   worldSpawns();
   updateYear();
   updateContested();   // (after the year: summer's news comes before the fruit's)
+  updateRelics();      // (the golden seeds, see colony.js)
 
   // extinction: the players' colony is gone to its last ant (versus:
   // either side's, and the other side has won)
@@ -1651,6 +1662,7 @@ function versusOver(winner, reason, res) {
       faction: c.faction, score: c.score, pop: c.members().length, defeated: !!c.defeated,
       milestones: c.objectives ? c.objectives.yearDone : 0, stats: Object.assign({}, c.stats),
       stars: res && res[i] ? res[i].stars : 0, flown: res && res[i] ? res[i].n : 0,
+      relics: res && res[i] ? res[i].relics : relicsHome(c),
     })),
   });
 }
@@ -1732,14 +1744,15 @@ function endFlight(res) {
     // the side with more stars wins; then more princesses flown, then more ants
     const [a, b] = res;
     let w = -1;
-    for (const k of ['stars', 'n', 'pop']) if (a[k] !== b[k]) { w = a[k] > b[k] ? a.col : b.col; break; }
+    // (the golden seeds brought home break a tie of princesses, see updateRelics)
+    for (const k of ['stars', 'n', 'relics', 'pop']) if (a[k] !== b[k]) { w = a[k] > b[k] ? a.col : b.col; break; }
     versusOver(w, w < 0 ? 'r_vsDraw' : 'r_vsFlight', res);
     return;
   }
   const f = res[0];
   if (G.mode === 'world') { bankLegacy(f); return; }
   gameOver(f.n > 0, f.n > 1 ? 'r_flight' : f.n === 1 ? 'r_flight1' : 'r_noFlight',
-    { stars: f.stars, flown: f.n, milestones: f.milestones, pop: f.pop, rival: f.rival,
+    { stars: f.stars, flown: f.n, milestones: f.milestones, relics: f.relics, pop: f.pop, rival: f.rival,
       rivalDead: !!f.rivalDead, canContinue: true });
 }
 
@@ -1841,7 +1854,8 @@ function rivalBeaten(c) {
 
 // the nuptial flight: every adult princess takes wing from the entrance.
 // Stars (none without a princess flown): one for a princess flown; one for
-// 3+ princesses or 8+ of the year's 12 milestones; one for the rival
+// 3+ princesses or 8+ of the year's 12 milestones (each golden seed brought
+// home last year counts as one more, see updateRelics); one for the rival
 // status -- the red queen slain, or more ants than the red colony.
 function startFlight(c, milestones) {
   const flyers = G.ants.filter(a => a.caste === 'princess' && a.hp > 0 && a.colony === c);
@@ -1850,12 +1864,13 @@ function startFlight(c, milestones) {
   const pop = c.members().length;
   const rival = rivalBeaten(c);
   const rivalDead = G.colonies.some(o => o !== c && o.defeated);
+  const relics = relicsHome(c, G.year - 1);
   let stars = 0;
-  if (n > 0) stars = 1 + (n >= 3 || milestones >= 8 ? 1 : 0) + (rival ? 1 : 0);
+  if (n > 0) stars = 1 + (n >= 3 || milestones + relics >= 8 ? 1 : 0) + (rival ? 1 : 0);
   c.stats.flown = (c.stats.flown || 0) + n;
   c.score += n * 500;
   if (n > 0) G.fx('flight', c.entrance.x, c.entrance.y - 4, n, c.idx);
   c.say(n > 1 ? 'm_flight' : n === 1 ? 'm_flight1' : 'm_noFlight', [n], '#ff90e0');
   c.sfx(n > 0 ? 'task' : 'starve');
-  return { col: c.idx, n, stars, milestones, pop, rival, rivalDead };
+  return { col: c.idx, n, stars, milestones, pop, rival, rivalDead, relics };
 }

@@ -688,20 +688,21 @@ function drawObjScreen() {
       }
       y += 12;
     }
-    // the colony's standing, in two columns under a groove
-    groove(18, 106, 284);
+    // the colony's standing, in two columns under a groove (9 px rows: the
+    // golden seed's took the room)
+    groove(18, 105, 284);
     const rowL = (str, yy, color) => drawText(ctx, str, 20, yy, color);
     const rowR = (str, yy, color) => drawText(ctx, str, R - textWidth(str), yy, color);
-    rowL(L('ui_mound', col.mound.size), 111, '#d8b860');
-    rowR(col.sealed ? L('ui_sealed') : L('ui_open'), 111, col.sealed ? '#80ff80' : '#ff9040');
-    rowL(L('ui_crystals', col.crystals), 121, '#80e0ff');
-    rowR(L('ui_milestones', G.objectives.yearDone), 121, '#ffe040');
-    rowL(L('ui_score', col.score), 131, '#a0c8a0');
+    rowL(L('ui_mound', col.mound.size), 110, '#d8b860');
+    rowR(col.sealed ? L('ui_sealed') : L('ui_open'), 110, col.sealed ? '#80ff80' : '#ff9040');
+    rowL(L('ui_crystals', col.crystals), 119, '#80e0ff');
+    rowR(L('ui_milestones', G.objectives.yearDone), 119, '#ffe040');
+    rowL(L('ui_score', col.score), 128, '#a0c8a0');
     // versus: our own queen's health (her fall with no heir loses the match)
     const oq = G.mode === 'versus' ? col.queen() : null;
-    if (oq) rowR(L('ui_ourQueen', Math.max(1, Math.round(oq.hp / oq.maxHp * 100))), 131, oq.hp < oq.maxHp * 0.5 ? '#ff5040' : '#a8e8a0');
+    if (oq) rowR(L('ui_ourQueen', Math.max(1, Math.round(oq.hp / oq.maxHp * 100))), 128, oq.hp < oq.maxHp * 0.5 ? '#ff5040' : '#a8e8a0');
     // (else the builders' stocks, and how much is planned)
-    else if (col.stock) rowR(L('ui_stockLine', Math.floor(col.stock.soil), Math.floor(col.stock.thatch), col.plan.size), 131, '#c8a070');
+    else if (col.stock) rowR(L('ui_stockLine', Math.floor(col.stock.soil), Math.floor(col.stock.thatch), col.plan.size), 128, '#c8a070');
     // the rival: a rough head count (nobody counts red ants one by one;
     // in versus it is just the enemy, whichever side we're on)
     const r = G.rival;
@@ -710,17 +711,24 @@ function drawObjScreen() {
       const vs = G.mode === 'versus', step = vs ? 2 : 5;
       const rs = r.defeated ? L(r.slain ? 'ui_rivalSlain' : 'ui_rivalDied')
         : L(vs ? 'ui_enemy' : 'ui_rival', Math.max(step, Math.round(r.members().length / step) * step));
-      rowL(rs, 141, r.defeated ? '#80ff80' : '#ff7060');
+      rowL(rs, 137, r.defeated ? '#80ff80' : '#ff7060');
       // once found, how her health stands (the bonus is a long campaign)
       const q = !r.defeated && r.queenSeen ? r.queen() : null;
-      if (q) rowR(L('ui_rivalQueen', Math.max(1, Math.round(q.hp / q.maxHp * 100))), 141, '#ff9080');
+      if (q) rowR(L('ui_rivalQueen', Math.max(1, Math.round(q.hp / q.maxHp * 100))), 137, '#ff9080');
+    }
+    // our golden seed: how it stands, and this year's brought home (each a
+    // milestone's worth at the flight)
+    const rls = relicState();
+    if (rls) {
+      rowL('\x1C ' + relicStatus(rls), 146, relicColor(rls));
+      rowR(L('ui_relicsHome', rls.got, RELIC_SEASONS), 146, rls.got ? '#ffe040' : '#a09070');
     }
     // the next flight: this spring's if it hasn't flown yet, else next year's
     // (a persistent world: with its legacy so far; versus: the match's goal)
     const flightYear = G.season === SPRING && G.year >= 2 && G.lastFlightYear < G.year ? G.year : G.year + 1;
     const goal = G.mode === 'world' ? L('ui_legacyLine', G.legacy, G.gen, flightYear)
       : G.mode === 'versus' ? L('ui_vsGoal', 2) : L('ui_yearGoal', flightYear);
-    drawTextC(ctx, goal, VIEW_W / 2, 153, '#ff90e0');
+    drawTextC(ctx, goal, VIEW_W / 2, 156, '#ff90e0');
     drawTextC(ctx, L('ui_objKeys'), VIEW_W / 2, 179, '#a09070');
   } else if (pid === 'pm') {
     drawPersonalPage(R);
@@ -1602,10 +1610,44 @@ function goalStrip() {
   const flight = s === WINTER;
   const timeL = [flight ? L('hud_flightIn', clock) : '\x1A' + clock, flight ? '#ff90e0' : warn];
   const timeS = ['\x1A' + clock, flight ? '#ff90e0' : warn];
+  // (the golden seed: this year's brought home, in the colour of how ours
+  // stands -- out there, carried, taken; not in winter unless one is out)
+  const rs = relicState();
+  const rseg = rs && (s < RELIC_SEASONS || ['lying', 'carried', 'taken'].includes(rs.ph))
+    ? [['\x1C' + rs.got + '/' + RELIC_SEASONS + ' ', relicColor(rs)]] : [];
   return [
-    [name, tally].concat(segs, [timeL]),
+    [name, tally].concat(rseg, segs, [timeL]),
+    [icon, [' ', sc], tally].concat(rseg, segs, [timeS]),
     [icon, [' ', sc], tally].concat(segs, [timeS]),
   ];
+}
+
+// our side's golden seed as the HUD shows it: { ph, x, y, until, got,
+// held } (see updateRelics; online the server's r0/r1), or null
+function relicState() {
+  if (!G.colony || !G.rival) return null;
+  // (none fallen yet this year: waiting for the first, nothing home)
+  const st = (G.relics && G.relics.side[G.colIdx]) || { ph: 'wait', got: 0 };
+  // (the sim keeps the year its count is for; the server sends this year's)
+  return { ph: st.ph, x: st.x, y: st.y, until: st.until, held: !!st.held,
+    got: st.yr === undefined || st.yr === G.year ? st.got || 0 : 0 };
+}
+function relicColor(rs) {
+  const on = (G.frame >> 4) % 2;
+  switch (rs.ph) {
+    case 'lying': return on ? '#ffd040' : '#c89820';
+    case 'carried': return on ? '#ffffff' : '#ffe080';
+    case 'taken': return on ? '#ff6040' : '#c04020';
+    case 'home': return '#80ff80';
+  }
+  return '#a08858';
+}
+// what the O screen says of it
+function relicStatus(rs) {
+  if (rs.ph === 'lying') return L(rs.held ? 'rs_down' : G.mode === 'versus' ? 'rs_lyingVs' : 'rs_lying');
+  if (rs.ph === 'wait') return L(G.season < RELIC_SEASONS ? 'rs_wait' : 'rs_winter');
+  if (rs.ph === 'taken') return L(G.mode === 'versus' ? 'rs_takenVs' : 'rs_taken');
+  return L('rs_' + rs.ph);
 }
 
 function drawTaskAndMsgs() {
@@ -1817,6 +1859,17 @@ function drawGuides(camx, camy, vw, vh, me) {
   drawYouRing(camx, camy, me);
   const raid = raidAlert();
   if (raid) drawEdgeMarker(raid.x, raid.y - 6, camx, camy, vw, vh, me, '#ff4030', '!');
+  // golden seeds: an enemy carrying one near our nest (run it down), and
+  // ours lying loose within a march of us (go and get it)
+  for (const it of G.items) {
+    if (it.kind !== 'relic' || it.dead || me.carry === it) continue;
+    const c = it.carried;
+    if (c && c.colony !== G.colony && Math.abs(c.x - G.colony.x) < RELIC_ALARM + 300) {
+      drawEdgeMarker(c.x, c.y - 6, camx, camy, vw, vh, me, '#ff7040', '\x1C');
+    } else if (!c && it.rcol === G.colIdx && Math.abs(it.x - me.x) < 900) {
+      drawEdgeMarker(it.x, it.y - 4, camx, camy, vw, vh, me, '#ffd040', '\x1C');
+    }
+  }
   if (!G.arrowOn) return;
   const t = guideTarget();
   if (t) drawEdgeMarker(t.x, t.y, camx, camy, vw, vh, me, t.color, t.icon);
@@ -1919,6 +1972,20 @@ function mapFlag(x, y, color) {
   ctx.fillStyle = color;
   ctx.fillRect(x + 1, y - 8, 4, 4);
 }
+function mapRelic(x, y) {         // a golden seed: a blinking gold drop
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x - 3, y - 3, 7, 7);
+  ctx.fillStyle = (G.frame >> 3) % 2 ? '#ffd040' : '#fff4b0';
+  ctx.fillRect(x - 2, y - 1, 5, 3);
+  ctx.fillRect(x - 1, y - 2, 3, 5);
+}
+// a golden seed's carrier on the map: a gold ring (ours or the enemy's --
+// the server shows a carrier to both sides)
+function mapCarrier(x, y) {
+  ctx.fillStyle = (G.frame >> 3) % 2 ? '#ffd040' : '#ffffff';
+  ctx.fillRect(x - 3, y - 4, 7, 1); ctx.fillRect(x - 3, y + 4, 7, 1);
+  ctx.fillRect(x - 4, y - 3, 1, 7); ctx.fillRect(x + 4, y - 3, 1, 7);
+}
 function mapFruit(x, y) {
   ctx.fillStyle = '#000000';
   ctx.fillRect(x - 3, y - 3, 7, 7);
@@ -1979,7 +2046,16 @@ function drawMinimap() {
   // this summer's fallen fruit between the nests
   const cs = G.contested;
   if (cs && cs.active) { const [fx, fy] = P(cs.x, cs.y); mapFruit(fx, fy - 2); }
+  // golden seeds lying loose: ours always, the enemy's (versus) where we
+  // see it (the server sends it no farther)
+  for (const it of G.items) {
+    if (it.kind !== 'relic' || it.dead || it.carried) continue;
+    if (it.rcol === G.colIdx || G.mode === 'versus') { const [rx, ry] = P(it.x, it.y); mapRelic(rx, ry - 1); }
+  }
   drawMapAnts(mx, my, sx, sy, 0, 0, WORLD_W, WORLD_H);
+  for (const a of G.ants) {
+    if (a.hp > 0 && a.carry && a.carry.kind === 'relic') { const [cx, cy] = P(a.x, a.y); mapCarrier(cx, cy); }
+  }
   ctx.fillStyle = '#ff3020';
   for (const b of G.bugs) {
     if (b.predator) ctx.fillRect(mx + b.x * sx - 1, my + b.y * sy - 1, 2, 2);
@@ -2069,10 +2145,12 @@ function drawMapLegend(x, y) {
     [() => mapDome(x + 72 + 2, y + 24, '#d8b860'), 'lg_mound'],
     [() => mapFruit(x + 72 + 2, y + 33), 'lg_fruit'],
     [() => mapFlag(x + 72 + 1, y + 48, G.rival ? enemyFlag(G.rival) : '#e03828'), G.mode === 'versus' ? 'lg_enemy' : 'lg_red'],
+    [() => mapRelic(x + 72 + 2, y + 53), 'lg_relic'],
   ];
   for (let i = 0; i < items.length; i++) {
     items[i][0]();
-    const lx = i < 5 ? x + 8 : x + 81, ly = y + (i % 5) * 10;
+    // (five a column; the golden seed a sixth row under the second)
+    const lx = i < 5 ? x + 8 : x + 81, ly = y + (i < 5 ? i : i - 5) * 10;
     drawText(ctx, L(items[i][1]), lx, ly, '#c8b890');
   }
 }

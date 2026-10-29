@@ -285,7 +285,7 @@ function simChecks() {
     junk.colonies[0].plan = [5, -3, 4, 'x', 1e12, 9];
     r.junk = restoreWorld(junk, 1) && G.colony.plan.size === 0;
     return r;`);
-  check('saves are v9 and keep each colony\'s plan and stocks', save.v === 10 && save.ok && save.same && save.planned > 300 &&
+  check('saves are v9 and keep each colony\'s plan and stocks', save.v >= 10 && save.ok && save.same && save.planned > 300 &&
     save.st.soil === 123 && save.st.thatch === 45, save);
   check('older saves load with no plan and empty stocks; a junk plan is dropped', save.ok8 && save.plan8 === 0 &&
     save.st8.soil === 0 && save.st8.thatch === 0 && save.junk, save);

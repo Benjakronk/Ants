@@ -225,7 +225,7 @@ function simChecks() {
     back.summary = worldSummary(d).len;
     return back;
   })()`);
-  check('v10 saves keep the year\'s length and each player\'s tally and personal milestones', sv.ok && sv.v === 10 && sv.len === 'short' &&
+  check('v10 saves keep the year\'s length and each player\'s tally and personal milestones', sv.ok && sv.v >= 10 && sv.len === 'short' &&
     sv.day === 7200 && sv.tick && sv.season && sv.kills === 5 && sv.tiers === 3 && sv.log === 3 && sv.summary === 'short', sv);
   check('...a v9 save loads as a FULL year with fresh tallies', sv.v9.ok && sv.v9.len === 'full' && sv.v9.day === 14400 &&
     sv.v9.kills === 0 && sv.v9.pm === 0, sv.v9);
@@ -447,7 +447,7 @@ async function screens(port) {
         belowMsgs: rs.every(r => r.y + r.h <= 23) };
     });
     check('the goal strip: the season, its milestones x/3, the time left -- at the top right, clear of the task and milestone lines',
-      hud.len === 'short' && hud.day === 7200 && /^.SPRING \d\/3 .\d+:\d\d$/.test(hud.strip) && hud.right <= 316 && !hud.overlap && hud.belowMsgs, hud);
+      hud.len === 'short' && hud.day === 7200 && /^.SPRING \d\/3 (\x1C\d\/3 )?.\d+:\d\d$/.test(hud.strip) && hud.right <= 316 && !hud.overlap && hud.belowMsgs, hud);
     await page.screenshot({ path: 'test/shot-match-hud.png' });
     // the other players' tags keep clear of it: everyone along the top of
     // the view (the render model's ants, moved for one layout)

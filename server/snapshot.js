@@ -13,6 +13,15 @@ const P = require(path.join(JS_DIR, 'netproto.js'));
 const NEAR_X = 480, NEAR_Y = 360;   // around the player's view: every snapshot
 const FAR_EVERY = 10;               // the rest of the world: every 10th (2 Hz)
 const EVENTS_MAX = 80;              // events a client gets per snapshot at most
+// versus: the map's fog. A player's ant is sent to the other side only
+// while one of that side's eyes is on it: a client's view (its camera,
+// else its ant -- the 320x176 view, the camera's lean and a margin), a
+// player's ant, or (nearer) any of its NPC ants. Out of sight it is gone
+// from that side's model (and so from its map); the ant carrying a golden
+// seed is always in plain view. What a hidden ant carries is hidden with
+// it, and a seed lying loose shows to the other side only within sight.
+const SIGHT_X = 220, SIGHT_Y = 140;
+const NPC_SIGHT_X = 110, NPC_SIGHT_Y = 70;
 
 const CASTE_IDX = Object.fromEntries(P.CASTES.map((c, i) => [c, i]));
 const BUG_IDX = Object.fromEntries(P.BUGS.map((c, i) => [c, i]));
@@ -26,12 +35,17 @@ const hpq = hp => hp > 0 ? Math.max(1, Math.floor(hp)) : 0;
 
 // ---------------------------------------------------------------------------
 // the world as records, built once per snapshot and shared by every client
-// (vs: a versus match -- each side gets only the other colony's public face)
+// (vs: a versus match -- each side gets only the other colony's public face,
+// and the other side's players only where it can see them; eyes: per side,
+// its clients' points of view, see fog)
 // ---------------------------------------------------------------------------
-function buildFrame(sim, vs) {
+function buildFrame(sim, vs, eyes) {
   const G = sim.G, tick = G.tick;
   const hit = e => e.hitT !== undefined && tick - e.hitT < P.HIT_T;
   const ants = [], brood = [], bugs = [], items = [];
+  // (e.hide: the sides an entity is kept from, a bit each)
+  const fg = vs ? fog(G, eyes || [[], []]) : null;
+  const hideOf = a => fg && a ? fg.hide.get(a.id) || 0 : 0;
   for (const a of G.ants) {
     if (a.hp <= 0) continue;
     const bits = (a.dir > 0 ? P.A_DIR : 0) | (a.climbing ? P.A_CLIMB : 0) | (a.ceiling ? P.A_CEIL : 0) |
@@ -39,14 +53,14 @@ function buildFrame(sim, vs) {
       (a.raidRole === 'steal' ? P.A_STEAL : 0) | (hit(a) ? P.A_HIT : 0);
     const rec = [a.id, a.colony ? a.colony.idx : 0, CASTE_IDX[a.caste] | 0, q(a.x), q(a.y), bits, hpq(a.hp),
       a.carry ? a.carry.id : 0, a.playerIdx];
-    ants.push({ id: a.id, x: a.x, y: a.y, rec, key: rec.join(','), hot: a.playerIdx >= 0 });
+    ants.push({ id: a.id, x: a.x, y: a.y, rec, key: rec.join(','), hot: a.playerIdx >= 0, hide: hideOf(a) });
   }
   for (const b of G.brood) {
     if (b.dead) continue;
     const bits = (b.kind === 'larva' ? P.B_LARVA : 0) | (b.royal ? P.B_ROYAL : 0) |
       (b.hungry ? P.B_HUNGRY : 0) | (b.carried ? P.B_CARRIED : 0);
     const rec = [b.id, b.colony ? b.colony.idx : 0, q(b.x), q(b.y), bits];
-    brood.push({ id: b.id, x: b.x, y: b.y, rec, key: rec.join(',') });
+    brood.push({ id: b.id, x: b.x, y: b.y, rec, key: rec.join(','), hide: b.carried ? hideOf(b.carried) : 0 });
   }
   for (const b of G.bugs) {
     if (b.dead) continue;
@@ -58,12 +72,42 @@ function buildFrame(sim, vs) {
   }
   for (const it of G.items) {
     if (it.dead) continue;
-    const rec = [it.id, ITEM_IDX[it.kind] | 0, q(it.x), q(it.y), it.carried ? it.carried.id : 0, it.site ? 1 : 0];
-    items.push({ id: it.id, x: it.x, y: it.y, rec, key: rec.join(',') });
+    // (the last field: 1 a piece of the contested fruit, 2 + colony a golden seed)
+    const rec = [it.id, ITEM_IDX[it.kind] | 0, q(it.x), q(it.y), it.carried ? it.carried.id : 0,
+      it.site ? 1 : it.rcol !== undefined ? 2 + it.rcol : 0];
+    let hide = it.carried ? hideOf(it.carried) : 0;
+    if (fg && !it.carried && it.rcol !== undefined && !fg.seen(1 - it.rcol, it.x, it.y)) hide = 1 << (1 - it.rcol);
+    items.push({ id: it.id, x: it.x, y: it.y, rec, key: rec.join(','), hide });
   }
   const frame = { tick, lists: { a: ants, b: brood, u: bugs, i: items }, view: buildView(sim), vs: !!vs };
   if (vs) frame.pub = publicView(frame.view);
   return frame;
+}
+
+// versus: who each side can see (see SIGHT_X). Returns { hide: ant id ->
+// the bits of the sides it is hidden from, seen(side, x, y) }.
+function fog(G, eyes) {
+  const hide = new Map();
+  const look = [[], []];   // per side: [x, y, half width, half height]
+  for (let s = 0; s < 2; s++) for (const e of eyes[s] || []) look[s].push([e.x, e.y, SIGHT_X, SIGHT_Y]);
+  const players = [];
+  for (const a of G.ants) {
+    const s = a.colony ? a.colony.idx : -1;
+    if (a.hp <= 0 || s < 0 || s > 1) continue;
+    if (a.playerIdx >= 0) { players.push(a); look[s].push([a.x, a.y, SIGHT_X, SIGHT_Y]); }
+    else look[s].push([a.x, a.y, NPC_SIGHT_X, NPC_SIGHT_Y]);
+  }
+  const seen = (s, x, y) => {
+    for (const l of look[s] || []) if (Math.abs(l[0] - x) < l[2] && Math.abs(l[1] - y) < l[3]) return true;
+    return false;
+  };
+  for (const a of players) {
+    const o = 1 - a.colony.idx;
+    // (a golden seed glows: its carrier is in plain view)
+    if (a.carry && a.carry.kind === 'relic') continue;
+    if (!seen(o, a.x, a.y)) hide.set(a.id, 1 << o);
+  }
+  return { hide, seen };
 }
 
 // colony-level state, by key; a client is sent a key when its JSON changed
@@ -94,6 +138,10 @@ function buildView(sim) {
     // as the ants dig; the blueprint itself goes as deltas, see room.js)
     if (c.player) v['k' + c.idx] = { soil: Math.floor(c.stock.soil), thatch: Math.floor(c.stock.thatch) };
     if (c.objectives) v['o' + c.idx] = c.objectives;
+    // (its golden seed: where it is and how it stands, this year's count --
+    // its own side's to know, like the milestones)
+    const rs = c.player && G.relics ? G.relics.side[c.idx] : null;
+    if (c.player) v['r' + c.idx] = rs ? { ph: rs.ph, x: rs.x, y: rs.y, until: rs.until, got: rs.yr === G.year ? rs.got : 0, held: !!rs.held } : null;
     // (a done task counts down on the server; the client only needs "done")
     if (c.player) v['t' + c.idx] = c.tasks.map(t => Object.assign({}, t, { doneT: t.done ? 1 : 0 }));
   }
@@ -174,7 +222,10 @@ function clientSnapshot(frame, cl, edits) {
     const sent = d[type];
     const up = [];
     const seen = new Set();
+    const side = 1 << (cl.colIdx || 0);
     for (const e of frame.lists[type]) {
+      // (out of this side's sight, see fog: as if it weren't there)
+      if (e.hide & side) continue;
       seen.add(e.id);
       const was = sent.get(e.id);
       if (was === e.key) continue;
@@ -200,8 +251,8 @@ function clientSnapshot(frame, cl, edits) {
   for (const k in frame.view) {
     let v = frame.view[k], s = frame.viewJson[k];
     // (versus: the other side's colony only by its public face; its
-    // milestones, tasks, stocks and personal milestones not at all)
-    if (frame.vs && 'cotkq'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
+    // milestones, tasks, stocks, personal milestones and golden seed not at all)
+    if (frame.vs && 'cotkqr'.includes(k[0]) && Number(k.slice(1)) !== (cl.colIdx || 0)) {
       if (k[0] !== 'c') continue;
       v = frame.pub[k]; s = frame.pubJson[k];
     }
@@ -290,4 +341,4 @@ function terrainHash(m) {
   return h >>> 0;
 }
 
-module.exports = { terrainHash, buildFrame, viewJson, playersView, scoresView, personalView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };
+module.exports = { terrainHash, fog, SIGHT_X, SIGHT_Y, buildFrame, viewJson, playersView, scoresView, personalView, clientSnapshot, freshDelta, encodeEdits, mergeRects, NEAR_X, NEAR_Y };

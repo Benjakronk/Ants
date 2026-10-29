@@ -199,7 +199,7 @@ const rt = J(`(() => {
     queenHp: Math.round(r2.queen().hp), contested: G.contested && G.contested.got.join(), sites: G.items.filter(i => i.site).length };
   return { ok, v: d.v, before, after, seen: r2.queenSeen, expandN: r2.expandN, player: G.players[0].ant.colony === G.colony };
 })()`);
-check('save v10 round-trips both colonies', rt.ok && rt.v === 10 && JSON.stringify(rt.before) === JSON.stringify(rt.after) &&
+check('save v10 round-trips both colonies', rt.ok && rt.v >= 10 && JSON.stringify(rt.before) === JSON.stringify(rt.after) &&
   rt.seen && rt.expandN === 2 && rt.player, rt);
 
 // --- an old v4 save: the red bugs become the red colony ------------------------------

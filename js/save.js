@@ -18,8 +18,13 @@ const SAVE_PREFIX = 'maur_world_';
 // colony's blueprint (planPack's runs of pixels) and its builders' stocks.
 // v10: the year's length (G.yearLen: FULL, SHORT or QUICK; older: FULL)
 // and each player's tally with its personal milestones (older: none yet).
-// restoreWorld still loads v2-v9 saves (missing fields get defaults).
-const SAVE_VERSION = 10;
+// v11: the golden seeds (G.relics: the last fall, each side's seed and its
+// count this year; a seed item's colony and whether it was dropped; older:
+// none out, nothing brought home yet). Worlds made from v11 on also have
+// the contested crystal field (crystalField) -- in their terrain, which the
+// save keeps as it is either way.
+// restoreWorld still loads v2-v10 saves (missing fields get defaults).
+const SAVE_VERSION = 11;
 
 // run-length encode the terrain bytes: [val, lo(count), hi(count)] triplets
 function rleEncode(arr) {
@@ -100,6 +105,7 @@ function serializeItem(it) {
     age: Math.round(it.age || 0),   // the rot timer (older saves: fresh)
   };
   if (it.site) o.site = true;       // a piece of the contested site's fruit
+  if (it.rcol !== undefined) { o.rcol = it.rcol; if (it.dropped) o.dropped = true; }   // a golden seed
   return o;
 }
 function serializeColony(c) {
@@ -154,6 +160,7 @@ function serializeWorld() {
     lastFlightYear: G.lastFlightYear,
     flight: G.flight,
     contested: G.contested,
+    relics: G.relics,
     surf: int16Encode(T.surf),
     wear: T.wearList(),
     buildMats: G.players.map(p => p.buildMat),

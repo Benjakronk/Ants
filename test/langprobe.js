@@ -101,6 +101,33 @@ const path = require('path');
   if (mr.bad.length) console.log('  ', JSON.stringify(mr.bad));
   if (mr.same.length) console.log('  (same in both languages: ' + mr.same.join(', ') + ')');
 
+  // match round 2: the golden seed's strings -- both languages, different
+  // words, and each fits where it is drawn: a toast (with its tokens and a
+  // player's long name), the O screen's row (the status left, HOME n/3
+  // right, between x 20 and 300), the map legend's second column, the goal
+  // strip's longest form with the seed's segment beside a task
+  const rl = await page.evaluate(() => {
+    const bad = [], w = s => textWidth(String(s));
+    const keys = Object.keys(STR).filter(k => /^(rl_|m_relic|rs_|ui_relicsHome|lg_relic)/.test(k));
+    for (const lang of [0, 1]) {
+      LANG = lang;
+      for (const k of keys) {
+        if (!STR[k][lang]) bad.push(k + ': missing');
+        const full = L(k, k === 'm_relicOurs' ? 'JULIETTJULIE' : /Soon$|Fell$/.test(k) ? L('rl_enemyNest') : '888', '3');
+        if (w(full) > 316) bad.push(k + ': toast too wide: ' + full);
+        if (k.startsWith('rs_') && w('\x1C ' + L(k)) + 6 + w(L('ui_relicsHome', 3, 3)) > 280) bad.push(k + ': O row too wide');
+      }
+      if (w(L('lg_relic')) > 66) bad.push('lg_relic: too wide for the legend');
+      const strip = '\x04' + L('season_summer') + ' 3/3 \x1C3/3 \x1A11:59';
+      if (w(strip) > 190) bad.push('goal strip with the seed too long: ' + strip);
+    }
+    LANG = 0;
+    return { n: keys.length, bad, same: keys.filter(k => STR[k][0] === STR[k][1] && !/\{/.test(STR[k][0])) };
+  });
+  check('the golden seed\'s strings: both languages, and they fit where they are drawn', rl.n >= 30 && !rl.bad.length && !rl.same.length, rl.n + ' strings');
+  if (rl.bad.length) console.log('  ', JSON.stringify(rl.bad));
+  if (rl.same.length) console.log('  (same in both languages: ' + rl.same.join(', ') + ')');
+
   // title menu: 5th item toggles language
   check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'PLAY SOLO'));
   for (let i = 0; i < 5; i++) { // down to LANGUAGE

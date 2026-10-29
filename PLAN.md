@@ -250,7 +250,7 @@ that march out from their own nest. This is also the foundation for versus.
      (x1.41, x1.73); the rival's raids and AI chamber digs at most once per
      FULL day of real time (`raidGap`); the winter reserve per ant x the
      year's share, the princess food bar (60/150/60% of stores) x sqrt of
-     it (`princessFood`; QUICK share^0.75, its autumn too short to stock); milestones by `te` (1: counted through a season
+     it (`princessFood`; QUICK a flat share^0.75 x 60, its autumn too short to stock); milestones by `te` (1: counted through a season
      -- fruit, seal, centipedes; 0.5: built on all year -- raise, food,
      mound, pop25 from a base of 14, stockpile). FULL is unchanged to the
      number. Worldgen untouched. Saved (v10), in `create`/the lobby/the
@@ -282,3 +282,42 @@ that march out from their own nest. This is also the foundation for versus.
      8, versus a side each) and a brief on the result page; a persistent
      world's flight tells the year's MVP and each player its own year.
      `test/matchprobe.js`.
+9. **Match round 2: decisive moments, contested crystals, map fog.**
+   - **The contested crystal field** (`crystalField`, a pass after
+     `genWorld` with its own rng, seed ^ 0x5EEDC0DE; `genNewWorld` =
+     both): 5 pairs of veins mirrored about the nests' midpoint (+-10% of
+     the width), 200-380 px down (the deep veins 420+), and about as many
+     crystal pixels of the outer veins (beyond 10% of the width from the
+     middle; at least 3 kept a side) turned back to dirt, a side in turn.
+     Seeds 1-4: 13-28% of the crystals in the middle fifth before, 57-77%
+     after; the total within 8%. genWorld itself is untouched (HEAD's
+     terrain for every seed). New worlds only (newWorld, rebirth); the
+     clients and the server use it for the terrain diff's base; a save
+     keeps its own terrain.
+   - **The golden seed** (`updateRelics`, colony.js): halfway through
+     spring, summer and autumn (told at 0.4 of the season; season clock, so
+     SHORT/QUICK follow) a seed falls for each played colony 380-700 px
+     beyond its rival's mound (co-op/solo/worlds: past the red AI, for
+     black; versus: one each side). It lasts a season (crumbles left lying
+     past that, or when the next falls); no winter seed (the surface cold
+     kills the carrier on a ~3 min trip). Carrier speed x0.7. Home in its
+     own storage: +3 crystals, +300, counted (x/3 a year) -- each counts as
+     a milestone for the flight's second star (8 of 12) and versus breaks a
+     tie after the princesses (stars, princesses, seeds, ants). Into the
+     enemy's storage: denied (+100 to the denier). A carrier killed drops
+     it; NPC workers fetch a *dropped* seed within 500 px of their nest
+     (own: home, the enemy's: denied), never a fresh one; a home side's
+     soldiers chase an enemy carrier within 800 px of their nest (3 at once,
+     an AI colony 2). Goal strip segment (gold lying, white carried, red
+     taken, green home), an O screen row, the map (our seed; a gold ring
+     on any carrier), edge markers, a help page per mode, toasts to both
+     sides. Save v11 (G.relics, a seed item's rcol/dropped). View keys
+     r0/r1 (each side only its own); item record field 5 = 2 + colony.
+   - **Map fog** (versus, server/snapshot.js `fog`): a player's ant goes
+     to the other side only while seen -- by that side's clients' views
+     (+-220 x 140 px around the camera/ant), its player ants (same box) or
+     its NPC ants (+-110 x 70); out of sight it is removed from that side's
+     model (so from the map), with what it carries. A seed's carrier is
+     always shown; a loose seed only within the other side's sight.
+     No protocol version bump (an older page draws the seed as a seed).
+   `test/relicprobe.js`.
