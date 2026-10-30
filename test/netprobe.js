@@ -425,7 +425,9 @@ function bot(port, name) {
   // C leaves by the menu: its slot empties, the others are told
   await C.keyboard.press('Escape');
   await C.waitForTimeout(150);
-  await C.keyboard.press('ArrowDown');   // (past HELP)
+  await C.keyboard.press('ArrowDown');   // (past HELP and HINTS)
+  await C.waitForTimeout(60);
+  await C.keyboard.press('ArrowDown');
   await C.waitForTimeout(60);
   await C.keyboard.press('ArrowDown');
   await C.waitForTimeout(60);
@@ -451,8 +453,8 @@ function bot(port, name) {
   await A.waitForTimeout(600);
   const pm = await A.evaluate(() => ({ state: G.state, items: pauseItems().map(i => i.id) }));
   const t1 = await A.evaluate(() => G.tick);
-  check('online pause: RESUME / HELP / LEAVE MATCH, and the world runs on', pm.state === 'pause' &&
-    pm.items.join() === 'resume,help,leave' && t1 > t0 + 20, { pm, ticks: t1 - t0 });
+  check('online pause: RESUME / HELP / HINTS / LEAVE MATCH, and the world runs on', pm.state === 'pause' &&
+    pm.items.join() === 'resume,help,hints,leave' && t1 > t0 + 20, { pm, ticks: t1 - t0 });
   await A.screenshot({ path: 'test/shot-net-pause.png' });
   // HELP: the co-op pages over the running world; Right turns a page, Esc
   // back to the menu

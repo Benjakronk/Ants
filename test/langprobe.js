@@ -167,9 +167,34 @@ const path = require('path');
   if (jb.bad.length) console.log('  ', JSON.stringify(jb.bad));
   if (jb.same.length) console.log('  (same in both languages: ' + jb.same.join(', ') + ')');
 
-  // title menu: 5th item toggles language
+  // LEARN TO ANT and the first matches' tips (learn.js): both languages,
+  // different words, and every line fits where it is drawn -- the chapter
+  // panel's lines (308 px panel, text from x 12), its goals (two columns of
+  // 144 px for four), the tips' two lines in the 300 px hint panel, the
+  // menus' lines on the 320 px screen (tutprobe checks the heads and keys)
+  const lt = await page.evaluate(() => {
+    const bad = [], w = s => textWidth(String(s).replace(/\{\d+\}/g, '888'));
+    const keys = Object.keys(STR).filter(k => /^(ui_learn|ui_skipCh|ui_chapters|ui_leaveLearn|ln_|tu_|tt_|ti_|tg_|ty_|tw_|le_|cc_)/.test(k));
+    const two = new Set(LEARN_IDS.flatMap(id => LEARN_CH[id].goals.length >= 4 ? LEARN_CH[id].goals.map(g => 'tg_' + g) : []));
+    for (const lang of [0, 1]) {
+      LANG = lang;
+      for (const k of keys) {
+        if (!STR[k][lang]) bad.push(k + ': missing');
+        const max = /^(ti_|tw_|ty_)/.test(k) ? 294 : /^cc_/.test(k) ? 296 : /^tg_/.test(k) ? (two.has(k) ? 132 : 282) : 316;
+        for (const line of String(STR[k][lang]).split('\n')) if (w(line) > max) bad.push(k + ': too wide: ' + line);
+      }
+    }
+    LANG = 0;
+    return { n: keys.length, bad, same: keys.filter(k => STR[k][0] === STR[k][1] && !/\{/.test(STR[k][0])) };
+  });
+  check('LEARN TO ANT\'s and the tips\' strings: both languages, different words, and they fit', lt.n >= 80 && !lt.bad.length && !lt.same.length, lt.n + ' strings');
+  if (lt.bad.length) console.log('  ', JSON.stringify(lt.bad));
+  if (lt.same.length) console.log('  (same in both languages: ' + lt.same.join(', ') + ')');
+
+  // title menu: LANGUAGE toggles language (LEARN TO ANT is third now)
   check('boots in english', await page.evaluate(() => LANG === 0 && L('ui_start') === 'PLAY SOLO'));
-  for (let i = 0; i < 5; i++) { // down to LANGUAGE
+  const langAt = await page.evaluate(() => titleItems().findIndex(i => i.id === 'lang'));
+  for (let i = 0; i < langAt; i++) { // down to LANGUAGE
     await page.keyboard.press('ArrowDown');
     await page.waitForTimeout(120);
   }

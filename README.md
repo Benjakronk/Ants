@@ -12,7 +12,8 @@ a single ant survives, the colony — and you — live on.
 ## Run it
 
 No build, no dependencies. Open `index.html` in any modern browser and
-choose **PLAY SOLO**:
+choose **PLAY SOLO** -- or, new to the game, **LEARN TO ANT** first (see
+*Getting started*):
 
 ```sh
 open index.html          # macOS
@@ -72,7 +73,7 @@ full, worlds: [...] }` (`load`: the rooms' CPU in ms per frame).
 | Mark chamber (or, by a tree, an aphid shelter) | `X` |
 | Objectives / crystal upgrades / your job / personal milestones | `O` (`←`/`→` page, `Enter` buy or take the job) |
 | Guide arrow on / off | `G` |
-| Skip the current hint | `H` |
+| Skip the current hint (LEARN TO ANT: the chapter) | `H` |
 
 - **Hold up against a wall (or tree) to climb.** Ants climb everything.
   Hold up under a roof to hang and crawl upside-down — tunnel ceilings and
@@ -154,7 +155,8 @@ you any ant no other player has. The
 milestones, the crystals and the upgrades (`O`, any player may buy) belong
 to the colony; the hints and the guide arrow are your own. Nothing pauses:
 `Esc` opens a menu with **RESUME**, **HELP** (the same pages as the lobby's
-`H`, for the mode played) and **LEAVE MATCH** (**LEAVE WORLD**, back to the
+`H`, for the mode played), **HINTS** (on/off: the first matches' tips, see
+*Getting started*) and **LEAVE MATCH** (**LEAVE WORLD**, back to the
 world list) while the world runs on; a message at the start points to it. If the connection drops, the game says so and
 reconnects by itself (reloading the page works too): for two minutes your
 place is kept and your ant carries on as one of the colony until you are
@@ -250,12 +252,56 @@ the O screen's personal milestones list the job's tracks first.
 
 ### Getting started
 
-Spring of year 1 doubles as the tutorial: a hint panel above the HUD
-teaches one thing at a time — walking and climbing, biting and the soil
+**LEARN TO ANT** (the title menu's third entry, green until you have been
+through it) is a guided scenario of eight short chapters, about eight
+minutes in all, on a calm world of its own (no predators but the one a
+chapter brings, no red raids; nothing is saved, your solo worlds are left
+alone). It opens on the chapter list: pick any chapter (each played on a
+fresh world), or start at the first. Each chapter has a panel above the HUD
+saying what to do and with which keys, its goals ticked off as you do them,
+the guide arrow on the target; once done, a line on why it matters (with
+the HUD or the top lines it was about framed) and `Enter` for the next.
+`H` skips a chapter; `Esc` opens a menu to skip, pick another chapter, read
+the help or leave.
+
+1. **Your body** -- walk, climb a tree, dig a load of soil.
+2. **Food** -- a seed to the storage; the HUD's food, ants and brood against their room.
+3. **The nest** -- dig a small hollow out to a chamber's size, `X` marks it (a
+   storage), `X` again makes it a nursery; the room it gave.
+4. **Finding your way** -- the map (`M`), the milestones (`O`), the guide
+   arrow (`G`, pointing at the red nest far to the right); the top lines.
+5. **Building** -- `F`, `R`, a blueprint (`B`, `Space`, `B`).
+6. **Danger** -- a spider comes: `C` to a soldier, `Q` rallies, bite it off.
+7. **The year: how you win** -- `Enter` leaps a season at a time: summer,
+   autumn (three princesses), winter, and the nuptial flight in spring of
+   year 2 with its 1-3 stars.
+8. **Playing together** -- a golden seed falls; `J` (the job), the job page
+   (`O`), the scoreboard (`Tab`), a raid (`Z`).
+
+The end screen sums up the goal and offers PLAY SOLO, PLAY ONLINE or the
+title. Which chapters you finished, and whether you went through to the
+end, is remembered in this browser; until then the solo world list and
+the online menu and lobby say **NEW? L: LEARN TO ANT FIRST** (`L` takes
+you there -- from a lobby, leaving the room).
+
+Spring of year 1 of a solo world still teaches the basics for anyone who
+skipped LEARN TO ANT: a hint panel above the HUD teaches one thing at a
+time — walking and climbing, biting and the soil
 load, carrying food to the storage, building (`F`, `R`; `B` plans a
 blueprint), marking a chamber (`X`), the `O` screen and switching ants (`C`). Each hint stays until you
 have done it; `H` skips one, and **HINTS** in the title or pause menu turns
 them off (your progress is remembered per world, in this browser only).
+After LEARN TO ANT a new world starts without them.
+
+**Your first online matches** (three, in this browser) have tips instead,
+in the same panel: first your job and how to do it, the arrow and the top
+line, how the match is won (co-op: princesses and the flight; versus: their
+queen or the flight; a persistent world: legacy), the keys; then now and
+then (45 s apart at most, each once a match) a tip for what is happening to
+you -- for your job (a forager laden: to the storage; a builder with no
+soil; a guard with a raid on; a seeker with our golden seed out there) or
+for the season (autumn's princesses, winter's cold). `H` moves on;
+**HINTS** in the online `Esc` menu turns them off (and the spring hints).
 
 The **guide arrow** (`G` toggles it, on by default) points where your job
 wants you (see *Jobs*); with nothing there for the job, the way to the
@@ -534,6 +580,9 @@ through `T.onEdit`. `G.mode` is `solo`, `coop`, `versus` or `world`;
 client sets 1). `G.yearLen` (`full`, `short`, `quick`; `setYearLen`) sets
 `DAY_LEN`, which every sim file reads, and `G.pace`, the brood's and the
 queens' quickening (saved, and sent with the world to the clients).
+`G.tutorial` (set only by the client's LEARN TO ANT, never saved or sent;
+every new world clears it) keeps a world calm: no predators spawn, the AI
+rival never raids, no golden seed falls by itself, no asks for hands.
 
 An NPC far from every player's ant thinks less often -- every 4 ticks
 beyond 900 px, every other tick off screen, every tick within 260 px or
@@ -562,6 +611,11 @@ js/terrainview.js  terrain canvases, repainted from edit rects
 js/main.js         input, event handling, camera, rendering, HUD, menus,
                    the tutorial hints, the guide arrow, the map, the
                    online menus and lobby
+js/learn.js        LEARN TO ANT: the scenario's world (a fixed seed and a
+                   hollow carved after the generator; G.tutorial keeps it
+                   calm), its eight chapters (goals, arrow, panel), the
+                   chapter list and the end screen; the first online
+                   matches' tips (Coach)
 js/net.js          online client: connection, lobby, reconnect; snapshots
                    into the render model (G.ants, G.colonies... drawn
                    100 ms behind, interpolated), the local ant predicted
@@ -689,6 +743,15 @@ node test/jobprobe.js     # jobs: assignment by team size, need and lobby
                           # j0/j1 per side, the protocol); a page: lobby, HUD
                           # line, O pages, switch overlay, scoreboard and
                           # highlights (EN + NO) (--no-browser skips it)
+node test/tutprobe.js     # LEARN TO ANT: its world (the seed's terrain but
+                          # for the hollow) and G.tutorial's calm (sim
+                          # alone); a page: the title entry, the chapter
+                          # list, each chapter's goals met by playing it, the
+                          # year's flight and stars, the end and its flag,
+                          # skipping, jumping, leaving (nothing saved); online:
+                          # the lobby's offer (co-op and the 8-row versus),
+                          # L, a first match's tips, HINTS off, none after 3
+                          # matches; screenshots (--no-browser skips the page)
 node test/relicprobe.js   # match round 2: the crystal field (genWorld as
                           # HEAD's), the golden seed (timing FULL/SHORT,
                           # reward, flight star, versus tie-break, denial,

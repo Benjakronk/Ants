@@ -1268,7 +1268,7 @@ class Colony {
       }
       return;
     }
-    if (this.player) return;   // (the players call theirs: callRaid)
+    if (this.player || G.tutorial) return;   // (the players call theirs: callRaid; LEARN TO ANT is calm)
     if (G.isWinter() || G.day < 2 || G.day < this.lastRaidDay + raidGap()) return;
     // (against more players: a bigger colony before it goes, a bigger party)
     const rs = slotScale(SLOT_RIVAL);
@@ -1494,6 +1494,8 @@ function worldSpawns() {
     G.bugs.push(new Bug(x, T.surf[Math.floor(x)] + 150 + Math.random() * 700, 'worm'));
   }
 
+  // (LEARN TO ANT: no predators but the spider its chapter brings)
+  if (G.tutorial) return;
   // predators: not on day 0, escalating with the days, likelier at night
   const night = G.isNight();
   const day = G.day;
@@ -1656,7 +1658,8 @@ function relicsHome(c, yr) {
 function updateRelics() {
   const R = G.relics || (G.relics = newRelics());
   if (!G.colonies.length) return;
-  if (!G.over && G.season < RELIC_SEASONS) {
+  // (LEARN TO ANT drops its one seed itself, see learn.js)
+  if (!G.over && !G.tutorial && G.season < RELIC_SEASONS) {
     const k = (G.year - 1) * 4 + G.season, f = seasonFrac();
     if (f >= RELIC_WARN && f < RELIC_AT && R.wk < k) {
       R.wk = k;

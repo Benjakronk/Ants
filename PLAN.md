@@ -377,3 +377,52 @@ that march out from their own nest. This is also the foundation for versus.
    process, the same seeded world with and without jobs shows no cost of
    the jobs' own code (checkJob/jobAsks once a second, `jobsView` small).
    `test/jobprobe.js`.
+12. **LEARN TO ANT and the first matches' tips.** Four online sessions:
+   fun, but players were lost on all of it -- what to do and how to win,
+   the keys, the colony's systems, where to go. The spring hints only ran
+   in solo, nothing taught online.
+   - **LEARN TO ANT** (the title's third entry; `js/learn.js`, client
+     only): a guided scenario of eight short chapters (~8 min) on a world
+     of its own -- `newWorld(LEARN_SEED)`, then a cramped hollow carved
+     beside the nest after the generator (its rng and order untouched; the
+     seed's terrain otherwise), `G.tutorial` set: no predators spawn
+     (`worldSpawns`), no AI raids (`updateRaid`), no golden seed by itself
+     (`updateRelics`), no asks (`jobAsks`); reset by every new world, never
+     saved or sent. The chapters (`LEARN_CH`: goals, setup, the arrow's
+     target, the goals' checks from the local ant, this player's messages
+     and the keys seen through `tutSaw`): 1 the body (walk 80 px, climb,
+     a load of 20), 2 food (pick up, store; two seeds by the mound, more if
+     the NPCs take them), 3 the nest (dig the hollow to CH_MIN_AREA, `X`
+     marks it, `X` again a nursery; the caps before and after), 4 the way
+     (`M`, `O`, `G` off and on; the arrow on the red nest), 5 building
+     (`F`, `R`, `B` + paint + `B`; a load given), 6 danger (a spider at
+     60% by the mound; `C` to a soldier -- its rally made ready -- `Q`,
+     the spider slain or fled), 7 the year (`Enter` leaps the calendar:
+     summer, autumn with three princesses by the queen, winter, then
+     spring of year 2 -- the sim's own flight, its `G.over` caught: the
+     stars shown, nothing saved, no end screen), 8 together (a golden seed
+     dropped; `J`, the job page, `Tab`, `Z`). A panel above the HUD (the
+     camera lifts the ant clear of it): the chapter and keys, what to do,
+     the goals ticked (two columns for four); done: why it matters (the HUD
+     part it was about framed), `Enter` on. `H` skips; `Esc`: RESUME, SKIP
+     CHAPTER, CHAPTERS (the list; each chapter on a fresh world), HELP,
+     LEAVE TUTORIAL. The end: YOU'RE READY, the goal in five lines, PLAY
+     SOLO / PLAY ONLINE / title. `maur_learn` (done) and `maur_learn_ch`
+     (per chapter) in localStorage; no autosave, no save on unload.
+   - **Newcomers are offered it**: the title entry is green until done (a
+     tick after), the solo world list and the online menu say NEW? L: LEARN
+     TO ANT FIRST, and so does the lobby -- on the first free key line under
+     the note, else (the 8-row versus lobby, host) the bottom line a third
+     of the time; `L` leaves the room for the chapter list.
+   - **The first online matches' tips** (`Coach`, `COACH_MATCHES` = 3 a
+     browser, `maur_coach`; while HINTS is on): instead of the spring
+     hints, in their panel -- your job and how to do it, the arrow and the
+     top line, how this mode is won, the keys; then at most one a 45 s,
+     each once a match, a tip for what is happening, by job (a laden
+     forager, a builder out of soil, a guard with a raid on, a seeker with
+     our seed lying) or season (autumn's princesses, winter). `H` moves
+     on; the online `Esc` menu got HINTS (RESUME, HELP, HINTS, LEAVE).
+     Client-side, from the view it already has: no protocol change.
+   - **The spring hints**: kept for whoever skips LEARN TO ANT (a new solo
+     world after it gives none -- the same lessons twice would be noise).
+   `test/tutprobe.js`; langprobe checks the new strings' widths.

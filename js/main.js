@@ -39,6 +39,10 @@ Object.assign(G, {
   state: 'title',     // title | slots | intro | help | play | pause | gameover
                       // online: netname | netmenu | networlds | netcreate |
                       // netopen | netjoin | netwait | lobby
+                      // LEARN TO ANT (learn.js): learnmenu | learnend (its
+                      // chapters are played in play)
+  learnSel: 0,        // LEARN TO ANT's chapter list: the chapter selected
+  loadLearn: null,    // ...and the chapter LOADING makes a world for
   online: false,      // in an online match: the server runs the sim (net.js)
   slot: 1,
   msgs: [],           // on-screen messages { text, color, t }
@@ -102,10 +106,12 @@ const Tut = {
 
   key() { return 'maur_tut_' + G.slot; },
   // a world entered: a fresh one starts at the first hint; a saved one where
-  // it left off (a world older than the hints, past its first day: done)
+  // it left off (a world older than the hints, past its first day: done).
+  // A player who has been through LEARN TO ANT (learn.js) knows all this: a
+  // fresh world gives no hints.
   start(fresh) {
     const v = fresh ? null : lsGet(this.key());
-    this.step = fresh ? 0 : v !== null ? Math.max(0, Math.min(TUT_STEPS.length, Number(v) || 0))
+    this.step = fresh ? (learnDone() ? TUT_STEPS.length : 0) : v !== null ? Math.max(0, Math.min(TUT_STEPS.length, Number(v) || 0))
       : G.day >= 1 ? TUT_STEPS.length : 0;
     if (fresh) lsSet(this.key(), '0');
     this.reset();
@@ -123,7 +129,7 @@ const Tut = {
   },
   // the hint showing now (its step name, 'done' for the closing one), or null
   active() {
-    if (!this.on || G.year > 1) return null;
+    if (!this.on || G.year > 1 || Learn.on) return null;
     if (this.step < TUT_STEPS.length) return TUT_STEPS[this.step];
     return this.endT > 0 ? 'done' : null;
   },
@@ -174,8 +180,9 @@ const Tut = {
   },
 };
 // something the hints wait for happened (a sim message to this player, or
-// a client action like opening the O screen)
-function tutSaw(what) { Tut.seen[what] = true; }
+// a client action like opening the O screen) -- LEARN TO ANT's chapters and
+// the first matches' tips watch the same (learn.js)
+function tutSaw(what) { Tut.seen[what] = true; Learn.seen[what] = true; Coach.seen[what] = true; }
 
 function localAnt() {
   const p = G.players[LOCAL];
@@ -327,8 +334,8 @@ function readInput() {
   }
   if (tookAction('act')) inp.act = true;
   if (tookAction('abil')) inp.abil = true;
-  if (tookAction('raid')) inp.raid = true;
-  if (tookAction('job')) inp.job = true;
+  if (tookAction('raid')) { inp.raid = true; tutSaw('raid'); }
+  if (tookAction('job')) { inp.job = true; tutSaw('job'); }
   if (tookAction('buildMat')) inp.buildMat = true;
 }
 
@@ -495,12 +502,20 @@ function updatePlay() {
     readInput();
   }
   // (J works over the switch overlay and the O screen too: it picks the next job)
-  if ((G.takeover || G.objScreen) && tookAction('job')) G.players[LOCAL].input.job = true;
+  if ((G.takeover || G.objScreen) && tookAction('job')) { G.players[LOCAL].input.job = true; tutSaw('job'); }
+  if (held('scores')) tutSaw('scores');
 
   // online the server steps the world; we draw its snapshots
   if (G.online) Net.frame(); else stepSim();
   worldTick();
   Tut.update();
+  Coach.update();
+  // (LEARN TO ANT: its year's end is the year chapter's flight -- no end
+  // screen, nothing saved; the chapters may end the scenario)
+  if (G.over && Learn.on) Learn.over();
+  const was = G.state;
+  Learn.update();
+  if (G.state !== was) return;
 
   if (G.over && !G.online) { endWorld(); return; }
   if (G.online && G.state !== 'play') return;   // (the match ended, or the connection did)
@@ -513,16 +528,17 @@ function updatePlay() {
     openTakeover(ref.x, ref.y, false);
   }
 
-  // autosave (a match online isn't saved)
-  if (!G.online) G.autosaveT--;
+  // autosave (a match online isn't saved, nor LEARN TO ANT's world)
+  if (!G.online && !Learn.on) G.autosaveT--;
   if (G.autosaveT <= 0) {
     G.autosaveT = 7200;
     if (saveWorld(G.slot)) { pushMsg(L('m_saved'), '#80c0ff'); Sfx.play('save'); }
   }
 
-  if (tookPress('KeyM')) { G.showMap = !G.showMap; G.gatesT = 0; }
+  if (tookPress('KeyM')) { G.showMap = !G.showMap; G.gatesT = 0; if (G.showMap) tutSaw('map'); }
   if (tookAction('arrow')) {
     G.arrowOn = !G.arrowOn;
+    tutSaw('arrow');
     lsSet('maur_arrow', G.arrowOn ? 'on' : 'off');
     pushMsg(L('m_arrow', L(G.arrowOn ? 'w_on' : 'w_off')), '#ffe080');
     Sfx.play('menu');
@@ -576,7 +592,8 @@ function updateCamera() {
   // eased look-ahead so turning around doesn't yank the view
   p.look += ((c ? 0 : a.dir * 24) - p.look) * 0.03;
   const tx = p.fx - v.vw / 2 + p.look;
-  const ty = p.fy - v.vh / 2 - 8;
+  // (LEARN TO ANT: the ant clear of the chapter's panel below it)
+  const ty = p.fy - v.vh / 2 - 8 + (Learn.on ? Learn.lift : 0);
   p.x += (tx - p.x) * 0.08;
   p.y += (ty - p.y) * 0.08;
   p.x = Math.max(0, Math.min(WORLD_W - v.vw, p.x));
@@ -1755,8 +1772,12 @@ function drawTaskAndMsgs() {
   if (raid && raid.banner) drawRaidBanner(raid, hint ? 132 : 160);
 }
 
-// the tutorial's hint, in a panel just above the HUD. Returns true if drawn.
+// the tutorial's hint, in a panel just above the HUD (LEARN TO ANT: the
+// chapter's panel; online, a first match's tip instead -- see learn.js).
+// Returns true if drawn.
 function drawHint() {
+  if (Learn.on) return drawLearn();
+  if (Coach.showing()) return drawCoach();
   const st = Tut.active();
   if (!st || !localAnt()) return false;
   const lines = L('h_' + st).split('\n');
@@ -1834,7 +1855,8 @@ function guideTarget() {
   // (the first two hints are about the keys: no arrow yet to distract)
   const st = Tut.active();
   if (st === 'move' || st === 'dig') return null;
-  const t = me ? guidePoint(me) : null;
+  // (LEARN TO ANT: the chapter's own target, see learn.js)
+  const t = me ? (Learn.on ? Learn.target(me) : guidePoint(me)) : null;
   if (!t) return null;
   const nest = buriedInNest(t);
   if (nest && buriedInNest(me) !== nest) return { x: nest.entrance.x, y: nest.entrance.y, color: t.color, icon: t.icon };
@@ -2456,13 +2478,13 @@ function drawTitle() {
   drawTextC(ctx, 'MAUR', VIEW_W / 2 - 1, ly - 1, '#ffa040', 6);
   drawTextCS(ctx, L('ui_tagline'), VIEW_W / 2, ly + 50, '#b09060');
 
-  // menu
-  const items = titleItems().map(it => it.label);
+  // menu (LEARN TO ANT stands out until it has been played through)
+  const its = titleItems(), items = its.map(it => it.label);
   const my = 100;
   for (let i = 0; i < items.length; i++) {
     const sel = i === G.menuSel;
     if (sel) drawTextC(ctx, '\x06', VIEW_W / 2 - textWidth(items[i]) / 2 - 12, my + i * 10, '#ffe040');
-    drawTextCS(ctx, items[i], VIEW_W / 2, my + i * 10, sel ? '#ffe040' : '#c8b890');
+    drawTextCS(ctx, items[i], VIEW_W / 2, my + i * 10, sel ? '#ffe040' : its[i].hot ? '#a8e8a0' : '#c8b890');
   }
 
   // marching ants
@@ -2487,6 +2509,7 @@ function titleItems() {
   return [
     { id: 'solo', label: L('ui_start') },
     { id: 'online', label: L('ui_online') },
+    { id: 'learn', label: L('ui_learn') + (learnDone() ? ' \x19' : ''), hot: !learnDone() },
     { id: 'help', label: L('ui_help') },
     { id: 'sound', label: L('ui_sound', L(Sfx.muted ? 'w_off' : 'w_on')) },
     { id: 'crt', label: L('ui_crt', L(document.getElementById('crt').classList.contains('off') ? 'w_off' : 'w_on')) },
@@ -2502,6 +2525,7 @@ function updateTitle() {
     switch (items[G.menuSel].id) {
       case 'solo': G.state = 'slots'; G.slotSel = 0; G.eraseArm = -1; break;
       case 'online': G.state = 'netname'; Net.err = null; break;
+      case 'learn': openLearnMenu(); break;
       case 'help': openHelp('solo'); G.prevState = 'title'; G.state = 'help'; break;
       case 'sound': Sfx.toggleMute(); break;
       case 'crt': document.getElementById('crt').classList.toggle('off'); break;
@@ -2548,12 +2572,15 @@ function drawSlots() {
   if (!slotInfo(G.slotSel + 1)) drawTextC(ctx, L('ui_slotLenKey'), VIEW_W / 2, 152, '#806e58');
   drawTextC(ctx, L('ui_slotKeys'), VIEW_W / 2, 164, '#b0a080');
   drawTextC(ctx, L('ui_slotKeys2'), VIEW_W / 2, 176, '#706050');
+  // (a newcomer: LEARN TO ANT first, see learn.js)
+  if (!learnDone()) drawTextC(ctx, L('ui_learnOffer'), VIEW_W / 2, 188, '#a8e8a0');
 }
 
 function updateSlots() {
   if (tookPress('ArrowUp') || tookPress('KeyW')) { G.slotSel = (G.slotSel + 2) % 3; G.eraseArm = -1; Sfx.play('menu'); }
   if (tookPress('ArrowDown') || tookPress('KeyS')) { G.slotSel = (G.slotSel + 1) % 3; G.eraseArm = -1; Sfx.play('menu'); }
   if (tookPress('Escape')) { G.state = 'title'; return; }
+  if (!learnDone() && tookPress('KeyL')) { openLearnMenu(); Sfx.play('select'); return; }
   // (an empty slot: left/right picks the new year's length)
   const left = tookPress('ArrowLeft') || tookPress('KeyA');
   if ((left || tookPress('ArrowRight') || tookPress('KeyD')) && !slotInfo(G.slotSel + 1)) { G.crLen = cycleLen(G.crLen, left ? -1 : 1); Sfx.play('menu'); }
@@ -2577,6 +2604,8 @@ function updateSlots() {
 
 function updateLoading() {
   if (G.frame <= G.loadAt) return;   // the LOADING frame isn't drawn yet
+  // (LEARN TO ANT: a fresh scenario world at the chapter picked)
+  if (G.loadLearn != null) { const ch = G.loadLearn; G.loadLearn = null; Learn.begin(ch); return; }
   const slot = G.loadSlot;
   if (slotInfo(slot) && startSavedWorld(slot)) {
     G.state = 'play'; pushMsg(L('m_welcome'));
@@ -2656,10 +2685,18 @@ function updateHelp() {
 }
 
 function pauseItems() {
-  // (online nothing pauses: the menu just covers the running world)
+  // (online nothing pauses: the menu just covers the running world; HINTS
+  // turns off the spring hints and the first matches' tips alike)
   if (G.online) {
     return [{ id: 'resume', label: L('ui_resume') }, { id: 'help', label: L('ui_help') },
+      { id: 'hints', label: L('ui_hints', L(Tut.on ? 'w_on' : 'w_off')) },
       { id: 'leave', label: L(G.mode === 'world' ? 'ui_leaveWorld' : 'ui_leaveMatch') }];
+  }
+  // (LEARN TO ANT: nothing is saved; skip a chapter, pick one, or leave)
+  if (Learn.on) {
+    return [{ id: 'resume', label: L('ui_resume') }, { id: 'skip', label: L('ui_skipCh') },
+      { id: 'chapters', label: L('ui_chapters') }, { id: 'help', label: L('ui_help') },
+      { id: 'leaveLearn', label: L('ui_leaveLearn') }];
   }
   const items = [
     { id: 'resume', label: L('ui_resume') },
@@ -2725,6 +2762,16 @@ function updatePause() {
       case 'leave':
         // (a persistent world: back to the world list, for another one)
         leaveOnline(G.mode === 'world' ? 'networlds' : 'title');
+        break;
+      case 'skip':
+        G.state = 'play';
+        Learn.next();
+        break;
+      case 'chapters':
+        G.learnSel = Learn.ch; G.state = 'learnmenu';
+        break;
+      case 'leaveLearn':
+        Learn.leave();
         break;
     }
   }
@@ -3107,10 +3154,13 @@ function drawNetMenu() {
   const it = items[G.menuSel];
   if (it && it.note) drawTextC(ctx, L(it.note), VIEW_W / 2, 140, '#a09070');
   drawNetErr(156);
+  // (a newcomer: LEARN TO ANT first)
+  if (!learnDone()) drawTextC(ctx, L('ui_learnOffer'), VIEW_W / 2, 176, '#a8e8a0');
 }
 
 function updateNetMenu() {
   if (tookPress('Escape')) { G.state = 'netname'; Sfx.play('menu'); return; }
+  if (!learnDone() && tookPress('KeyL')) { Net.close(); openLearnMenu(); Sfx.play('select'); return; }
   const items = netMenuItems();
   if (!menuNav(items.length)) return;
   Sfx.play('select');
@@ -3416,9 +3466,23 @@ function drawLobby() {
   const keys = [vs && Net.roomState === 'lobby' ? L('ui_sideKeys') : null, host ? L('ui_lobbyHostKeys') : null].filter(Boolean);
   keys.forEach((k, i) => drawTextC(ctx, k, VIEW_W / 2, 163 + i * 9, '#806e58'));
   const myPref = Net.players[Net.you] && Net.players[Net.you].j;
-  drawTextC(ctx, L('ui_lobbyLeave', jobName(myPref)), VIEW_W / 2, 182, myPref ? '#a09070' : '#706050');
+  // (a newcomer is offered LEARN TO ANT: on a free key line, else in turn
+  // with the bottom line)
+  const offer = lobbyOffer();
+  if (offer) drawTextC(ctx, L('ui_learnOffer'), VIEW_W / 2, offer.y, (G.frame >> 4) % 2 ? '#c8f0c0' : '#a8e8a0');
+  if (!offer || offer.y !== 182) drawTextC(ctx, L('ui_lobbyLeave', jobName(myPref)), VIEW_W / 2, 182, myPref ? '#a09070' : '#706050');
   if (Net.err !== 'e_sides') drawNetErr(144);
   if (Net.status === 'lost') drawNetLost();
+}
+
+// where the lobby offers LEARN TO ANT to a newcomer (who hasn't been
+// through it): { y } -- the first free key line under the note, else the
+// bottom line a third of the time -- or null
+function lobbyOffer() {
+  if (learnDone()) return null;
+  const n = (Net.mode === 'versus' && Net.roomState === 'lobby' ? 1 : 0) + (Net.you === Net.host && Net.roomState === 'lobby' ? 1 : 0);
+  if (n < 2) return { y: 163 + n * 9 };
+  return G.frame % 360 >= 240 ? { y: 182 } : null;
 }
 
 function updateLobby() {
@@ -3426,6 +3490,8 @@ function updateLobby() {
   if (G.state !== 'lobby') return;
   if (G.help) { helpKeys(); return; }
   if (tookPress('KeyH')) { openHelp(Net.mode === 'versus' ? 'versus' : 'coop'); Sfx.play('menu'); return; }
+  // L: LEARN TO ANT first (the room is left)
+  if (!learnDone() && tookPress('KeyL')) { leaveOnline('title'); openLearnMenu(); Sfx.play('select'); return; }
   if (tookPress('Escape')) { leaveOnline('netmenu'); Sfx.play('menu'); return; }
   if (Net.roomState !== 'lobby' || Net.status !== 'open') return;
   // J: the job we'd like (ANY, then each in turn; the match start honours it)
@@ -3464,6 +3530,7 @@ function updateLobby() {
 // leave the room (and the match), for the title or the online menu
 function leaveOnline(state) {
   Net.leave();
+  Coach.stop();
   G.online = false; G.running = false;
   G.takeover = null; G.objScreen = null; G.showMap = false; G.help = null;
   LOCAL = 0; G.colIdx = 0; G.mode = 'solo';
@@ -3509,6 +3576,10 @@ function netOnWorldReady(fresh) {
     G.rebornNote = { gen: G.gen, reason: h && h.reason === 'r_queen' ? 'r_queen' : 'r_extinct' };
   } else if (fresh) {
     Tut.start(true);
+    // the first few matches online: tips for the job instead of the spring
+    // hints (learn.js); after LEARN TO ANT no spring hints either
+    Coach.start();
+    if (Coach.on) Tut.step = TUT_STEPS.length;
     if (G.mode === 'versus') {
       // (no tutorial in versus: both sides know the game)
       Tut.step = TUT_STEPS.length;
@@ -3615,6 +3686,8 @@ function frame(now) {
         case 'netjoin': updateNetJoin(); break;
         case 'netwait': updateNetWait(); break;
         case 'lobby': updateLobby(); break;
+        case 'learnmenu': updateLearnMenu(); break;
+        case 'learnend': updateLearnEnd(); break;
       }
     }
     // clear one-shot presses each sim step
@@ -3640,6 +3713,8 @@ function frame(now) {
     case 'netjoin': drawNetJoin(); break;
     case 'netwait': drawNetWait(); break;
     case 'lobby': drawLobby(); break;
+    case 'learnmenu': drawLearnMenu(); break;
+    case 'learnend': drawLearnEnd(); break;
   }
   if (Logo.active()) Logo.draw(ctx);
 }
@@ -3657,7 +3732,7 @@ window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
 window.addEventListener('beforeunload', () => {
-  if (G.running && !G.online) saveWorld(G.slot);
+  if (G.running && !G.online && !Learn.on) saveWorld(G.slot);
 });
 
 // a reload in the middle of an online match: back into it, if the server

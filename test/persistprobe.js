@@ -317,8 +317,8 @@ const world = (h, name) => h.worlds.find(w => w.name === name);
   D.send({ t: 'leave' }); D.ws.close();
   await key('Escape');
   const pm = await page.evaluate(() => pauseItems().map(i => i.label));
-  check('the online menu says LEAVE WORLD', pm.join() === 'RESUME,HELP,LEAVE WORLD', pm);
-  await key('ArrowDown'); await key('ArrowDown'); await key('Enter');
+  check('the online menu says LEAVE WORLD', pm.join() === 'RESUME,HELP,HINTS: ON,LEAVE WORLD', pm);
+  await key('ArrowDown'); await key('ArrowDown'); await key('ArrowDown'); await key('Enter');   // (past HELP and HINTS)
   await page.waitForTimeout(1500);
   h = await getJson(port, '/api/health');
   check('leaving from the menu: back to the world list, and the world sleeps again',

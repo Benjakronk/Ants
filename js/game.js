@@ -45,6 +45,10 @@ const G = {
   // online (the server sets it): the colonies note the plan pixels that
   // change, for the snapshots' deltas (see Colony.planSet)
   planSync: false,
+  // LEARN TO ANT (the client's guided scenario, js/learn.js): a calm world --
+  // no predators but the one a chapter brings, no red raids, no golden seed
+  // falling by itself, no asks for hands. Never saved, never set online.
+  tutorial: false,
   // whose eyes G.colony / G.rival / G.objectives see through: 0 in the sim
   // (the players' black colony, the red rival); a red player's client in
   // versus sets 1, and its HUD, map and arrow take the red colony's side
@@ -530,6 +534,7 @@ function pickJob(pIdx) {
 // every player of the side already has that job (or none has a job yet).
 // Every second.
 function jobAsks() {
+  if (G.tutorial) return;
   for (const c of G.colonies) {
     if (!c.player || c.defeated) continue;
     const team = sidePlayers(c).filter(i => G.players[i].job);
@@ -799,6 +804,7 @@ function resetWorldState(world, seed) {
   T.init(world);
   G.seed = seed;
   G.colIdx = 0;
+  G.tutorial = false;
   G.trees = world.trees;
   // both nests from the generator: the players' and the rival's (the rival
   // nest's storage, nursery and royal chamber become the red colony's)
